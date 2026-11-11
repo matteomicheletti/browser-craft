@@ -11,6 +11,7 @@ mod address;
 mod bookmarks;
 mod browser;
 mod capture;
+mod containers;
 mod css;
 mod dom;
 mod egui_chrome;
