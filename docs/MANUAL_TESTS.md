@@ -95,6 +95,17 @@ Build under test: `browsecraft --version`, installed by
 | 5b.2 | Edit a dev plugin's JS | Notice within ~1 s; *Reload open tabs* shows the change | OK 2026-11-11 (nested X) |
 | 5b.3 | Turn off the Dark mode built-in | Pages lose the dark theme at once; ◐ button gone | OK 2026-11-11 (nested X) |
 | 5b.4 | A plugin calling `bc.notify` | Notice under the page | OK 2026-11-11 (nested X) |
+| 5b.5 | Dev folder `~/Projects/browsecraft-plugins`, Clipboard manager on; in a page's text field press Ctrl+V | Modal over the dimmed page, newest item selected; Enter pastes it in the field; Esc closes and the keyboard returns to the field | OK 2026-11-11 (GNOME :0, hook `key:Ctrl+V`, `modal-js`, screenshots) |
+| 5b.6 | Copy with `wl-copy` (text, `--type image/png`, `--type x-special/gnome-copied-files`, `--type text/html`) and `xclip -selection clipboard`, then Ctrl+V | Each shows up with its kind (image thumbnail, file names, formatted text); the same image re-owned by a clipboard manager is one item | OK 2026-11-11 (GNOME :0) |
+| 5b.7 | Shift+Enter on an HTML or file item; Enter on an image item in a contenteditable | Plain text / file paths pasted; the image is inserted | OK 2026-11-11 (GNOME :0) |
+| 5b.8 | Ctrl+L, then Ctrl+V, Enter | The item is pasted into the address bar | OK 2026-11-11 (GNOME :0, hook) |
+| 5b.9 | Copy a password from the passwords page or a code from the authenticator, then Ctrl+V | Not in the history | (unit test; manual pending) |
+| 5b.10 | Clipboard manager settings: *Open on Ctrl+V* off | Ctrl+V pastes normally; Ctrl+Shift+V still opens the manager | |
+| 5b.11 | Change the theme with the modal open | The modal follows at once | OK 2026-11-11 (hook `theme-next`) |
+| 5b.12 | Screenshot editor on, Ctrl+Shift+S on a page | Editor tab with the screenshot; draw arrow, rectangle, counter, pixelate; Ctrl+C puts the image on the clipboard; Ctrl+S saves to `~/Pictures/BrowseCraft` | OK 2026-11-11 (GNOME :0, hook; `wl-paste` gives the PNG) |
+| 5b.13 | Palette → *Screenshot area…*, drag an area, Enter, draw, Ctrl+C | Editor over the page; the copied PNG has the area's size; the modal closes | OK 2026-11-11 (GNOME :0, hook) |
+| 5b.14 | Plugins drawer | Clipboard manager shows the clipboard warning in red and "Takes Ctrl+V"; both plugins list pages and commands | OK 2026-11-11 (screenshot) |
+| 5b.15 | Editor tools by mouse (pencil, line, marker, text, blur, invert, crop, select/move, wheel thickness) | As in Flameshot | Headless (synthetic pointer events, exported PNG checked); real mouse pending |
 | 5.8 | HiDPI: GNOME scaling 125%/200%: text sharpness, page size correct | |
 
 ## 5c. Tab groups and split view

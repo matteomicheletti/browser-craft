@@ -25,6 +25,24 @@ network process is not sandboxed (WebKit design).
   plugins or the automation/MCP API.
 - No secrets or credentials are stored in this repository.
 
+## Plugins with pages and the clipboard history (API 1.1)
+
+| Control | State | How it was checked |
+| --- | --- | --- |
+| Plugin pages served only from their folder | `bc-plugin://<id>/<path>` through `manifest::safe_join` (no `..`, absolute paths, symlinks out), 8 MB per file, only for enabled plugins with pages | Unit tests `plugins::ui_pages` (traversal, `%2e%2e`, symlink, other plugin, disabled) |
+| Plugin files not readable by web pages | 403 when `Origin`/`Referer` is another origin; clipboard images need a per-process key only plugin pages get; screenshot blobs use unguessable tokens bound to the plugin | Unit tests |
+| Plugin page CSP | `default-src 'none'`, own files only (+ declared `https` `remote_sources`), no frames/objects/forms, `frame-ancestors 'none'` | Unit test; header set on every response |
+| `bc.host` only for plugin pages | Authorized by the web view's committed URI (from WebKit) being the plugin's own `bc-plugin:` origin, a host nonce never given to content scripts, the plugin enabled and the manifest permission per method | Unit tests `plugins::host` (web pages, forged nonce, other plugin, missing permission, disabled) |
+| No navigation to plugin pages from the web | `bc-plugin:` loads in a tab or frame only when the browser granted that address (or the tab already shows that plugin) | Unit test `navigation_needs_a_grant` |
+| Clipboard history is opt-in and visible | Watcher runs only while an enabled plugin holds `clipboard.history` (high risk, shown in red under the plugin's name) | Manual (drawer screenshot) |
+| Secrets stay out of the history | Password manager and authenticator copies are marked and carry `x-kde-passwordManagerHint`; hinted copies from other apps are skipped; temporary-container copies skipped by default | Unit tests `plugins::clipboard_history` |
+| History storage private | `profiles/clipboard-history/` `0700`, files `0600`, limits on items, size, item size and age | Unit tests (mode check) |
+| Keys plugins take | Browser and editing keys only with `shortcuts.override`, shown in the drawer; conflicts between plugins resolved by order and shown | Unit tests `plugins::shortcuts`, `browser::plugins_host` |
+
+The clipboard history records what other apps copy too. That is its purpose,
+and the reason the permission is rated high: only enable such a plugin if
+you trust it like the browser itself.
+
 ## Automation / MCP (M1b, planned)
 
 The control API will listen only on an owner-only Unix socket, require the
