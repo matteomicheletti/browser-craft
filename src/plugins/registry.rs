@@ -76,6 +76,10 @@ fn builtin(id: &str, name: &str, description: &str, perms: &[Permission]) -> Ent
         content_scripts: Vec::new(),
         options: Vec::new(),
         wasm: None,
+        pages: Vec::new(),
+        commands: Vec::new(),
+        screenshot_editor: None,
+        remote_sources: Vec::new(),
     };
     Entry {
         id: id.into(),
@@ -190,8 +194,13 @@ impl Registry {
         let m = self.get(id).and_then(Entry::manifest).ok_or_else(|| format!("unknown plugin {id}"))?;
         let def = m.options.iter().find(|o| o.key == key).ok_or_else(|| format!("{id} has no setting \"{key}\""))?;
         let v = def.check(&value)?;
+        // Content scripts get their settings baked into the page script: only
+        // then do open tabs need the new script.
+        let scripts = !m.content_scripts.is_empty();
         self.state.settings.entry(id.into()).or_default().insert(key.into(), v);
-        self.generation += 1;
+        if scripts {
+            self.generation += 1;
+        }
         self.save()
     }
 

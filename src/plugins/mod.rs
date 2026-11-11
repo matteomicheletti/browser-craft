@@ -20,6 +20,7 @@ pub mod pattern;
 pub mod permissions;
 pub mod registry;
 pub mod script;
+pub mod shortcuts;
 pub mod wasm;
 
 pub use bridge::{dispatch, parse_page_message, PageCall, PluginEvent, Reply};

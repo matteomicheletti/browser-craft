@@ -185,6 +185,46 @@ impl OptionDef {
     }
 }
 
+/// How a plugin page opens (`[[pages]] open_as`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OpenAs {
+    /// A normal tab showing `bc-plugin://<id>/<path>`.
+    #[default]
+    Tab,
+    /// A view centred over the page, which is dimmed; Esc closes it.
+    Modal,
+}
+
+/// A page of the plugin's own UI (API 1.1), served from its folder.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PageDef {
+    pub id: String,
+    /// HTML file, relative to the plugin folder.
+    pub path: String,
+    pub title: String,
+    pub open_as: OpenAs,
+    /// Modal size in CSS pixels (shrunk to fit the page area).
+    pub width: u32,
+    pub height: u32,
+}
+
+/// A command the plugin adds to the palette and/or binds to keys (API 1.1).
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommandDef {
+    pub id: String,
+    pub title: String,
+    pub shortcut: Option<super::shortcuts::KeyCombo>,
+    pub palette: bool,
+    /// The page it opens (or, when that page is open, sends the command to).
+    pub page: String,
+    /// A bool setting that must be on for the shortcut to apply.
+    pub when: Option<String>,
+}
+
+pub const MAX_PAGES: usize = 16;
+pub const MAX_COMMANDS: usize = 32;
+
 #[derive(Clone, Debug)]
 pub struct Manifest {
     pub id: String,
@@ -199,9 +239,24 @@ pub struct Manifest {
     pub options: Vec<OptionDef>,
     /// Path of the optional WASM module, relative to the plugin folder.
     pub wasm: Option<String>,
+    pub pages: Vec<PageDef>,
+    pub commands: Vec<CommandDef>,
+    /// The page that edits the browser's screenshots (`screenshot.edit`).
+    pub screenshot_editor: Option<String>,
+    /// Extra https origins the pages may load scripts, styles, images and
+    /// data from (added to their Content-Security-Policy).
+    pub remote_sources: Vec<String>,
 }
 
 impl Manifest {
+    pub fn page(&self, id: &str) -> Option<&PageDef> {
+        self.pages.iter().find(|p| p.id == id)
+    }
+
+    pub fn command(&self, id: &str) -> Option<&CommandDef> {
+        self.commands.iter().find(|c| c.id == id)
+    }
+
     pub fn has(&self, p: Permission) -> bool {
         self.permissions.contains(&Requested::Api(p))
     }
@@ -239,6 +294,42 @@ struct RawManifest {
     #[serde(default)]
     options: Vec<RawOption>,
     wasm: Option<String>,
+    #[serde(default)]
+    pages: Vec<RawPage>,
+    #[serde(default)]
+    commands: Vec<RawCommand>,
+    screenshot_editor: Option<String>,
+    #[serde(default)]
+    remote_sources: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawPage {
+    id: String,
+    path: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    open_as: OpenAs,
+    width: Option<u32>,
+    height: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawCommand {
+    id: String,
+    title: String,
+    shortcut: Option<String>,
+    #[serde(default = "yes")]
+    palette: bool,
+    page: String,
+    when: Option<String>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -405,6 +496,8 @@ impl Manifest {
             }
         }
 
+        let (pages, commands, screenshot_editor, remote_sources) = check_ui(&raw, api, &permissions, &options, &mut err);
+
         if let Some(w) = &raw.wasm
             && !w.ends_with(".wasm")
         {
@@ -424,10 +517,122 @@ impl Manifest {
                 content_scripts: scripts,
                 options,
                 wasm: raw.wasm,
+                pages,
+                commands,
+                screenshot_editor,
+                remote_sources,
             }),
             _ => Err(errs),
         }
     }
+}
+
+/// Plain identifier for pages and commands: `[a-z0-9-]`, 1 to 40 characters.
+fn is_slug(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 40 && s.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+}
+
+type Ui = (Vec<PageDef>, Vec<CommandDef>, Option<String>, Vec<String>);
+
+/// Validates the API 1.1 user-interface keys: pages, commands, the
+/// screenshot editor and remote sources.
+fn check_ui(raw: &RawManifest, api: Option<(u32, u32)>, perms: &[Requested], options: &[OptionDef], err: &mut impl FnMut(String)) -> Ui {
+    let has = |p: Permission| perms.contains(&Requested::Api(p));
+    let uses_ui = !raw.pages.is_empty() || !raw.commands.is_empty() || raw.screenshot_editor.is_some() || !raw.remote_sources.is_empty();
+    let new_perms = [Permission::ClipboardHistory, Permission::ScreenshotEdit, Permission::ShortcutsOverride].into_iter().any(has);
+    if (uses_ui || new_perms) && api.is_some_and(|a| a < (1, 1)) {
+        err("pages, commands and the clipboard.history, screenshot.edit and shortcuts.override permissions need api_version \"1.1\"".into());
+    }
+    if raw.pages.len() > MAX_PAGES || raw.commands.len() > MAX_COMMANDS {
+        err(format!("at most {MAX_PAGES} pages and {MAX_COMMANDS} commands"));
+    }
+    let len_ok = |s: &str, max: usize| s.chars().count() <= max && !s.contains(char::is_control);
+    let mut pages: Vec<PageDef> = Vec::new();
+    for p in raw.pages.iter().take(MAX_PAGES) {
+        let at = |m: &str| format!("pages \"{}\": {m}", p.id);
+        if !is_slug(&p.id) || pages.iter().any(|x| x.id == p.id) {
+            err(at("id must be unique, lowercase letters, digits and -"));
+            continue;
+        }
+        if !(p.path.ends_with(".html") || p.path.ends_with(".htm")) || p.path.len() > 200 {
+            err(at("path must name an .html file in the plugin folder"));
+            continue;
+        }
+        if !len_ok(&p.title, 80) {
+            err(at("title is at most 80 characters"));
+        }
+        let (w, h) = (p.width.unwrap_or(720), p.height.unwrap_or(520));
+        if !(200..=4000).contains(&w) || !(150..=4000).contains(&h) {
+            err(at("width must be 200 to 4000 and height 150 to 4000"));
+        }
+        let title = if p.title.trim().is_empty() { raw.name.trim().to_string() } else { p.title.trim().to_string() };
+        pages.push(PageDef { id: p.id.clone(), path: p.path.clone(), title, open_as: p.open_as, width: w, height: h });
+    }
+    let mut commands: Vec<CommandDef> = Vec::new();
+    for c in raw.commands.iter().take(MAX_COMMANDS) {
+        let at = |m: &str| format!("commands \"{}\": {m}", c.id);
+        if !is_slug(&c.id) || commands.iter().any(|x| x.id == c.id) {
+            err(at("id must be unique, lowercase letters, digits and -"));
+            continue;
+        }
+        if c.title.trim().is_empty() || !len_ok(&c.title, 80) {
+            err(at("title is required (at most 80 characters)"));
+        }
+        if !pages.iter().any(|p| p.id == c.page) {
+            err(at(&format!("page \"{}\" is not declared in [[pages]]", c.page)));
+        }
+        if let Some(w) = &c.when
+            && !options.iter().any(|o| o.key == *w && o.kind == OptionKind::Bool)
+        {
+            err(at(&format!("when = \"{w}\" must name a bool option")));
+        }
+        let shortcut = match c.shortcut.as_deref().map(super::shortcuts::KeyCombo::parse) {
+            None => None,
+            Some(Err(e)) => {
+                err(at(&e));
+                None
+            }
+            Some(Ok(k)) => {
+                if let Some(other) = commands.iter().find(|x| x.shortcut.as_ref() == Some(&k)) {
+                    err(at(&format!("shortcut {} is already used by command \"{}\"", k.label(), other.id)));
+                }
+                if let Some(what) = super::shortcuts::builtin_use(&k)
+                    && !has(Permission::ShortcutsOverride)
+                {
+                    err(at(&format!("{} is the browser's \"{what}\" key; taking it needs the shortcuts.override permission", k.label())));
+                }
+                Some(k)
+            }
+        };
+        if !c.palette && shortcut.is_none() {
+            err(at("a command needs a shortcut or palette = true"));
+        }
+        commands.push(CommandDef { id: c.id.clone(), title: c.title.trim().into(), shortcut, palette: c.palette, page: c.page.clone(), when: c.when.clone() });
+    }
+    if let Some(e) = &raw.screenshot_editor {
+        if !pages.iter().any(|p| p.id == *e) {
+            err(format!("screenshot_editor \"{e}\" is not declared in [[pages]]"));
+        }
+        if !has(Permission::ScreenshotEdit) {
+            err("screenshot_editor needs the screenshot.edit permission".into());
+        }
+    }
+    if has(Permission::ClipboardHistory) && pages.is_empty() {
+        err("clipboard.history is only usable from a plugin page: declare one in [[pages]]".into());
+    }
+    let mut remote = Vec::new();
+    if raw.remote_sources.len() > 8 {
+        err("at most 8 remote_sources".into());
+    }
+    for r in raw.remote_sources.iter().take(8) {
+        match url::Url::parse(r) {
+            Ok(u) if u.scheme() == "https" && u.host_str().is_some_and(|h| !h.contains('*')) && matches!(u.path(), "" | "/") && u.query().is_none() && u.username().is_empty() => {
+                remote.push(u.origin().ascii_serialization());
+            }
+            _ => err(format!("remote_sources: \"{r}\" must be an https origin such as https://cdn.example.com")),
+        }
+    }
+    (pages, commands, raw.screenshot_editor.clone(), remote)
 }
 
 // ---- loading a folder ----
@@ -516,6 +721,11 @@ pub fn load_dir(dir: &Path) -> Result<LoadedPlugin, Vec<String>> {
             js,
             css,
         });
+    }
+    for p in &manifest.pages {
+        if let Err(e) = safe_join(&root, &p.path) {
+            errs.push(format!("pages \"{}\": {e}", p.id));
+        }
     }
     let wasm = match &manifest.wasm {
         Some(w) => match safe_join(&root, w).and_then(|p| crate::storage::read_limited(&p, MAX_WASM).map_err(|e| format!("\"{w}\": {e}"))) {
@@ -623,6 +833,94 @@ max = 20
         assert!(with(("max = 20", "max = 5")).is_err());
         assert!(Manifest::parse("not toml [").is_err());
         assert!(Manifest::parse(&format!("{GOOD}\nunknown_key = 1")).is_err(), "typos are caught");
+    }
+
+    const UI: &str = r#"
+id = "com.example.ui"
+name = "UI"
+version = "1.0.0"
+api_version = "1.1"
+permissions = ["clipboard.history", "shortcuts.override", "screenshot.edit"]
+screenshot_editor = "editor"
+
+[[pages]]
+id = "manager"
+path = "manager.html"
+title = "Clipboard"
+open_as = "modal"
+width = 760
+height = 520
+
+[[pages]]
+id = "editor"
+path = "editor.html"
+
+[[commands]]
+id = "open"
+title = "Open the clipboard manager"
+shortcut = "Ctrl+V"
+page = "manager"
+when = "open_on_ctrl_v"
+
+[[commands]]
+id = "palette-only"
+title = "Edit an image"
+page = "editor"
+
+[[options]]
+key = "open_on_ctrl_v"
+type = "bool"
+default = true
+"#;
+
+    #[test]
+    fn pages_and_commands() {
+        let m = Manifest::parse(UI).unwrap();
+        assert_eq!(m.pages.len(), 2);
+        let p = m.page("manager").unwrap();
+        assert_eq!((p.open_as, p.width, p.height, p.title.as_str()), (OpenAs::Modal, 760, 520, "Clipboard"));
+        let e = m.page("editor").unwrap();
+        assert_eq!((e.open_as, e.width, e.title.as_str()), (OpenAs::Tab, 720, "UI"), "defaults: tab, 720 wide, the plugin's name");
+        let c = m.command("open").unwrap();
+        assert_eq!(c.shortcut.as_ref().map(|k| k.key.as_str()), Some("v"));
+        assert!(c.palette && c.when.as_deref() == Some("open_on_ctrl_v"));
+        assert_eq!(m.screenshot_editor.as_deref(), Some("editor"));
+    }
+
+    #[test]
+    fn ui_validation() {
+        let with = |a: &str, b: &str| Manifest::parse(&UI.replace(a, b));
+        let has = |r: Result<Manifest, Vec<String>>, what: &str| r.unwrap_err().iter().any(|e| e.contains(what));
+        assert!(has(with("\"shortcuts.override\", ", ""), "shortcuts.override"), "Ctrl+V needs the override permission");
+        assert!(has(with("api_version = \"1.1\"", "api_version = \"1.0\""), "1.1"));
+        assert!(has(with("page = \"manager\"", "page = \"nope\""), "not declared"));
+        assert!(has(with("when = \"open_on_ctrl_v\"", "when = \"missing\""), "bool option"));
+        assert!(has(with("shortcut = \"Ctrl+V\"", "shortcut = \"V\""), "Ctrl or Alt"));
+        assert!(has(with("id = \"editor\"\npath", "id = \"manager\"\npath"), "unique"));
+        assert!(has(with("path = \"editor.html\"", "path = \"editor.js\""), ".html"));
+        assert!(has(with("width = 760", "width = 10"), "width"));
+        assert!(has(with("open_as = \"modal\"", "open_as = \"window\""), "window"));
+        assert!(has(with(", \"screenshot.edit\"", ""), "screenshot.edit"));
+        assert!(has(with("screenshot_editor = \"editor\"", "screenshot_editor = \"x\""), "screenshot_editor"));
+        assert!(has(with("title = \"Edit an image\"", "title = \"Edit an image\"\npalette = false"), "shortcut or palette"));
+        let dup = UI.replace("title = \"Edit an image\"", "title = \"Edit an image\"\nshortcut = \"Ctrl+V\"");
+        assert!(has(Manifest::parse(&dup), "already used"));
+        assert!(has(with("screenshot_editor = \"editor\"", "screenshot_editor = \"editor\"\nremote_sources = [\"http://x.test\"]"), "https origin"));
+        let remote = Manifest::parse(&UI.replace("screenshot_editor = \"editor\"", "screenshot_editor = \"editor\"\nremote_sources = [\"https://cdn.x.test/\"]")).unwrap();
+        assert_eq!(remote.remote_sources, ["https://cdn.x.test"]);
+        // clipboard.history without a page has nowhere to be used.
+        let bare = "id = \"a.b\"\nname = \"B\"\nversion = \"1.0.0\"\napi_version = \"1.1\"\npermissions = [\"clipboard.history\"]";
+        assert!(has(Manifest::parse(bare), "plugin page"));
+    }
+
+    #[test]
+    fn page_files_must_exist() {
+        let d = tempfile::tempdir().unwrap();
+        std::fs::write(d.path().join("plugin.toml"), UI).unwrap();
+        std::fs::write(d.path().join("manager.html"), "m").unwrap();
+        assert!(load_dir(d.path()).unwrap_err().iter().any(|e| e.contains("editor.html")));
+        std::fs::write(d.path().join("editor.html"), "e").unwrap();
+        assert!(load_dir(d.path()).is_ok());
     }
 
     #[test]

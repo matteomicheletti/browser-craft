@@ -10,7 +10,7 @@ use super::pattern::MatchPattern;
 /// Version of the plugin API this build implements (`api_version` in the
 /// manifest). Same major = compatible; a plugin may not require a newer minor.
 pub const API_MAJOR: u32 = 1;
-pub const API_MINOR: u32 = 0;
+pub const API_MINOR: u32 = 1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Permission {
@@ -21,6 +21,12 @@ pub enum Permission {
     Storage,
     Notifications,
     ClipboardWrite,
+    /// API 1.1: read and manage the clipboard history (plugin pages only).
+    ClipboardHistory,
+    /// API 1.1: receive the browser's screenshots and copy or save images.
+    ScreenshotEdit,
+    /// API 1.1: bind keys the browser or text editing already uses.
+    ShortcutsOverride,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -79,6 +85,24 @@ pub const ALL: &[PermissionInfo] = &[
         name: "clipboard.write",
         risk: Risk::Medium,
         description: "Put text on the clipboard (user gesture not enforced yet).",
+    },
+    PermissionInfo {
+        perm: Permission::ClipboardHistory,
+        name: "clipboard.history",
+        risk: Risk::High,
+        description: "Record everything copied, in the browser and in other apps (text, images, file lists), and paste it into pages. Copies from the password manager and the authenticator are never recorded.",
+    },
+    PermissionInfo {
+        perm: Permission::ScreenshotEdit,
+        name: "screenshot.edit",
+        risk: Risk::Medium,
+        description: "Receive the screenshots you take, put images on the clipboard and save image files to Pictures.",
+    },
+    PermissionInfo {
+        perm: Permission::ShortcutsOverride,
+        name: "shortcuts.override",
+        risk: Risk::Medium,
+        description: "Take over keys the browser or text editing already uses (for example Ctrl+V).",
     },
 ];
 
@@ -171,11 +195,12 @@ mod tests {
         for p in [
             Permission::TabsRead, Permission::TabsOpen, Permission::PageRead, Permission::PageModify,
             Permission::Storage, Permission::Notifications, Permission::ClipboardWrite,
+            Permission::ClipboardHistory, Permission::ScreenshotEdit, Permission::ShortcutsOverride,
         ] {
             assert_eq!(p.info().perm, p);
             assert_eq!(Permission::from_name(p.name()), Some(p));
         }
-        assert_eq!(ALL.len(), 7);
+        assert_eq!(ALL.len(), 10);
     }
 
     #[test]
