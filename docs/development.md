@@ -244,3 +244,13 @@ target-specific advisories and license/source policy.
 - **Shortcuts:** `Browser::key()` in `src/browser.rs`.
 
 See [architecture.md](architecture.md) for how the stages fit together.
+
+## Local checks and packaging
+
+```sh
+scripts/check.sh                       # build, test, clippy, cargo deny (if installed), rustfmt on changed files
+scripts/package-appimage.sh            # dist/<version>/browsecraft-<version>-linux-x86_64.AppImage (6.6 MB)
+scripts/release.sh 0.2.0 --dry-run     # release steps; only `--publish` talks to GitHub
+```
+
+Details, requirements and limitations: [PACKAGING.md](PACKAGING.md).
