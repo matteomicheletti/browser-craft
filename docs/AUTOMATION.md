@@ -286,7 +286,18 @@ A typical agent loop: `browser_navigate` → `browser_snapshot` →
 
 ## Integration in the browser (core)
 
-What `src/browser.rs` has to add; the rest is done.
+Done in `src/browser/automation_rpc.rs` (requests) and
+`src/browser/features.rs` (server start, settings, console log per tab,
+the Automation drawer). Two differences from the outline below: page
+scripts run through WebKitGTK's `run_javascript` directly, because wry
+queues scripts sent before a new web view's first commit and drops their
+callbacks; and `UserMessage` lost its `Clone` derive so it can carry the
+`Request`. Closing the last tab with `tabs.close` opens a blank tab first
+(the browser would quit otherwise); `page.navigate`, back, forward and
+reload switch to the named tab, while page scripts, screenshots and PDFs
+also work on live background tabs.
+
+The outline as originally specified:
 
 1. **Start the server** when automation is wanted (after the event loop and
    proxy exist):

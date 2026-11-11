@@ -60,6 +60,12 @@ load; a corrupt file falls back to the defaults.
 
 ## API to wire (core)
 
+Wired in `src/browser/features.rs`: the page script goes into every web view
+(all frames) unless the `builtin.darkmode` plugin entry is off, settings
+changes and browser theme changes run `update_script` on every tab, the
+toolbar ◐ button toggles the current site (right-click: the drawer), and
+`system_dark` is the browser's effective theme.
+
 ```rust
 darkmode::page_script(&settings, system_dark: Option<bool>) -> String
 darkmode::update_script(&settings, system_dark: Option<bool>) -> String

@@ -63,11 +63,20 @@ BrowseCraft drops a user name and password written into an address (`https://use
 | ▶       | Forward                                 |
 | ↻ / ✕   | Reload, or stop while a page is loading |
 | ⌂       | Home (Startpage)                        |
-| ☀ / ☾   | Toggle light / dark theme               |
+| ☀ / ☾   | Toggle light / dark theme of the browser |
 | Work    | The active tab's container, in its colour (only for container tabs); click to manage containers |
 | ≋       | Containers panel (right-hand drawer)    |
+| ◐       | Dark mode for this site: click to turn it on or off (tinted while the site is dark); right-click for the dark mode panel |
+| Puzzle  | Plugins panel                           |
+| Shield  | Authenticator panel; a shield with a check, tinted, while the authenticator is unlocked |
+| ● Stop  | Shown while a screen recording runs: stops it |
 | ⚙       | Open settings (`browsecraft://flags`)         |
 | 🔑      | Password manager menu (top right)       |
+
+On a narrow window the containers, plugins and dark mode buttons move into a
+`⋮` menu (with the automation panel and the command palette), so the address
+bar keeps its room. A built-in turned off in the Plugins panel (dark mode,
+authenticator) loses its button.
 
 The star inside the address bar bookmarks the page you are on (click it again to remove the bookmark); it is also `Ctrl+D`.
 
@@ -145,9 +154,91 @@ macOS containers are not isolated yet.
 
 ## Drawer
 
-Panels such as Containers open in a drawer on the right of the page; the page
-narrows to make room (it is never covered). Click the panel's ✕ or its toolbar
-button again to close it.
+Panels open in a drawer on the right of the page; the page narrows to make room
+(it is never covered). Click the panel's ✕ or its toolbar button again to close
+it. The panels are Containers, Authenticator, Dark mode, Plugins and Automation
+(with the JavaScript console).
+
+## Command palette
+
+`Ctrl+P` (`Cmd+P` on macOS) or `F1` opens the command palette over the page;
+the same key, `Esc` or a click outside closes it. Type to search every browser
+action (with its shortcut), the open tabs (with their container colour), your
+bookmarks and recent history, or type an address or search terms to open them
+in a new tab. `Up` / `Down` choose, `Enter` runs, `Tab` jumps to the next
+section. Prefixes narrow the search: `>` commands only, `@` open tabs, `#`
+bookmarks and history, `~` open a tab in a container, `?` lists them. Recently
+run commands come first.
+
+Commands include: new tab (also in a container or a temporary container),
+duplicate, close, close others, reopen, next / previous tab, move the tabs to
+the top or the side; back, forward, reload, reload bypassing the cache, home,
+focus the address bar, copy the address; find, zoom, fullscreen, print, save
+the page (an `.mhtml` file in `~/Downloads`), view source; screenshot of the
+visible page or the whole page (PNG in Pictures), start / stop a screen
+recording (MP4 in `~/Videos`, needs `ffmpeg`); developer tools, JavaScript
+console, automation server on / off; bookmark, bookmarks bar, bookmarks page,
+history, clear browsing data; containers, authenticator, passwords; dark mode
+for pages / this site / settings; plugins, reload plugins; settings; quit.
+
+*Clear browsing data* asks you to run it a second time within 10 seconds, then
+deletes the history and the cookies, cache and site data of the default profile
+and of every container with an open tab.
+
+## Authenticator
+
+The shield button opens the authenticator: two-factor codes (TOTP and HOTP)
+for your accounts, in a vault encrypted with its own master password, separate
+from the password manager. Create the vault the first time, then *Add account*
+with the setup key, an `otpauth://` link (or a Google Authenticator export
+link) or a QR image. Each account shows its current code with a countdown;
+click the copy button to put it on the clipboard (it is taken off after 30
+seconds). The vault locks itself after 5 minutes without use (change it in the
+panel's settings), also while the panel is closed; the toolbar shield shows
+whether it is unlocked. Pages, plugins and the automation API can never read
+it. Formats and security: [AUTHENTICATOR.md](AUTHENTICATOR.md).
+
+## Dark mode
+
+Web pages get a dark theme computed from their own colours (Dark Reader's
+engine), by default whenever the browser theme is dark. The ◐ button turns it
+on or off for the current site; right-click it, or use the palette, for the
+panel: on/off, mode (follow the browser, always, never), per-site *Always
+dark* / *Never* / *Excluded*, custom CSS per site, brightness, contrast,
+sepia, grayscale, font and a daily schedule. Changes apply to open pages at
+once, without reloading. Pages that are already dark are left alone. Details:
+[DARKMODE.md](DARKMODE.md).
+
+## Plugins
+
+The puzzle button opens the plugin manager: install a plugin folder, add a
+development folder (plugins used in place and reloaded when their files
+change), turn plugins and the built-ins on or off, change their settings and
+see their permissions. New tabs use the change at once; open tabs keep the
+scripts they were loaded with until you click *Reload open tabs* in the panel.
+How to write one: [EXTENSIONS.md](EXTENSIONS.md); examples in
+`examples/plugins/`.
+
+## Automation and JavaScript console
+
+The Automation panel (palette: *JavaScript console* or `Ctrl+Shift+J`;
+*Automation and console* in the `⋮` menu) has two views:
+
+- **Console**: what the current tab logged (`console.log`, warnings, errors,
+  uncaught errors and rejections, plugin `bc.log` lines), newest first, with a
+  level filter and *Clear*. The same entries are what `console.read` returns.
+- **Control server**: turns the local control API on or off (also
+  `--automation` for one run, or the palette's *Toggle automation*), allows
+  navigation, `page.eval` (off by default) and `file:` URLs, limits automation
+  to some sites, and shows the socket path and the command that adds the MCP
+  server to Claude Code (`claude mcp add browsecraft -- <path>/browsecraft
+  mcp`). Changes apply at once.
+
+With the server on, `browsecraft ctl tabs.list`, `browsecraft ctl
+page.navigate '{"url":"https://example.com"}'`, `browsecraft ctl page.text`
+or `page.screenshot` drive the running browser from a shell, and
+`browsecraft mcp` lets an agent do the same. See
+[AUTOMATION.md](AUTOMATION.md).
 
 ## Find in page
 
@@ -158,7 +249,7 @@ and the bar shows how many there are.
 
 ## Developer tools
 
-`F12`, `Ctrl+Shift+I` or `Ctrl+Shift+J` open WebKit's web inspector (elements,
+`F12` or `Ctrl+Shift+I` open WebKit's web inspector (elements,
 console, sources, network, storage...) docked at the bottom of the page on
 Linux. Its ✕ closes it. Detaching it into its own window from its toolbar does
 not work in this embedding yet. `BROWSECRAFT_DEVTOOLS=1` opens it for every new
@@ -212,9 +303,14 @@ blocked pop-up shows a short notice under the page.
 | `Ctrl+Shift+T`                        | Reopen the last closed tab |
 | `Ctrl+Shift+N`                        | New tab in a temporary container |
 | `Ctrl+F`                              | Find in page              |
-| `Ctrl+P` / `F1`                       | Command palette (reserved; not available yet) |
-| `F12` / `Ctrl+Shift+I` / `Ctrl+Shift+J` | Developer tools         |
+| `Ctrl+P` / `F1`                       | Command palette           |
+| `Ctrl+Shift+P`                        | Print                     |
+| `F12` / `Ctrl+Shift+I`                | Developer tools           |
+| `Ctrl+Shift+J`                        | JavaScript console (Automation panel) |
 | `F5` / `Ctrl+R`                       | Reload                    |
+| `Ctrl+Shift+R`                        | Reload, bypassing the cache |
+| `Ctrl+Shift+Delete`                   | Clear browsing data (press twice) |
+| `Ctrl+,`                              | Settings (`browsecraft://flags`) |
 | `Esc` (page focused, while loading)   | Stop loading              |
 | `Alt+Left` / `Alt+Right`, mouse back/forward buttons | Back / forward |
 | `Ctrl+Left` / `Ctrl+Right`            | Back / forward on engine pages, when not typing in a field (in web pages they move by a word) |
@@ -234,7 +330,7 @@ blocked pop-up shows a short notice under the page.
 | `Shift`+wheel                         | Scroll sideways           |
 | `Ctrl+Q`                              | Quit                      |
 
-Screenshots of WebView2 pages are grabbed from the screen, so this works on Windows only and captures anything covering the window.
+`Ctrl+Shift+S` grabs the page from the screen (Windows, and Linux under X11). The palette's *Screenshot of the whole page* renders the whole document with WebKit instead (Linux), whatever covers the window.
 
 ## Forms
 

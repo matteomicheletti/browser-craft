@@ -41,6 +41,10 @@ list of command keys, at most 8).
 
 ## Wiring it into the browser
 
+Done in `src/browser/features.rs` (`toggle_palette`, `palette_sources`,
+`run_command`); the palette counts as an open popup, so the page's native
+window is hidden behind a WebKit snapshot while it shows.
+
 ```rust
 let mut palette = Palette::new();           // once
 // Ctrl+P / F1:

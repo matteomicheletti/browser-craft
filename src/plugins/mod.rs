@@ -1,7 +1,7 @@
 //! Plugin system (milestone M2): manifests, registry, page scripts, the
 //! page <-> browser bridge and the manager panel. See `docs/EXTENSIONS.md`.
 //!
-//! Wiring (done by the browser, not here):
+//! Wiring (done by the browser in `browser/features.rs`, not here):
 //! - `plugins::shared()` gives the process-wide registry; call
 //!   `Registry::poll_changes` about once a second to pick up dev-folder edits.
 //! - `page_script(&registry)` is one more init script per web view; rebuild

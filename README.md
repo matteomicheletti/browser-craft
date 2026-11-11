@@ -15,6 +15,44 @@
 > The sections below are upstream's description; where they say Linux has no
 > web view, read the fork documents instead.
 
+## What the fork adds
+
+- **Web pages on WebKitGTK** (Linux), one web view per tab, tab suspension and
+  session restore; tabs on top as in Chrome, with the sidebar as an option.
+- **Command palette** on `Ctrl+P` / `F1`: every action, open tabs, bookmarks,
+  history and containers in one fuzzy search (print, screenshots of the
+  visible or whole page, screen recording, dev tools, JS console, dark mode,
+  containers, authenticator, settings…).
+- **Multi-Account Containers**: separate cookies and storage per container,
+  "always open in" rules, temporary containers.
+- **Authenticator**: TOTP/HOTP codes in their own encrypted vault, from a
+  toolbar button; never reachable by pages, plugins or automation.
+- **Smart dark mode** (Dark Reader's engine) per site, applied live.
+- **Plugins** from a folder (`plugin.toml`, content scripts, permissions,
+  optional sandboxed WASM), with development folders that reload on change.
+- **Developer tools**: the WebKit inspector (`F12`) and a JavaScript console
+  per tab (`Ctrl+Shift+J`).
+- **AI-first automation**: a local control API, `browsecraft ctl`, an MCP
+  server and a headless mode on the same engine.
+
+### Drive it from Claude Code (MCP)
+
+Turn the control server on (start with `browsecraft --automation`, or tick
+*Enable the control server* in the Automation panel), then register the MCP
+server once:
+
+```sh
+claude mcp add browsecraft -- browsecraft mcp
+```
+
+Claude can then list and open tabs, navigate, read page text or an
+accessibility-style snapshot, click and type, take screenshots and PDFs and
+read the console (24 tools). `page.eval` stays off until you allow it in the
+panel; the socket is owner-only. From a shell: `browsecraft ctl tabs.list`,
+`browsecraft ctl page.navigate '{"url":"https://example.com"}'`,
+`browsecraft ctl page.text`. Details in [docs/AUTOMATION.md](docs/AUTOMATION.md)
+and [docs/usage.md](docs/usage.md).
+
 An experimental open-source desktop browser written in Rust, with tabs,
 a built-in ad blocker and a custom HTML/CSS renderer.
 
@@ -158,6 +196,9 @@ cargo test
 | `Ctrl+Plus` / `Ctrl+Minus` / `Ctrl+0` | Zoom in / out / reset     |
 | `Ctrl+U`                              | View source               |
 | `Ctrl+Shift+S`                        | Save a screenshot to Pictures |
+| `Ctrl+P` / `F1`                       | Command palette           |
+| `Ctrl+Shift+P`                        | Print                     |
+| `F12` / `Ctrl+Shift+J`                | Developer tools / JavaScript console |
 | `Shift+K`                             | Shortcut cheatsheet       |
 | `Ctrl+Q`                              | Quit                      |
 

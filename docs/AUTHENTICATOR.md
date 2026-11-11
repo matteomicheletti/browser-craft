@@ -99,6 +99,12 @@ file is not encrypted" checkbox and warns to delete the file after use.
 
 ## Panel and integration
 
+Wired in `src/browser/features.rs`: a toolbar shield (a tinted check while
+unlocked), the drawer, the palette's *Authenticator* command, `tick()` from
+the event loop, and `AuthEvent::Copy` through the password manager's
+clipboard helper (cleared after 30 s). Turning off the `builtin.authenticator`
+plugin entry hides the button and locks the vault.
+
 ```rust
 let mut auth = authenticator::AuthenticatorPanel::new(); // default vault path
 // every frame (also while the drawer is closed), for auto-lock and jobs:

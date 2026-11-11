@@ -50,7 +50,7 @@ first-class requirements:
 - Open: logged-in flows and Microsoft 365 / Google Workspace not tested.
   (Dev tools and one web view per tab: done in wave 1 core, see M2/M3.)
 
-### M1b: AI-first automation (in progress: done except the browser side)
+### M1b: AI-first automation (done for Linux)
 
 See `docs/AUTOMATION.md`.
 
@@ -68,16 +68,24 @@ See `docs/AUTOMATION.md`.
   stdio, 24 tools, screenshot as image content, launches the browser when
   needed); console capture script, `bc-console:` parser and ring buffer.
   32 unit tests (`cargo test automation`).
-- **Open**: the browser answering the requests (tabs, navigation waits,
-  page jobs, screenshot/PDF of the live view, console log per tab) in
-  `browser.rs`: checklist in `docs/AUTOMATION.md`. Until then `ctl` and
-  `mcp` find no browser listening. Headless needs a display (`xvfb-run`
-  on servers).
+- **Done (integration, 2026-11-11)**: the browser answers every method
+  (`src/browser/automation_rpc.rs`): tabs, navigation with load waits, page
+  scripts run through WebKitGTK (background tabs too), screenshot and PDF of
+  the live view, a console log per tab, containers, bookmarks, history;
+  `allowed_hosts` checked against the tab, settings applied live from the
+  Automation panel. Verified live: `ctl tabs.list`, `tabs.open` (also in the
+  background), `page.navigate`, `page.text`, `page.snapshot`, `page.wait`,
+  `page.screenshot` (also full page, 940×8119 on Wikipedia), `page.pdf`,
+  `console.read`, `page.eval` denied then allowed from the panel, server
+  stopped and restarted from the palette; an MCP stdio session
+  (`initialize`, `tools/list` 24 tools, `browser_navigate`, `browser_text`).
+- **Open**: `browsecraft mcp` starting a browser that is not running
+  (manual test 6.8). Headless needs a display (`xvfb-run` on servers).
 
 ### M2: Extensibility and UX core (in progress)
 
-- Plugin manager (done in `src/plugins/`, see `docs/EXTENSIONS.md`; wiring
-  into the browser window pending): manifest (`plugin.toml`: id, version,
+- Plugin manager (done in `src/plugins/`, see `docs/EXTENSIONS.md`; wired
+  into the browser window and verified live 2026-11-11): manifest (`plugin.toml`: id, version,
   API version, permissions, match patterns, scripts/styles),
   install/remove, enable/disable, per-plugin settings, permission and API
   display, built-in entries with an enable flag.
@@ -85,26 +93,33 @@ See `docs/AUTOMATION.md`.
   reload in development mode (polling, about once a second).
 - Content scripts/styles per domain through one init script; message bridge
   with nonce, permission checks and quotas (done). WASM sandbox for untrusted
-  logic on **wasmi** (cargo feature `wasm`; wasmtime was evaluated and not
-  chosen, see EXTENSIONS.md); no native libraries loaded in process (done).
-  Open: wire into `browser.rs` (init script, IPC, events, drawer, command
-  palette entry), run the WASM feature in default builds once reviewed, one init
-  script per file for strict-CSP pages, per-permission prompts.
+  logic on **wasmi** (cargo feature `wasm`, on by default since the
+  integration; wasmtime was evaluated and not chosen, see EXTENSIONS.md); no
+  native libraries loaded in process (done).
+  Integration (done, verified live): init script in every web view and frame,
+  `bc-plugin:` IPC with notify / clipboard / tabs / log answered, the Plugins
+  drawer and toolbar button, dev-folder edits picked up within a second with
+  *Reload open tabs*, built-ins (dark mode, authenticator) turned off take
+  effect at once. Open: one init script per file for strict-CSP pages,
+  per-permission prompts.
 - Partial WebExtensions compatibility evaluated, never claimed complete
   (done: evaluation in EXTENSIONS.md; no converter).
-- **Dev console** (inspector) working on Linux; JS error console.
-- **F1 command palette**; **tabs on top** + bookmarks bar; full Chrome
-  shortcut table (doc in `docs/usage.md`).
+- **Dev console** (inspector) working on Linux; JS error console (done: the
+  Automation drawer's Console view, `Ctrl+Shift+J`, verified live).
+- **F1 command palette** (done: Ctrl+P / F1 overlay over a page snapshot,
+  every `CommandId` implemented, verified live with keyboard navigation);
+  **tabs on top** + bookmarks bar; full Chrome shortcut table (doc in
+  `docs/usage.md`).
 - Status (core, 2026-11-11): **done** for the inspector (F12 / Ctrl+Shift+I
   dock it at the bottom of the page; it was attached but never laid out
   because wry sizes the GTK window by hand), the tab strip on top (default;
   sidebar left/right/hidden on `browsecraft://flags`), the drawer
-  (`Drawer` enum, Containers implemented, other panels placeholders), find in
+  (`Drawer` enum; all five panels since the integration), find in
   page (Ctrl+F, WebKit find controller with match count) and the Chrome
   shortcuts (Ctrl+1..9, Ctrl+PageUp/Down, Ctrl+Shift+T, Ctrl+Shift+N; Ctrl+P
-  and F1 reserved, `open_palette` stub). Overlays show a WebKit snapshot of
+  and F1 open the palette). Overlays show a WebKit snapshot of
   the page on Linux. Detached inspector window: not working (WebKit closes
-  it). Palette, plugins, JS error console: other wave-1 work.
+  it). Palette, plugins and the JS console: wired in the integration step.
 
 ### M3: Multi-Account Containers (in progress: Linux implemented and verified live)
 
@@ -122,7 +137,8 @@ See `docs/AUTOMATION.md`.
   `$XDG_RUNTIME_DIR`, deleted with the last tab and swept after a crash);
   one WebKit `WebContext` per container (`profiles/container-<id>`); tab
   strip and sidebar colours, toolbar badge, container picker, tab menu,
-  Containers drawer, `--container` / `--temporary-container`. Unit tests for
+  Containers drawer, `--container` / `--temporary-container`, palette `~`
+  mode and container badges on palette tabs. Unit tests for
   the model, rules, import/export (hostile input) and temporary cleanup.
   Verified live on a local page: cookie, localStorage and IndexedDB differ
   between Work, Personal, no container and a temporary container in one
@@ -131,7 +147,7 @@ See `docs/AUTOMATION.md`.
   isolation test; Windows (per-container WebView2 folder, untested) and
   macOS (not isolated).
 
-### M4: Authenticator (in progress: module done, integration pending)
+### M4: Authenticator (done for Linux; manual checks open)
 
 - TOTP (RFC 6238) / HOTP (RFC 4226), configurable algorithm/digits/period;
   `otpauth://` and QR import; encrypted vault (Argon2id + XChaCha20-Poly1305
@@ -144,19 +160,27 @@ See `docs/AUTOMATION.md`.
   plain link export with confirmation, Aegis import (plain and encrypted,
   tested on spec-built samples), auto-lock, drawer panel
   (`AuthenticatorPanel::ui` → `AuthEvent`).
-- Open: toolbar button, drawer and palette wiring, clipboard copy/clear in
-  core, visual check in the running browser; clipboard image import;
-  tests against files exported by the real Aegis / Google apps.
+- Done (integration, verified live 2026-11-11): toolbar shield showing the
+  lock state, drawer, palette command, `tick()` every frame (auto-lock with
+  the drawer closed); in a temporary profile a vault was created, an
+  `otpauth://` link added, the code matched an independent TOTP
+  computation, and the copied code left the clipboard after 30 s.
+- Open: QR image, lock/restart/unlock and export/import checked by hand in
+  the browser (unit-tested only); clipboard image import; tests against
+  files exported by the real Aegis / Google apps.
 
-### M5: Smart dark mode (module done, not wired)
+### M5: Smart dark mode (done for Linux)
 
 - Dynamic colour adaptation (computed styles, CSS variables, mutation
   observer, shadow roots), per-site rules, brightness/contrast/sepia,
   native dark detection, no white flash. Dark Reader is MIT: its dynamic
   theme engine is vendored (4.9.135) and wrapped; see `docs/DARKMODE.md`.
 - Done: settings, page/update scripts, IPC parser, drawer panel, WebKitGTK
-  screenshot harness. Open: wiring (init script, palette command, drawer,
-  `update_script` on tabs) by core; native-side CSS fetch for non-CORS sheets.
+  screenshot harness; wired 2026-11-11 (all-frames init script, live
+  `update_script` on every tab, follows the browser theme, toolbar toggle for
+  the site with right-click for the drawer, three palette commands, native
+  dark reports shown in the panel). Verified live on `tests/web/darkmode/`.
+- Open: native-side CSS fetch for non-CORS sheets.
 
 ### M6: Performance (in progress)
 
