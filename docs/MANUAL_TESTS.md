@@ -201,3 +201,17 @@ between windows that a window manager places, on one or two monitors.
 | 8.17 | Tabs in the left sidebar, hover a row | The card appears to the right of the sidebar | OK 2026-11-11 (hook) |
 | 8.18 | `browsecraft://flags`: hover cards off; pictures off; delay 0.25 s / 1.2 s | No card; card without picture; the delay changes | |
 | 8.19 | `browsecraft ctl tabs.list` with two windows; `tabs.open` with `"window": 2` | Each tab has `window: {id, name}`, a `windows` list; the tab opens in window 2; an unknown window id is an error | OK 2026-11-11 |
+
+## User agent and Microsoft 365 (log in by hand)
+
+For each row try the built-in choice (Safari on macOS) first, then Chrome and Edge from the palette (*User agent for this site…*), then Default.
+
+| # | Action | Expected | Result |
+| --- | --- | --- | --- |
+| UA.1 | Sign in at https://outlook.cloud.microsoft/mail/ | Inbox loads; no "Something went wrong" / `OwaBasicUnsupportedException` | |
+| UA.2 | Outlook calendar, open and send a mail | Works; Ctrl+B in the compose body makes text bold, the sidebar stays | |
+| UA.3 | https://teams.microsoft.com (chat, a call preview) | No "unsupported browser" page | |
+| UA.4 | Open a Word / Excel document from office.com or SharePoint | Document opens and edits | |
+| UA.5 | Settings → Site user agents: remove an override | Row disappears; the site gets its automatic string on the next load | |
+| SB.1 | Tabs left, click in a page, Ctrl+B twice | Sidebar hides, then comes back on the left; the same with tabs right | |
+| SB.2 | Tabs on top, Ctrl+B | Notice only | |

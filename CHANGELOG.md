@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- User-Agent (`src/useragent/`): a realistic default (`Version/26.0` instead of WebKitGTK's `Version/60.5`, which broke Outlook on the web), Microsoft 365 hosts get Safari on macOS, per-site overrides from the palette (*User agent for this site…*, `^`) and `browsecraft://flags`, switched per navigation before the first request; headless `--user-agent`.
+- `Ctrl+B` shows or hides the tab sidebar (page-first: Bold in page editors wins); palette *Show or hide the tab sidebar*.
+- `BROWSECRAFT_WINDOW_SCRIPT` step `page-click` (the keyboard leaves the chrome).
+
 - Several windows (`src/browser/windows.rs`): `Ctrl+N`, the palette and the title bar menu open a new window; tabs move between windows from their menu (*Move to new window*, *Move to window ▸*) or by dragging (reorder in the strip, tear off into a new window, drop onto another window). A moved tab keeps its live page (its WebKit view is reparented into the other window). Windows can be named (*Name window…*), shown in the title bar, menus, overview and automation API. The session remembers every window with its tabs, groups, split view, name, place and size; `Ctrl+Shift+T` reopens tabs of closed windows.
 - Tab overview (`src/browser/overview.rs`): `Ctrl+Shift+\`, a strip button or *Show all tabs* shows every tab of every window as a grid of page pictures, by window and group, with search, keyboard navigation, close and new tab.
 - Tab hover cards (`src/browser/hover.rs`): title, site, container, group and a picture of the page after a 0.5 s rest on a tab (strip and sidebar), drawn in a small window stacked above the web page; on/off, pictures and delay on `browsecraft://flags`.

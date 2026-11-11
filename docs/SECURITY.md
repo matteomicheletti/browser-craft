@@ -49,6 +49,10 @@ The control API will listen only on an owner-only Unix socket, require the
 user to enable it, and expose a permission-checked tool set. Vaults and
 browser settings are out of its reach.
 
+## User-Agent overrides
+
+BrowseCraft pretends to be another browser on some sites (built-in for Microsoft 365, or the user's choice). It changes only the `User-Agent` header and `navigator.userAgent`, never the engine: a site may send code meant for Chrome. Custom strings are checked to be printable ASCII (no header injection). Overrides are local settings, not sent anywhere.
+
 ## Dependencies
 
 `cargo deny` configuration from upstream (`deny.toml`) and the advisory

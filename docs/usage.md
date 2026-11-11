@@ -445,6 +445,10 @@ On a page with a login form the key menu lists the logins saved for that site: c
 
 `browsecraft://flags` is an engine-rendered settings page with switches and segmented controls. It sets the theme (one of eight, or Follow system; Late Night by default), whether the desktop's own title bar is used, where the tabs are (top, left, right or hidden; top by default), when background tabs are unloaded and how many stay in memory, whether tabs are reopened at start-up, whether the bookmarks bar shows, the tab hover cards (on or off, with or without the page picture, and their delay), and the interface renderer (auto, GPU or software). Changes are stored in the [per-user settings folder](../README.md#settings) and apply immediately after a successful save; save errors are shown on the page or in the status notice. Follow system picks Light or Late Night from the desktop's setting; Auto uses the GPU path when one is available. The renderer choice is made at startup, so restart to apply a change to it.
 
+## User agent
+
+Web pages see `Mozilla/5.0 (X11; Linux <arch>) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15`. WebKitGTK's own default claims a made-up "Safari 60.5", which Outlook on the web rejects (`OwaBasicUnsupportedException`). Microsoft 365 (`*.cloud.microsoft`, `*.office.com`, `*.office365.com`, `*.microsoft365.com`, `outlook.live.com`, Teams, `login.microsoftonline.com`, `login.live.com`, `*.sharepoint.com`, OneDrive) gets Safari on macOS, as WebKit's own quirk already does for `outlook.office.com`. Palette *User agent for this site…* (`^`) picks Default, Safari, Chrome, Firefox or Edge for the current host and reloads; *Settings → Site user agents* lists the overrides (remove, add a `host` or `*.domain` pattern, custom string). They live in `user-agents.txt` in the settings folder. WebKit's site-specific quirks stay on, but a WebKit UA quirk replaces any custom string, so they are off for a view while one of our overrides applies. The string switches in the navigation decision, so the first request to the new host carries it (a script navigation across sites is loaded again once). One string per tab: iframes use their page's. A Chrome or Edge string has no `navigator.userAgentData`, which some sites may notice. `browsecraft headless … --user-agent <preset|string>` forces one for every site.
+
 ## Ad blocking
 
 BrowseCraft blocks ads and trackers with a small built-in filter list plus every
@@ -487,6 +491,7 @@ blocked pop-up shows a short notice under the page.
 | `Ctrl+U`                              | View page source          |
 | `Ctrl+H`                              | Open the history page (`browsecraft://history`) |
 | `Ctrl+D`                              | Bookmark the page, or remove its bookmark |
+| `Ctrl+B`                              | Show / hide the tab sidebar (remembers its side; with tabs on top it only says so). In a page it is page-first: Bold in an editor, a focused text field or iframe keeps it |
 | `Ctrl+Shift+B`                        | Show / hide the bookmarks bar |
 | `Ctrl+Shift+O`                        | Open the bookmarks page (`browsecraft://bookmarks`) |
 | `F11`                                 | Make the window fullscreen, or leave fullscreen |
