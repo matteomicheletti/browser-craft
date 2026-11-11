@@ -266,8 +266,12 @@ impl Store {
             (Kind::Files, fnv(&[b"f", joined.as_bytes()]), names, None, None, c.files)
         } else if let Some(img) = c.image {
             (Kind::Image, fnv(&[b"i", &img.pixels_hash.to_le_bytes()]), text.clone().unwrap_or_default(), None, Some(img), Vec::new())
-        } else if let Some(t) = text.clone() {
+        } else if let Some(mut t) = text.clone() {
             let html = c.html.filter(|h| !h.trim().is_empty());
+            // An app that offers only HTML: GTK hands the markup over as text.
+            if html.as_deref().is_some_and(|h| h.trim() == t.trim()) {
+                t = html_to_text(&t);
+            }
             let kind = if html.is_some() { Kind::Html } else { Kind::Text };
             (kind, text_hash(&t), t, html, None, Vec::new())
         } else {
@@ -386,6 +390,35 @@ impl Store {
             .take(limit)
             .collect()
     }
+}
+
+/// The readable text of an HTML fragment: tags dropped, line breaks for
+/// block ends, the common entities decoded.
+pub fn html_to_text(html: &str) -> String {
+    let mut out = String::new();
+    let mut rest = html;
+    while let Some(lt) = rest.find('<') {
+        out.push_str(&rest[..lt]);
+        let Some(gt) = rest[lt..].find('>') else {
+            rest = &rest[lt..];
+            break;
+        };
+        let tag = rest[lt + 1..lt + gt].trim_start_matches('/').to_ascii_lowercase();
+        let name = tag.split(|c: char| c.is_whitespace() || c == '/').next().unwrap_or("");
+        let skip_to = |end: &str, r: &str| r.to_ascii_lowercase().find(end).map(|i| i + end.len());
+        rest = &rest[lt + gt + 1..];
+        if (name == "script" || name == "style") && !rest.is_empty() {
+            let end = format!("</{name}>");
+            rest = skip_to(&end, rest).map_or("", |i| &rest[i..]);
+            continue;
+        }
+        if matches!(name, "br" | "p" | "div" | "li" | "tr" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6") && !out.ends_with('\n') && !out.is_empty() {
+            out.push('\n');
+        }
+    }
+    out.push_str(rest);
+    let decoded = out.replace("&nbsp;", " ").replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&#39;", "'").replace("&amp;", "&");
+    decoded.trim().to_string()
 }
 
 fn image_path(dir: &Path, id: u64) -> PathBuf {
@@ -557,6 +590,16 @@ mod tests {
         std::fs::write(s.dir().join(INDEX), "{nope").unwrap();
         assert!(Store::open(s.dir().to_path_buf()).items().is_empty());
         s.delete(12345);
+    }
+
+    #[test]
+    fn html_only_copies_get_readable_text() {
+        assert_eq!(html_to_text("<b>bold</b> &amp; <i>more</i><br>next<script>x()</script><p>para</p>"), "bold & more\nnext\npara");
+        let d = tempfile::tempdir().unwrap();
+        let mut s = Store::open(d.path().to_path_buf());
+        let c = Capture { text: Some("<b>bold</b> text".into()), html: Some("<b>bold</b> text".into()), ..Default::default() };
+        let id = s.add(c, &limits(), 1).unwrap();
+        assert_eq!((s.get(id).unwrap().text.as_str(), s.get(id).unwrap().kind), ("bold text", Kind::Html));
     }
 
     #[test]

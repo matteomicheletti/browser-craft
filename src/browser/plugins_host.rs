@@ -563,7 +563,7 @@ impl Browser {
                             self.close_plugin_modal(false);
                         }
                         // Let the page's view come back and take the keyboard first.
-                        self.feat.host.pending.push((Instant::now() + Duration::from_millis(180), Pending::Paste { target, plain: *plain, text }));
+                        self.feat.host.pending.push((Instant::now() + Duration::from_millis(250), Pending::Paste { target, plain: *plain, text }));
                         return;
                     }
                     Err(e) => Err(e),
@@ -716,6 +716,17 @@ impl Browser {
     fn focus_target(&mut self, target: Target) {
         match target {
             Target::Page(tab) if tab == self.tab_id => {
+                // As a click in the page would: the chrome lets the keyboard go.
+                self.chrome_keys.set(false);
+                self.focus = super::Focus::Page;
+                self.egui_address_focused = false;
+                if let Some(egui) = &self.egui {
+                    egui.ctx().memory_mut(|m| {
+                        if let Some(id) = m.focused() {
+                            m.surrender_focus(id);
+                        }
+                    });
+                }
                 if let Some(WebPane::Wry(wv)) = self.view_of(tab) {
                     let _ = wv.focus();
                 }
@@ -838,7 +849,11 @@ impl Browser {
     fn open_plugin_tab(&mut self, plugin: &str, page: &PageDef, query: &str) {
         let url = ui_pages::page_url(plugin, &page.path, query);
         host::grant(&url);
-        self.open_in_new_tab(url);
+        // The default data store (not the current tab's container), and the
+        // keyboard goes to the page, not to the address bar.
+        self.new_tab_in(super::ContainerChoice::None, Some(url));
+        let tab = self.tab_id;
+        self.feat.host.pending.push((Instant::now() + Duration::from_millis(400), Pending::Focus(Target::Page(tab))));
     }
 
     /// Whether a plugin modal is showing (the page view hides behind its
@@ -872,6 +887,11 @@ impl Browser {
             .with_initialization_script_for_main_only(host::runtime_script(true), true)
             .with_devtools(cfg!(debug_assertions))
             .with_visible(true)
+            // The theme's surface until the page paints (no white flash).
+            .with_background_color({
+                let c = crate::internal::current().t.surface;
+                ((c >> 16) as u8, (c >> 8) as u8, c as u8, 255)
+            })
             .with_bounds(wry::Rect {
                 position: wry::dpi::Position::Physical(wry::dpi::PhysicalPosition::new(0, 0)),
                 size: wry::dpi::Size::Physical(wry::dpi::PhysicalSize::new(1, 1)),
@@ -1085,8 +1105,8 @@ impl Browser {
                     let uri = self.current_url();
                     match key_decision(&uri, k.ctrl, k.shift, k.alt, &k.key) {
                         GtkKey::Command(p, c) => {
-                            let tab = self.tab_id;
-                            self.plugin_host_message(HostMessage::Command { plugin: p, command: c, tab, address: false });
+                            let (tab, address) = (self.tab_id, self.egui_address_focused);
+                            self.plugin_host_message(HostMessage::Command { plugin: p, command: c, tab, address });
                         }
                         other => eprintln!("browsecraft: window test hook: {arg} -> {other:?}"),
                     }
