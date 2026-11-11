@@ -94,10 +94,14 @@ cannot draw on top of the page. Two placements are therefore used:
   (mode 0600, off unless enabled in settings or `--automation`), JSON-RPC
   2.0, one request per line.
 - The server never touches browser state: it turns each request into
-  `automation::Request { method, params, reply: Sender<Result<Value, String>> }`
+  `automation::Request { method, params, reply: Sender<Result<Value, RpcError>> }`
   and hands it to a callback given at start-up; core posts it to the event
-  loop as `UserMessage::Automation` and answers.
+  loop as `UserMessage::Automation` and answers. Page methods are answered
+  with `automation::scripts::PageJob` + `evaluate_script_with_callback`;
+  the full checklist is in docs/AUTOMATION.md ("Integration").
 - `browsecraft mcp` runs an MCP server on stdio that forwards tool calls to
   the socket. `browsecraft ctl <method> [json]` for shell scripting.
-- `browsecraft headless <screenshot|pdf|text|eval> …` renders with WebKit
-  offscreen and prints JSON.
+- `browsecraft headless <screenshot|pdf|text|snapshot|eval|run> …` renders
+  with WebKit offscreen and prints JSON.
+- Permissions in `automation.toml` (`automation::Settings`): off by
+  default, `page.eval` denied until allowed, optional `allowed_hosts`.

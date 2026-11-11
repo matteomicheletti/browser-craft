@@ -70,3 +70,21 @@ Build under test: `browsecraft --version`, installed by
 | 5.6 | Screen recording (palette) produces a playable file | |
 | 5.7 | Dark mode on a light site, off on an excluded site | |
 | 5.8 | HiDPI: GNOME scaling 125%/200%: text sharpness, page size correct | |
+
+## 6. Automation (headless, ctl, MCP)
+
+Serve the probes first: `python3 -m http.server -d tests/web 8000`.
+Results of 2026-11-11 are the headless rows; ctl/MCP against a live
+browser wait for the core integration (docs/AUTOMATION.md).
+
+| # | Check | Expected | Result |
+| --- | --- | --- | --- |
+| 6.1 | `browsecraft headless eval http://127.0.0.1:8000/features.html 'new Promise(r => setTimeout(() => r(document.title), 3000))'` | `"value":"probe 17/17"`, exit 0 | OK 2026-11-11 |
+| 6.2 | `browsecraft headless screenshot https://example.com /tmp/a.png --full-page` | PNG of the page, JSON with width/height | OK 2026-11-11 |
+| 6.3 | `browsecraft headless pdf https://example.com /tmp/a.pdf` | 1-page PDF | OK 2026-11-11 |
+| 6.4 | `browsecraft headless run http://127.0.0.1:8000/automation.html '[{"method":"page.type","params":{"selector":"#q","text":"hi"}},{"method":"page.click","params":{"selector":"#go"}},{"method":"page.text","params":{"selector":"#out"}}]'` | last result text `submitted hi r false` | OK 2026-11-11 |
+| 6.5 | `browsecraft headless eval https://github.com 'const r = await fetch(location.href); return r.status'` (strict CSP) | `"value":200` | OK 2026-11-11 |
+| 6.6 | `browsecraft --automation`, then `browsecraft ctl tabs.list` | the open tabs | |
+| 6.7 | `claude mcp add browsecraft -- browsecraft mcp`; ask Claude to open example.com and read it | tools called, page text returned | |
+| 6.8 | Close the browser; ask for a screenshot through MCP | the browser starts and answers | |
+| 6.9 | `ls -l $XDG_RUNTIME_DIR/browsecraft` while the browser runs | `drwx------` dir, `srw-------` socket | |

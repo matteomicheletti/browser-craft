@@ -50,16 +50,29 @@ first-class requirements:
 - Open: dev-tools window not yet seen opening; logged-in flows and
   Microsoft 365 / Google Workspace not tested; one web view for all tabs.
 
-### M1b: AI-first automation (planned, next)
+### M1b: AI-first automation (in progress: done except the browser side)
 
-- `browsecraft --headless` on WebKit (offscreen GTK window): `screenshot`,
-  `pdf`, `text`, `eval` sub-commands with JSON output, exit codes.
-- Local control API on a Unix socket (owner-only), JSON-RPC; an
-  **MCP server** (`browsecraft mcp`, stdio) built on it: tabs, navigate,
-  read text/DOM snapshot, click/type by selector, run script, screenshot,
-  containers. Every tool gated by a permission set in settings; no access
-  to password or authenticator vaults.
-- Scripting: the same API from a CLI (`browsecraft ctl …`).
+See `docs/AUTOMATION.md`.
+
+- **Done**: `browsecraft headless screenshot|pdf|text|snapshot|eval|run`
+  on WebKit (offscreen GTK window, ephemeral context, sandbox), JSON
+  output, exit codes. Verified 2026-11-11: probe 17/17, example.com,
+  Wikipedia (full page 1024×8855), GitHub (strict CSP, eval with `await`),
+  all page scripts on `tests/web/automation.html`, PNG checked visually.
+- **Done**: control API on a Unix socket (dir 0700, socket 0600,
+  SO_PEERCRED uid check, 1 MiB requests, 16 connections), JSON-RPC 2.0,
+  24 methods with strict serde types; permissions in `automation.toml`
+  (off by default, eval denied, URL scheme rules, host allow-list); no
+  methods for passwords or the authenticator.
+- **Done**: `browsecraft ctl …` and `browsecraft mcp` (MCP 2025-06-18 over
+  stdio, 24 tools, screenshot as image content, launches the browser when
+  needed); console capture script, `bc-console:` parser and ring buffer.
+  32 unit tests (`cargo test automation`).
+- **Open**: the browser answering the requests (tabs, navigation waits,
+  page jobs, screenshot/PDF of the live view, console log per tab) in
+  `browser.rs`: checklist in `docs/AUTOMATION.md`. Until then `ctl` and
+  `mcp` find no browser listening. Headless needs a display (`xvfb-run`
+  on servers).
 
 ### M2: Extensibility and UX core (planned)
 
