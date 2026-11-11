@@ -1004,6 +1004,7 @@ impl Browser {
         #[cfg(target_os = "linux")]
         {
             self.card = None;
+            self.release_clipboard_watcher();
         }
         self.webview = None;
         for t in &mut self.tabs {

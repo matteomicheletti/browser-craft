@@ -550,6 +550,11 @@ impl super::Browser {
             if self.feat.palette.is_open() {
                 self.toggle_palette();
             }
+            // A plugin modal is a web view stacked over everything: it would
+            // sit on top of the grid.
+            if self.plugin_modal_open() {
+                self.close_plugin_modal(false);
+            }
             self.overview.show();
             self.hide_hover_card();
             // A fresh picture of what was on screen.

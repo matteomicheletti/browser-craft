@@ -246,6 +246,24 @@ impl PluginsPanel {
             ui.label(egui::RichText::new(&m.name).size(13.5).color(c.text));
             ui.label(egui::RichText::new(format!("v{}", m.version)).size(11.5).color(c.muted));
         });
+        // What a plugin takes over is shown without opening its details.
+        if m.has(super::permissions::Permission::ClipboardHistory) {
+            let state = if on { "Records everything you copy, here and in other apps (not passwords)." } else { "Would record everything you copy (turned off)." };
+            ui.label(egui::RichText::new(format!("Clipboard history: {state}")).size(11.5).strong().color(danger));
+        }
+        if on {
+            let (active, conflicts) = super::shortcuts::resolve(reg);
+            for a in active.iter().filter(|a| a.plugin == m.id) {
+                if let Some(what) = a.overrides {
+                    let label = format!("Takes {} (the browser's {what})", a.combo.label());
+                    ui.label(egui::RichText::new(label).size(11.5).color(c.warning));
+                }
+            }
+            for x in conflicts.iter().filter(|x| x.plugin == m.id) {
+                let label = format!("{} is not active: {} already uses it", x.combo.label(), x.winner);
+                ui.label(egui::RichText::new(label).size(11.5).color(danger));
+            }
+        }
         egui::CollapsingHeader::new(egui::RichText::new("Details").size(12.0).color(c.muted)).id_salt(&e.id).show(ui, |ui| {
             if !m.description.is_empty() {
                 ui.label(egui::RichText::new(&m.description).size(12.5).color(c.text));
@@ -264,6 +282,27 @@ impl PluginsPanel {
                 for cs in &m.content_scripts {
                     let pats: Vec<&str> = cs.matches.iter().map(|p| p.as_str()).collect();
                     ui.label(egui::RichText::new(format!("{} ({})", pats.join(", "), cs.run_at.as_str())).size(11.5).color(c.muted));
+                }
+            }
+            if !m.pages.is_empty() {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Pages").size(12.0).strong().color(c.text));
+                for p in &m.pages {
+                    let how = match p.open_as {
+                        super::manifest::OpenAs::Tab => "tab".to_string(),
+                        super::manifest::OpenAs::Modal => format!("modal {}x{}", p.width, p.height),
+                    };
+                    let editor = if m.screenshot_editor.as_deref() == Some(p.id.as_str()) { ", screenshot editor" } else { "" };
+                    ui.label(egui::RichText::new(format!("{} ({how}{editor})", p.title)).size(11.5).color(c.muted));
+                }
+            }
+            if !m.commands.is_empty() {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new("Commands").size(12.0).strong().color(c.text));
+                for cmd in &m.commands {
+                    let keys = cmd.shortcut.as_ref().map(|k| format!("  {}", k.label())).unwrap_or_default();
+                    let when = cmd.when.as_ref().map(|w| format!(" (when {w} is on)")).unwrap_or_default();
+                    ui.label(egui::RichText::new(format!("{}{keys}{when}", cmd.title)).size(11.5).color(c.muted));
                 }
             }
             if m.wasm.is_some() {

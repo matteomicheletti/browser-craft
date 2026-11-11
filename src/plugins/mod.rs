@@ -14,12 +14,18 @@
 #![allow(dead_code, unused_imports)]
 
 pub mod bridge;
+pub mod clipboard_history;
+#[cfg(target_os = "linux")]
+pub mod clipboard_watch;
+pub mod host;
 pub mod manifest;
 pub mod panel;
 pub mod pattern;
 pub mod permissions;
 pub mod registry;
 pub mod script;
+pub mod shortcuts;
+pub mod ui_pages;
 pub mod wasm;
 
 pub use bridge::{dispatch, parse_page_message, PageCall, PluginEvent, Reply};
