@@ -26,7 +26,7 @@ fn to_value<T: Serialize>(v: &T) -> Result<Value, RpcError> {
 impl Browser {
     pub(super) fn automation_request(&mut self, req: AutoRequest) {
         // A request that arrives after automation was switched off.
-        if self.feat.automation.is_none() {
+        if self.feat.automation.is_none() && !self.shared.borrow().automation_on {
             req.respond(Err(RpcError::denied("automation is disabled")));
             return;
         }
@@ -51,7 +51,7 @@ impl Browser {
         }
     }
 
-    fn tab_info(&self, i: usize) -> p::TabInfo {
+    pub(super) fn tab_info(&self, i: usize) -> p::TabInfo {
         let loading = if i == self.active { self.loading } else { self.tabs.get(i).is_some_and(|t| t.loading) };
         p::TabInfo {
             id: self.tab_id_at(i),
@@ -75,6 +75,7 @@ impl Browser {
                 };
                 Some(p::SplitInfo { side: side.to_string(), with: s.other(id)? })
             }),
+            window: Some(p::TabWindow { id: self.win_key, name: self.win_name.clone() }),
         }
     }
 
@@ -102,8 +103,9 @@ impl Browser {
         match req.method {
             Method::BrowserVersion => to_value(&p::VersionResult::current()).map(Some),
             Method::TabsList => {
+                // Normally answered by the application, for every window.
                 let tabs = (0..self.tabs.len()).map(|i| self.tab_info(i)).collect();
-                to_value(&p::TabsListResult { tabs }).map(Some)
+                to_value(&p::TabsListResult { tabs, windows: Vec::new() }).map(Some)
             }
             Method::TabsOpen => {
                 let params: p::TabsOpenParams = req.params()?;

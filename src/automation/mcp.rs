@@ -109,6 +109,7 @@ const TOOLS: &[Tool] = &[
                     ("url", json!({ "type": "string", "description": "http(s) URL to open." })),
                     ("container", json!({ "type": "string", "description": "Container id; the default profile when omitted." })),
                     ("background", json!({ "type": "boolean", "description": "Open without switching to it (default false)." })),
+                    ("window", json!({ "type": "integer", "minimum": 0, "description": "Window id from browser_tabs (windows[].id); the window last used when omitted." })),
                 ]),
                 &["url"],
             )

@@ -221,6 +221,10 @@ pub struct TabsOpenParams {
     /// Open without switching to the tab.
     #[serde(default)]
     pub background: bool,
+    /// The window to open it in (`tabs.list`'s `windows[].id`); the window
+    /// last used when absent.
+    #[serde(default)]
+    pub window: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -524,6 +528,34 @@ pub struct TabInfo {
     /// other tab's id. The active tab is the focused pane.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub split: Option<SplitInfo>,
+    /// The browser window the tab is in. `index` counts within it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<TabWindow>,
+}
+
+/// A tab's window, in `TabInfo`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TabWindow {
+    pub id: u64,
+    /// The name the user gave it; none when unnamed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+}
+
+/// A browser window, in `tabs.list`'s `windows`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WindowInfo {
+    pub id: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The name, or "Window N" (its position).
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub tabs: usize,
+    /// The window the user last used.
+    #[serde(default)]
+    pub active: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -547,6 +579,9 @@ pub struct SplitInfo {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TabsListResult {
     pub tabs: Vec<TabInfo>,
+    /// Every browser window.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub windows: Vec<WindowInfo>,
 }
 
 /// `tabs.close`, `page.click`, `page.type`, `page.press`, `page.scroll`.

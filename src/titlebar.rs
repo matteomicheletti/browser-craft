@@ -38,6 +38,9 @@ pub enum WindowOp {
     ToggleMaximize,
     Minimize,
     Close,
+    /// The window menu's "New window" and "Name window…" (the browser's).
+    NewWindow,
+    NameWindow,
 }
 
 /// Applies `op` to `window`. `Close` is the caller's (it ends the event
@@ -55,7 +58,7 @@ pub fn apply(window: &Window, op: WindowOp) -> bool {
             window.set_minimized(true);
             false
         }
-        WindowOp::Close => false,
+        WindowOp::Close | WindowOp::NewWindow | WindowOp::NameWindow => false,
     }
 }
 
@@ -120,9 +123,17 @@ pub fn drag_area(ui: &mut egui::Ui, rect: Rect, c: &Colors, maximized: bool, ops
     resp.context_menu(|ui| window_menu(ui, c, maximized, ops));
 }
 
-/// The window menu: minimize, maximize or restore, close.
+/// The window menu: new window, name the window, minimize, maximize or
+/// restore, close.
 pub fn window_menu(ui: &mut egui::Ui, c: &Colors, maximized: bool, ops: &mut Vec<WindowOp>) {
     use egui_phosphor::regular as ph;
+    for (glyph, label, op) in [(ph::APP_WINDOW, "New window", WindowOp::NewWindow), (ph::TAG, "Name window\u{2026}", WindowOp::NameWindow)] {
+        if crate::egui_chrome::menu_item(ui, c, glyph, label).clicked() {
+            ops.push(op);
+            ui.close();
+        }
+    }
+    ui.separator();
     let size = if maximized { (ph::CORNERS_IN, "Restore") } else { (ph::CORNERS_OUT, "Maximize") };
     for (glyph, label, op) in [
         (ph::MINUS, "Minimize", WindowOp::Minimize),
@@ -248,21 +259,24 @@ pub fn window_edges(ctx: &egui::Context, c: &Colors, edge: f32, ops: &mut Vec<Wi
 /// code as the title bar's buttons. Input from `xdotool` does not reach the
 /// window on a GNOME session, so this is how the operations are checked.
 #[cfg(debug_assertions)]
-pub fn test_script() -> Vec<(std::time::Duration, &'static str)> {
+pub fn test_script() -> Vec<(std::time::Duration, String)> {
     let Ok(text) = std::env::var("BROWSECRAFT_WINDOW_SCRIPT") else {
         return Vec::new();
     };
+    parse_test_script(&text)
+}
+
+/// `"2:maximize,4:move-tab:1:new"`: seconds, then the step (which may
+/// contain colons; unknown steps are ignored when run). A step may end in
+/// `@N` to act on window N.
+#[cfg(debug_assertions)]
+pub fn parse_test_script(text: &str) -> Vec<(std::time::Duration, String)> {
     text.split(',')
         .filter_map(|step| {
             let (secs, op) = step.split_once(':')?;
             let secs: f32 = secs.trim().parse().ok()?;
-            let op = [
-                "maximize", "restore", "minimize", "unminimize", "close", "fullscreen", "system-titlebar", "custom-titlebar",
-                "palette", "themes", "authenticator", "containers", "theme-next",
-            ]
-                .into_iter()
-                .find(|o| *o == op.trim())?;
-            Some((std::time::Duration::from_secs_f32(secs.max(0.0)), op))
+            let op = op.trim();
+            (!op.is_empty()).then(|| (std::time::Duration::from_secs_f32(secs.max(0.0)), op.to_string()))
         })
         .collect()
 }

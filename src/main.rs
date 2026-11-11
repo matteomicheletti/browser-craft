@@ -42,6 +42,7 @@ mod storage;
 mod style;
 mod tab_groups;
 mod textfield;
+mod thumbnails;
 mod theme;
 mod titlebar;
 #[cfg(test)]
@@ -128,7 +129,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let mut app = browser::Browser::new(event_loop.create_proxy(), fonts, start_tabs);
+    let mut app = browser::App::new(event_loop.create_proxy(), fonts, start_tabs);
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("browsecraft: {e}");
     }

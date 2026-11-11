@@ -79,6 +79,10 @@ gtk = "0.18"
 # printing to PDF); same versions and features wry already pulls in.
 webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 javascriptcore-rs = { version = "=1.1.2", features = ["v2_28"] }
+# Moves a tab's web view (wry's X11 container) between browser windows and
+# raises the hover card above the web views (XReparentWindow, XRaiseWindow);
+# already in the graph through wry, loaded at run time like there.
+x11-dl = "2.21"
 
 [target.'cfg(unix)'.dependencies]
 # Peer credentials (SO_PEERCRED / getpeereid) of control socket clients.

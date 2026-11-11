@@ -670,7 +670,14 @@ impl Browser {
                 }
             }
             Settings => self.load(Request::Get("browsecraft://flags".into()), true),
-            Quit => self.quit = true,
+            Quit => self.quit_app = true,
+            NewWindow => self.app_requests.push(super::windows::AppRequest::NewWindow),
+            ShowAllTabs => self.toggle_overview(),
+            NameWindow => self.rename = Some(self.win_name.clone().unwrap_or_default()),
+            MoveTabToNewWindow => self.app_requests.push(super::windows::AppRequest::MoveTab {
+                tab: self.tab_id,
+                to: super::windows::MoveTarget::NewWindow(None),
+            }),
         }
         self.request_redraw();
     }
@@ -1108,6 +1115,18 @@ fn downloads_dir() -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
     let dir = home.join("Downloads");
     if dir.is_dir() || std::fs::create_dir_all(&dir).is_ok() { Some(dir) } else { Some(home) }
+}
+
+/// Moves the automation server from a window that closes to another one
+/// (one server for the whole application).
+pub(super) fn hand_over_automation(from: &mut Browser, to: &mut Browser) {
+    if to.feat.automation.is_some() {
+        return;
+    }
+    to.feat.automation = from.feat.automation.take();
+    to.feat.automation_settings = from.feat.automation_settings.clone();
+    to.feat.automation_file_enabled = from.feat.automation_file_enabled;
+    to.feat.automation_error = from.feat.automation_error.take();
 }
 
 #[cfg(test)]

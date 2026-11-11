@@ -432,7 +432,7 @@ impl Browser {
             self.peer.snapshot_pending = false;
         }
         let Some(view) = self.tabs[i].view.as_ref() else { return };
-        let visible = !(self.egui_popup_open && view.is_native());
+        let visible = !(self.egui_popup_open && view.is_native()) && !self.overview.open;
         let bounds = (rect.x.round() as i32, rect.y.round() as i32, rect.w.round().max(1.0) as u32, rect.h.round().max(1.0) as u32);
         if visible != self.peer.visible {
             view.set_visible(visible);

@@ -24,6 +24,11 @@ pub enum CommandId {
     NextTab,
     PrevTab,
     ToggleTabsPosition,
+    // Windows and the tab overview
+    NewWindow,
+    ShowAllTabs,
+    NameWindow,
+    MoveTabToNewWindow,
     // Tab groups and split view
     NewTabGroup,
     AddTabToGroup,
@@ -199,7 +204,7 @@ pub fn catalog() -> &'static [Command] {
     &CATALOG
 }
 
-static CATALOG: [Command; 56] = [
+static CATALOG: [Command; 60] = [
     cmd!(
         NewTab,
         "new-tab",
@@ -225,6 +230,42 @@ static CATALOG: [Command; 56] = [
         ["private", "incognito", "ephemeral", "throwaway"],
         Some("Ctrl+Shift+N"),
         ph::GHOST,
+        Tabs
+    ),
+    cmd!(
+        NewWindow,
+        "new-window",
+        "New window",
+        ["open window", "second window"],
+        Some("Ctrl+N"),
+        ph::APP_WINDOW,
+        Tabs
+    ),
+    cmd!(
+        ShowAllTabs,
+        "show-all-tabs",
+        "Show all tabs",
+        ["overview", "tab overview", "grid", "previews", "windows", "expose"],
+        Some("Ctrl+Shift+\\"),
+        ph::SQUARES_FOUR,
+        Tabs
+    ),
+    cmd!(
+        NameWindow,
+        "name-window",
+        "Name window…",
+        ["rename window", "window title", "label"],
+        None,
+        ph::TAG,
+        Tabs
+    ),
+    cmd!(
+        MoveTabToNewWindow,
+        "move-tab-new-window",
+        "Move tab to new window",
+        ["detach", "tear off", "pop out"],
+        None,
+        ph::ARROW_SQUARE_OUT,
         Tabs
     ),
     cmd!(

@@ -8,6 +8,7 @@
 //! (toolbar and tab sidebar) is drawn either by the engine into a softbuffer
 //! frame, or by egui on wgpu when a GPU is available.
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -18,13 +19,12 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use softbuffer::{Context, Surface};
 use url::Url;
-use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
-use winit::window::{CursorIcon, Fullscreen, Theme, Window, WindowId};
+use winit::window::{CursorIcon, Fullscreen, Theme, Window};
 use wry::dpi::{
     PhysicalPosition as WryPhysicalPosition, PhysicalSize as WryPhysicalSize, Position as WryPosition,
     Size as WrySize,
@@ -55,6 +55,13 @@ use crate::vault;
 mod automation_rpc;
 mod features;
 mod groups_split;
+mod hover;
+mod overview;
+mod windows;
+#[cfg(target_os = "linux")]
+mod x11;
+
+pub use windows::App;
 
 pub const HOME_URL: &str = "https://www.startpage.com/";
 /// What a new tab opens: the built-in start page (`src/home.html`).
@@ -91,6 +98,8 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl + 9", "Go to the last tab"),
     ("Ctrl + Shift + T", "Reopen the last closed tab"),
     ("Ctrl + Shift + N", "New tab in a temporary container"),
+    ("Ctrl + N", "New window"),
+    ("Ctrl + Shift + \\", "Show all tabs (every window)"),
     ("Ctrl + F", "Find in page"),
     ("Ctrl + P / F1", "Command palette"),
     ("Ctrl + Shift + P", "Print"),
@@ -221,6 +230,10 @@ pub enum TabMessage {
     /// A snapshot of the page, shown while a menu covers it.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Snapshot { w: usize, h: usize, rgba: Vec<u8> },
+    /// A small picture of the page for the overview and the hover cards
+    /// (`save`: also write it for the session).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Thumbnail { w: usize, h: usize, rgba: Vec<u8>, save: bool },
     /// The dark mode script judged the page (`bc-dark:`).
     Dark(crate::darkmode::PageMessage),
     /// A plugin content script called `bc.*` (`bc-plugin:`); `sender` is
@@ -382,6 +395,13 @@ enum Action {
     SplitRatio(f32),
     /// The other split pane's placeholder was clicked.
     FocusPeer,
+    /// Tab `i`'s menu: to a new window, or to another window.
+    MoveToNewWindow(usize),
+    MoveToWindow(usize, u64),
+    /// The strip's "Show all tabs" button.
+    ShowAllTabs,
+    /// "Name window…" was confirmed (empty: no name).
+    NameWindow(String),
 }
 
 struct HistoryEntry {
@@ -470,6 +490,42 @@ struct Gfx {
 
 pub struct Browser {
     gfx: Option<Gfx>,
+    /// What the windows share (`windows.rs`).
+    shared: Rc<RefCell<windows::Shared>>,
+    /// This window's stable id and its name (unnamed: "Window N").
+    win_key: u64,
+    win_name: Option<String>,
+    /// What this window asks of the application (other windows).
+    app_requests: Vec<windows::AppRequest>,
+    /// Quit the application (Ctrl+Q), not just close this window.
+    quit_app: bool,
+    /// Every tab left for another window: nothing to remember on close.
+    moved_out: bool,
+    /// This is the window the user last used.
+    is_last_active: bool,
+    /// The tab overview (Ctrl+Shift+\).
+    overview: overview::Overview,
+    /// Page pictures as textures: tab id -> (picture stamp, texture).
+    thumb_tex: HashMap<u64, (u64, egui::TextureHandle)>,
+    /// Pictures to take: (when, tab id).
+    thumb_due: Vec<(Instant, u64)>,
+    /// When to show the tab hover card, and the card's window.
+    hover: hover::HoverTimer,
+    #[cfg(target_os = "linux")]
+    card: Option<hover::CardWindow>,
+    /// The hovered tab and where its chip or row is (points), last frame.
+    hover_anchor: Option<(u64, egui::Rect)>,
+    /// Debug hook: behave as if the pointer rested on this tab.
+    #[cfg(debug_assertions)]
+    hover_force: Option<usize>,
+    /// The strip's chips last frame: (tab index, left, right) in points.
+    strip_chips: Vec<(usize, f32, f32)>,
+    /// The strip's bottom edge (points), for drops.
+    strip_bottom: f32,
+    /// A tab chip being dragged: its tab id.
+    strip_drag: Option<u64>,
+    /// "Name window…": the text being typed.
+    rename: Option<String>,
     fonts: Fonts,
     proxy: EventLoopProxy<UserMessage>,
     generation: Arc<AtomicU64>,
@@ -495,18 +551,12 @@ pub struct Browser {
     webview: Option<WebPane>,
     /// The system web view (wry) works here, so tabs get their own.
     wry_ok: bool,
-    /// The web engine's data stores, one per container ("" = no container).
-    contexts: HashMap<String, WebCtx>,
     /// The active tab's id and container (its `TabState` slot is empty
     /// while it is active).
     tab_id: u64,
     container: Option<String>,
-    next_tab_id: u64,
-    closed_tabs: Vec<ClosedTab>,
     /// When idle tabs were last checked for suspension.
     last_suspend_check: Instant,
-    /// The session file's last saved contents.
-    saved_session: String,
     drawer: Option<Drawer>,
     containers_panel: crate::containers::ContainersPanel,
     /// The find bar: the text searched for, and the match count.
@@ -564,9 +614,6 @@ pub struct Browser {
     window_fullscreen: bool,
     /// Whether the window has the system's decorations now.
     decorations: Option<bool>,
-    /// Window operations queued by the debug test hook, with when to run them.
-    #[cfg(debug_assertions)]
-    window_script: Vec<(Instant, &'static str)>,
     /// The desktop prefers a dark theme (for "Follow system").
     system_dark: bool,
     /// A WebView2 navigation we started ourselves is in flight, so its final
@@ -1061,6 +1108,39 @@ fn request_snapshot_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>, tab: u
     );
 }
 
+/// Asks WebKit for a small picture of the page (`TabMessage::Thumbnail`),
+/// scaled with a good filter to at most `thumbnails::MAX_WIDTH` wide and
+/// cropped to the top of the page. Works on hidden web views too.
+#[cfg(target_os = "linux")]
+fn request_thumbnail_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>, tab: u64) {
+    use gtk::cairo::{Context as Cairo, Filter, Format, ImageSurface};
+    use webkit2gtk::{SnapshotOptions, SnapshotRegion, WebViewExt as _};
+    use wry::WebViewExtUnix as _;
+    wv.webview().snapshot(SnapshotRegion::Visible, SnapshotOptions::NONE, None::<&gtk::gio::Cancellable>, move |result| {
+        let Ok(surface) = result else { return };
+        let Ok(image) = ImageSurface::try_from(surface) else { return };
+        let (w, h) = (image.width().max(0) as usize, image.height().max(0) as usize);
+        let (tw, th, crop_h) = crate::thumbnails::target_size(w, h);
+        if tw == 0 || crop_h == 0 {
+            return;
+        }
+        let Ok(target) = ImageSurface::create(Format::ARgb32, tw as i32, th as i32) else { return };
+        let drawn = Cairo::new(&target).and_then(|cr| {
+            let scale = tw as f64 / w as f64;
+            cr.scale(scale, scale);
+            cr.set_source_surface(&image, 0.0, 0.0)?;
+            cr.source().set_filter(Filter::Good);
+            cr.paint()
+        });
+        if drawn.is_err() {
+            return;
+        }
+        if let Some((w, h, rgba)) = surface_rgba(&target, crate::thumbnails::MAX_WIDTH) {
+            let _ = proxy.send_event(UserMessage::Tab(tab, TabMessage::Thumbnail { w, h, rgba, save: true }));
+        }
+    });
+}
+
 /// A cairo image surface as straight (not premultiplied) RGBA, shrunk by
 /// an integer factor to at most `max_side` pixels a side.
 #[cfg(target_os = "linux")]
@@ -1209,6 +1289,7 @@ fn background_web_event(st: &mut TabState, message: TabMessage) {
 /// The longest address kept in the session file.
 const MAX_SESSION_URL: usize = 8 * 1024;
 const MAX_SESSION_TABS: usize = 500;
+const MAX_SESSION_WINDOWS: usize = 50;
 
 struct SessionTab {
     url: String,
@@ -1227,10 +1308,7 @@ struct SessionLayout {
     split: Option<(usize, usize, f32)>,
 }
 
-fn parse_session_layout(text: &str) -> SessionLayout {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
-        return SessionLayout { groups: Vec::new(), split: None };
-    };
+fn parse_session_layout(value: &serde_json::Value) -> SessionLayout {
     let groups = value
         .get("groups")
         .and_then(|v| v.as_array())
@@ -1250,10 +1328,7 @@ fn parse_session_layout(text: &str) -> SessionLayout {
 
 /// Reads a session file defensively: unknown or broken entries are
 /// skipped, and only addresses a tab may open are kept.
-fn parse_session(text: &str) -> (Vec<SessionTab>, usize) {
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
-        return (Vec::new(), 0);
-    };
+fn parse_session(value: &serde_json::Value) -> (Vec<SessionTab>, usize) {
     let active = value.get("active").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let mut tabs = Vec::new();
     for (raw, tab) in value.get("tabs").and_then(|v| v.as_array()).into_iter().flatten().take(MAX_SESSION_TABS).enumerate() {
@@ -1507,6 +1582,9 @@ fn shortcut_for(key: &Key, ctrl: bool, shift: bool, alt: bool, typing: bool) -> 
                 "t" if shift => Some(Shortcut::ReopenClosedTab),
                 "t" => Some(Shortcut::NewTab),
                 "n" if shift => Some(Shortcut::NewTemporaryTab),
+                "n" => Some(Shortcut::Command(crate::commands::CommandId::NewWindow)),
+                // Ctrl+Shift+\ (Safari's Cmd+Shift+\): every tab.
+                "\\" | "|" if shift => Some(Shortcut::Command(crate::commands::CommandId::ShowAllTabs)),
                 "f" if !shift => Some(Shortcut::Find),
                 "p" if !shift => Some(Shortcut::Palette),
                 "p" => Some(Shortcut::Command(crate::commands::CommandId::Print)),
@@ -2063,16 +2141,44 @@ fn inset(r: Rect, by: f32) -> Rect {
 // ---------------------------------------------------------------------------
 
 impl Browser {
-    pub fn new(proxy: EventLoopProxy<UserMessage>, fonts: Fonts, start_tabs: Vec<StartTab>) -> Self {
+    /// The browser of one window, `key` (`windows::App` makes them).
+    fn new(proxy: EventLoopProxy<UserMessage>, fonts: Fonts, start_tabs: Vec<StartTab>, shared: Rc<RefCell<windows::Shared>>, key: u64) -> Self {
+        let (first_tab, chrome_keys, web_epoch) = {
+            let mut sh = shared.borrow_mut();
+            (sh.alloc_tab_id(), sh.chrome_keys.clone(), sh.web_epoch.clone())
+        };
+        let mut feat = features::Features::new();
+        // Automation job ids carry the window key, like load generations.
+        feat.next_job = (key << windows::KEY_SHIFT) + 1;
         Browser {
             gfx: None,
+            shared,
+            win_key: key,
+            win_name: None,
+            app_requests: Vec::new(),
+            quit_app: false,
+            moved_out: false,
+            is_last_active: true,
+            overview: overview::Overview::default(),
+            thumb_tex: HashMap::new(),
+            thumb_due: Vec::new(),
+            hover: hover::HoverTimer::default(),
+            #[cfg(target_os = "linux")]
+            card: None,
+            hover_anchor: None,
+            #[cfg(debug_assertions)]
+            hover_force: None,
+            strip_chips: Vec::new(),
+            strip_bottom: 0.0,
+            strip_drag: None,
+            rename: None,
             fonts,
             proxy,
-            generation: Arc::new(AtomicU64::new(0)),
-            web_epoch: Arc::new(AtomicU64::new(0)),
+            generation: Arc::new(AtomicU64::new(key << windows::KEY_SHIFT)),
+            web_epoch,
             last_popup: None,
             cert_error_hosts: HashSet::new(),
-            tabs: vec![TabState::default()],
+            tabs: vec![TabState { id: first_tab, ..TabState::default() }],
             active: 0,
             history: Vec::new(),
             index: 0,
@@ -2081,13 +2187,9 @@ impl Browser {
             start_tabs,
             webview: None,
             wry_ok: false,
-            contexts: HashMap::new(),
-            tab_id: 1,
+            tab_id: first_tab,
             container: None,
-            next_tab_id: 2,
-            closed_tabs: Vec::new(),
             last_suspend_check: Instant::now(),
-            saved_session: String::new(),
             drawer: None,
             containers_panel: crate::containers::ContainersPanel::new(),
             find: None,
@@ -2095,7 +2197,7 @@ impl Browser {
             snapshot_pending: false,
             extra_page_scripts: Vec::new(),
             gpu_chrome: false,
-            chrome_keys: Rc::new(std::cell::Cell::new(false)),
+            chrome_keys,
             pending_egui_events: Vec::new(),
             servo_frame: None,
             servo_buttons: Vec::new(),
@@ -2129,8 +2231,6 @@ impl Browser {
             maximized: false,
             window_fullscreen: false,
             decorations: None,
-            #[cfg(debug_assertions)]
-            window_script: Vec::new(),
             system_dark: true,
             web_expect: false,
             web_leaving: String::new(),
@@ -2149,7 +2249,7 @@ impl Browser {
             egui_popup_open: false,
             popup_snapshot: None,
             fullscreen_restore: false,
-            feat: features::Features::new(),
+            feat,
             groups: crate::tab_groups::TabGroups::default(),
             edit_group: None,
             split: None,
@@ -2391,8 +2491,11 @@ impl Browser {
 
     fn update_window_title(&self) {
         if let Some(g) = &self.gfx {
-            g.window
-                .set_title(&format!("{} - BrowseCraft", self.live_title()));
+            let title = match &self.win_name {
+                Some(name) => format!("{} \u{2014} {} - BrowseCraft", name, self.live_title()),
+                None => format!("{} - BrowseCraft", self.live_title()),
+            };
+            g.window.set_title(&title);
         }
     }
 
@@ -2402,9 +2505,7 @@ impl Browser {
     }
 
     fn alloc_tab_id(&mut self) -> u64 {
-        let id = self.next_tab_id;
-        self.next_tab_id += 1;
-        id
+        self.shared.borrow_mut().alloc_tab_id()
     }
 
     /// The container of tab `i`.
@@ -2441,6 +2542,14 @@ impl Browser {
             self.unload_webview();
             self.servo_frame = None;
         } else if let Some(wv) = self.webview.take() {
+            // A picture of the page as the user leaves it (the overview,
+            // the hover cards).
+            #[cfg(target_os = "linux")]
+            if self.web_visible
+                && let WebPane::Wry(view) = &wv
+            {
+                request_thumbnail_gtk(view, self.proxy.clone(), self.tab_id);
+            }
             // Each tab keeps its own web view, hidden, with its page alive.
             // One of a split view stays up: it may become the other pane
             // (`sync_split_peer` hides it otherwise).
@@ -2668,20 +2777,22 @@ impl Browser {
         if temporary || state.history.is_empty() {
             return;
         }
-        self.closed_tabs.push(ClosedTab {
+        let mut sh = self.shared.borrow_mut();
+        sh.closed_tabs.push(ClosedTab {
             history: state.history,
             index: state.index,
             title: state.title,
             container: state.container,
         });
-        let excess = self.closed_tabs.len().saturating_sub(MAX_CLOSED_TABS);
-        self.closed_tabs.drain(..excess);
+        let excess = sh.closed_tabs.len().saturating_sub(MAX_CLOSED_TABS);
+        sh.closed_tabs.drain(..excess);
     }
 
     /// Ctrl+Shift+T: reopens the most recently closed tab, with its history,
     /// in its container.
     fn reopen_closed_tab(&mut self) {
-        let Some(closed) = self.closed_tabs.pop() else {
+        let popped = self.shared.borrow_mut().closed_tabs.pop();
+        let Some(closed) = popped else {
             self.set_notice("No recently closed tabs");
             return;
         };
@@ -2702,15 +2813,9 @@ impl Browser {
     /// Drops the web data stores no tab uses any more. A temporary
     /// container ends with its last tab: its folder is deleted.
     fn release_unused_contexts(&mut self) {
-        let mut used: HashSet<String> = self.tabs.iter().filter_map(|t| t.container.clone()).collect();
-        if let Some(c) = &self.container {
-            used.insert(c.clone());
-        }
-        self.contexts.retain(|key, _| key.is_empty() || used.contains(key));
-        for temp in crate::containers::temporary() {
-            if !used.contains(&temp.id) {
-                crate::containers::end_temporary(&temp.id);
-            }
+        // Other windows may use them: the application decides.
+        if !self.app_requests.contains(&windows::AppRequest::ReleaseContexts) {
+            self.app_requests.push(windows::AppRequest::ReleaseContexts);
         }
     }
 
@@ -2825,7 +2930,7 @@ impl Browser {
                 while let Some(i) = (0..self.tabs.len()).rev().find(|&i| in_it(self, i)) {
                     self.close_tab(i);
                 }
-                self.closed_tabs.retain(|t| t.container.as_deref() != Some(id.as_str()));
+                self.shared.borrow_mut().closed_tabs.retain(|t| t.container.as_deref() != Some(id.as_str()));
                 self.release_unused_contexts();
                 match containers::remove_data(&id) {
                     Ok(()) => self.set_notice("Container deleted with its cookies and site data"),
@@ -2978,6 +3083,8 @@ impl Browser {
                     }
                 }
                 TabMessage::Snapshot { w, h, rgba } => self.show_snapshot(w, h, rgba),
+                // Kept by the application (`windows.rs`).
+                TabMessage::Thumbnail { .. } => {}
                 TabMessage::Relayout => {
                     self.web_bounds = None;
                     self.sync_webview();
@@ -2989,6 +3096,9 @@ impl Browser {
         let Some(i) = self.tabs.iter().position(|t| t.id == id) else {
             return; // a closed tab
         };
+        if matches!(&message, TabMessage::Load(url) if !url.is_empty() && url != "about:blank") {
+            self.schedule_thumbnail(id);
+        }
         match message {
             TabMessage::Favicon { w, h, rgba } => self.set_favicon(id, w, h, rgba),
             TabMessage::Snapshot { w, h, rgba } => self.show_peer_snapshot(id, w, h, rgba),
@@ -3000,8 +3110,11 @@ impl Browser {
     fn set_favicon(&mut self, id: u64, w: usize, h: usize, rgba: Vec<u8>) {
         if w == 0 || h == 0 || rgba.len() != w * h * 4 {
             self.favicons.remove(&id);
+            self.shared.borrow_mut().favicons.remove(&id);
             return;
         }
+        // Other windows draw it in the overview (and after a move).
+        self.shared.borrow_mut().favicons.insert(id, (w, h, Arc::new(rgba.clone())));
         if let Some(egui) = &self.egui {
             let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
             let texture = egui.ctx().load_texture(format!("favicon-{id}"), image, egui::TextureOptions::LINEAR);
@@ -3027,9 +3140,10 @@ impl Browser {
 
     // ---- session ----
 
-    /// The open tabs as the session file stores them. Temporary containers
-    /// are left out (their data is gone once the browser quits).
-    fn session_json(&self) -> String {
+    /// This window as the session file stores it: its tabs, groups,
+    /// split view, name and place on the screen. Temporary containers are
+    /// left out (their data is gone once the browser quits).
+    fn session_value(&self) -> serde_json::Value {
         let mut tabs = Vec::new();
         let mut active = 0;
         // Tab id -> position in the file, for the split view.
@@ -3063,44 +3177,33 @@ impl Browser {
         {
             json["split"] = serde_json::json!({ "left": l, "right": r, "ratio": s.ratio });
         }
-        json.to_string()
-    }
-
-    /// Writes the session file when it changed (or deletes it when tabs are
-    /// not to be restored).
-    fn save_session(&mut self) {
-        let Ok(path) = crate::storage::config_file(SESSION_FILE) else {
-            return;
-        };
-        if !flags::get().restore_tabs {
-            if !self.saved_session.is_empty() || path.exists() {
-                let _ = std::fs::remove_file(&path);
-                self.saved_session.clear();
+        if let Some(name) = &self.win_name {
+            json["name"] = serde_json::json!(name);
+        }
+        if let Some(g) = &self.gfx {
+            let size = g.window.inner_size();
+            if let Ok(pos) = g.window.outer_position() {
+                json["bounds"] = serde_json::json!({ "x": pos.x, "y": pos.y, "w": size.width, "h": size.height });
             }
-            return;
+            if self.maximized {
+                json["maximized"] = serde_json::json!(true);
+            }
         }
-        let json = self.session_json();
-        if json != self.saved_session && crate::storage::write_private(&path, json.as_bytes()).is_ok() {
-            self.saved_session = json;
-        }
+        json
     }
 
-    /// Restores the last session's tabs. Only the active one loads now; the
-    /// others load when first shown. Returns false when there was nothing.
-    fn restore_session(&mut self) -> bool {
-        let Ok(path) = crate::storage::config_file(SESSION_FILE) else {
-            return false;
-        };
-        let Ok(text) = crate::storage::read_text_limited(&path, crate::storage::MAX_SETTINGS_FILE) else {
-            return false;
-        };
-        let (tabs, active) = parse_session(&text);
+    /// Restores a session window's tabs into this window. Only the active
+    /// one loads now; the others load when first shown. Returns false when
+    /// there was nothing.
+    fn restore_window(&mut self, window: &serde_json::Value) -> bool {
+        let (tabs, active) = parse_session(window);
         if tabs.is_empty() {
             return false;
         }
-        let layout = parse_session_layout(&text);
+        let layout = parse_session_layout(window);
         let mut memberships = Vec::with_capacity(tabs.len());
         let mut raw_ids: HashMap<usize, u64> = HashMap::new();
+        // The placeholder tab this window started with is replaced.
         self.tabs = tabs
             .into_iter()
             .map(|t| {
@@ -3116,7 +3219,6 @@ impl Browser {
                 }
             })
             .collect();
-        self.saved_session = text;
         let active = active.min(self.tabs.len() - 1);
         let active_id = self.tabs[active].id;
         // Groups keep their tabs together: the order may change.
@@ -3141,11 +3243,15 @@ impl Browser {
         true
     }
 
-    /// Opens the tabs asked for at start-up, the restored session, or the
-    /// home page.
-    fn open_start_tabs(&mut self) {
+    /// Opens the tabs asked for at start-up, the restored session window
+    /// (`restore`), or the home page.
+    fn open_start_tabs(&mut self, restore: Option<&serde_json::Value>) {
         let start = std::mem::take(&mut self.start_tabs);
-        if start.is_empty() && flags::get().restore_tabs && self.restore_session() {
+        if start.is_empty()
+            && flags::get().restore_tabs
+            && let Some(window) = restore
+            && self.restore_window(window)
+        {
             return;
         }
         let start = if start.is_empty() {
@@ -3654,6 +3760,7 @@ impl Browser {
             self.address.set(&url);
         }
         history::record(&url, &self.title);
+        self.schedule_thumbnail(self.tab_id);
     }
 
     fn web_titled(&mut self, title: String) {
@@ -3738,19 +3845,6 @@ impl Browser {
     /// The data store for `container`'s tabs (`None`: the default profile),
     /// created on first use. `None` when the platform's default store is
     /// used instead (Windows' default profile, macOS).
-    fn web_context(&mut self, container: Option<&str>) -> Result<Option<&mut wry::WebContext>, String> {
-        let key = container.unwrap_or("").to_string();
-        if !self.contexts.contains_key(&key) {
-            match new_web_context(container)? {
-                Some(ctx) => {
-                    self.contexts.insert(key.clone(), ctx);
-                }
-                None => return Ok(None),
-            }
-        }
-        Ok(self.contexts.get_mut(&key).map(|c| &mut c.context))
-    }
-
     /// Creates the web view of tab `tab`, in `container`'s data store,
     /// hidden. Its events carry the tab id.
     fn create_webview(&mut self, window: &Window, tab: u64, container: Option<&str>) -> Option<WebPane> {
@@ -3786,7 +3880,11 @@ impl Browser {
         ];
         scripts.extend(self.extra_page_scripts.iter().map(|s| (s.clone(), true)));
         scripts.extend(self.feature_page_scripts());
-        let context = match self.web_context(container) {
+        // The data stores are shared by every window (a tab moved to another
+        // window keeps its store).
+        let shared = self.shared.clone();
+        let mut shared = shared.borrow_mut();
+        let context = match shared.web_context(container) {
             Ok(context) => context,
             Err(e) => {
                 eprintln!("browsecraft: {e}");
@@ -3914,7 +4012,7 @@ impl Browser {
                     attach_webview_shortcuts_gtk(&wv, self.proxy.clone(), self.chrome_keys.clone(), tab);
                     attach_webview_extras_gtk(&wv, self.proxy.clone(), tab);
                     let key = container.unwrap_or("");
-                    if let Some(dir) = self.contexts.get_mut(key).and_then(|c| c.favicons.take()) {
+                    if let Some(dir) = shared.contexts.get_mut(key).and_then(|c| c.favicons.take()) {
                         use webkit2gtk::{WebContextExt as _, WebViewExt as _};
                         use wry::WebViewExtUnix as _;
                         if let Some(context) = wv.webview().context() {
@@ -4059,8 +4157,9 @@ impl Browser {
             self.popup_snapshot = None;
             self.snapshot_pending = false;
         }
-        self.sync_split_peer(self.egui_popup_open && !self.cheatsheet);
-        let visible = self.web_page && !self.cheatsheet && !(self.egui_popup_open && native);
+        self.sync_split_peer(self.egui_popup_open && !self.cheatsheet && !self.overview.open);
+        // The overview covers the window: no page, no snapshot needed.
+        let visible = self.web_page && !self.cheatsheet && !(self.egui_popup_open && native) && !self.overview.open;
         let r = self.webview_rect();
         let bounds = (
             r.x.round() as i32,
@@ -4106,9 +4205,22 @@ impl Browser {
 
     /// Carries out what the user did on the browser's own window frame.
     fn window_op(&mut self, op: WindowOp) {
-        if op == WindowOp::Close {
-            self.quit = true;
-            return;
+        match op {
+            // Closes this window (the application ends with the last).
+            WindowOp::Close => {
+                self.quit = true;
+                return;
+            }
+            WindowOp::NewWindow => {
+                self.app_requests.push(windows::AppRequest::NewWindow);
+                return;
+            }
+            WindowOp::NameWindow => {
+                self.rename = Some(self.win_name.clone().unwrap_or_default());
+                self.request_redraw();
+                return;
+            }
+            _ => {}
         }
         let Some(g) = &self.gfx else {
             return;
@@ -4128,55 +4240,6 @@ impl Browser {
             self.drag = Drag::None;
         }
         self.request_redraw();
-    }
-
-    /// Runs the debug test hook's window operations that are due.
-    #[cfg(debug_assertions)]
-    fn run_window_script(&mut self, now: Instant) -> Option<Instant> {
-        let due: Vec<&'static str> = self.window_script.iter().filter(|(at, _)| *at <= now).map(|(_, op)| *op).collect();
-        self.window_script.retain(|(at, _)| *at > now);
-        for op in due {
-            eprintln!("browsecraft: window test hook: {op}");
-            match op {
-                "maximize" if !self.maximized => self.window_op(WindowOp::ToggleMaximize),
-                "restore" if self.maximized => self.window_op(WindowOp::ToggleMaximize),
-                "minimize" => self.window_op(WindowOp::Minimize),
-                "unminimize" => {
-                    if let Some(g) = &self.gfx {
-                        g.window.set_minimized(false);
-                    }
-                }
-                "fullscreen" => self.toggle_window_fullscreen(),
-                "system-titlebar" | "custom-titlebar" => {
-                    if let Err(error) = flags::set_system_titlebar(op == "system-titlebar") {
-                        self.set_notice(error);
-                    }
-                    self.request_redraw();
-                }
-                "close" => self.window_op(WindowOp::Close),
-                // Screenshots of the overlays, which otherwise need input.
-                "palette" => self.toggle_palette(),
-                "themes" => self.run_command(crate::commands::CommandId::Theme),
-                "authenticator" => self.toggle_drawer(Drawer::Authenticator),
-                "containers" => self.toggle_drawer(Drawer::Containers),
-                "theme-next" => {
-                    let ids = flags::Theme::ALL;
-                    let at = ids.iter().position(|t| *t == flags::get().theme).unwrap_or(0);
-                    self.set_theme(ids[(at + 1) % ids.len()]);
-                }
-                _ => {}
-            }
-            if let Some(g) = &self.gfx {
-                eprintln!(
-                    "browsecraft: window test hook: maximized={} minimized={:?} decorated={} size={:?}",
-                    g.window.is_maximized(),
-                    g.window.is_minimized(),
-                    g.window.is_decorated(),
-                    g.window.inner_size()
-                );
-            }
-        }
-        self.window_script.iter().map(|(at, _)| *at).min()
     }
 
     /// Pushes the effective theme to the window and the web view.
@@ -4687,6 +4750,9 @@ impl Browser {
         let ctrl = mods.control_key() || (cfg!(target_os = "macos") && mods.super_key());
         let (shift, alt) = (mods.shift_key(), mods.alt_key());
         let base = event.key_without_modifiers();
+        if self.overview.open && self.overview_key(&base, ctrl, shift, alt) {
+            return;
+        }
         let egui_typing = self
             .egui
             .as_ref()
@@ -4734,7 +4800,7 @@ impl Browser {
             Shortcut::BookmarksBar => self.toggle_bookmarks_bar(),
             Shortcut::BookmarksPage => self.load(Request::Get("browsecraft://bookmarks".into()), true),
             Shortcut::Fullscreen => self.toggle_window_fullscreen(),
-            Shortcut::Quit => self.quit = true,
+            Shortcut::Quit => self.quit_app = true,
             Shortcut::Zoom(change) => self.zoom(change),
             Shortcut::DevTools => self.open_devtools(),
             Shortcut::SelectTab(n) => {
@@ -5806,6 +5872,11 @@ impl Browser {
         let maximized = self.maximized;
         let edge = if titlebar && !maximized { titlebar::RESIZE_EDGE } else { 0.0 };
         let mut win_ops: Vec<WindowOp> = Vec::new();
+        // The tab overview covers the whole window (the web views hide).
+        if self.overview.open {
+            self.overview_frame(ui, &c, titlebar, maximized, edge);
+            return;
+        }
         let ppp = ctx.pixels_per_point();
         let mut actions: Vec<Action> = Vec::new();
         let (can_back, can_forward) = (self.button_enabled(Button::Back), self.button_enabled(Button::Forward));
@@ -5853,6 +5924,7 @@ impl Browser {
                     group: self.tab_group_mark(i, &c),
                     split: split_pair.and_then(|s| s.side_of(id)),
                     can_split: i != self.active && self.gpu_chrome,
+                    tooltip: !flags::get().hover_cards,
                 }
             })
             .collect();
@@ -5874,6 +5946,9 @@ impl Browser {
         let active_container = tab_meta.get(self.active).and_then(|m| m.1.clone());
         let position = self.tabs_position();
         let mut tab_events: Vec<(usize, egui_chrome::TabRow)> = Vec::new();
+        // The other windows, for "Move to window".
+        let other_windows: Vec<(u64, String)> =
+            self.shared.borrow().windows.iter().filter(|(k, _)| *k != self.win_key).cloned().collect();
 
         // Tab strip (tabs on top), above the toolbar. With the browser's own
         // frame it is the title bar: the window buttons sit at its right end
@@ -5890,6 +5965,11 @@ impl Browser {
                     if titlebar {
                         titlebar::drag_area(ui, full, &c, maximized, &mut win_ops);
                         strip_rect.max.x -= titlebar::BUTTONS_W + titlebar::DRAG_GAP;
+                        // The window's name, quietly, before the buttons.
+                        if let Some(name) = &self.win_name {
+                            let w = windows::window_name_label(ui, &c, name, full.max.x - titlebar::BUTTONS_W - 8.0, full.center().y);
+                            strip_rect.max.x -= w + 8.0;
+                        }
                         let controls = full.with_min_x(full.max.x - titlebar::BUTTONS_W);
                         let mut ctl = ui.new_child(
                             egui::UiBuilder::new()
@@ -5905,7 +5985,13 @@ impl Browser {
                             .layout(egui::Layout::left_to_right(egui::Align::Center)),
                     );
                     let ui = &mut strip_ui;
-                    let strip = egui_chrome::tab_strip(ui, &c, &tab_infos, &strip_items, &group_infos, &containers_list);
+                    let marker = self.strip_drag_marker();
+                    let strip = egui_chrome::tab_strip(ui, &c, &tab_infos, &strip_items, &group_infos, &containers_list, &other_windows, marker);
+                    self.strip_chips = strip.chips.iter().map(|(i, r)| (*i, r.min.x, r.max.x)).collect();
+                    self.strip_bottom = full.max.y;
+                    if strip.overview {
+                        actions.push(Action::ShowAllTabs);
+                    }
                     tab_events.extend(strip.tabs);
                     group_events.extend(strip.groups);
                     if let Some(pick) = strip.new_tab {
@@ -5959,6 +6045,10 @@ impl Browser {
                                 titlebar::window_buttons(ui, &c, TOOLBAR_HEIGHT, maximized, edge, &mut win_ops);
                                 ui.spacing_mut().item_spacing.x = spacing;
                                 ui.add_space(4.0);
+                                if let Some(name) = &self.win_name {
+                                    ui.label(egui::RichText::new(display_text(name, 24)).size(12.0).color(c.muted))
+                                        .on_hover_text("This window's name (right-click the title bar to change it)");
+                                }
                             } else {
                                 ui.add_space(8.0);
                             }
@@ -6159,7 +6249,7 @@ impl Browser {
                                     }
                                     crate::tab_groups::StripItem::Tab(i) => {
                                         if let Some(info) = tab_infos.get(i) {
-                                            tab_events.push((i, egui_chrome::tab_row(ui, &c, info, &containers_list, &group_infos)));
+                                            tab_events.push((i, egui_chrome::tab_row(ui, &c, info, &containers_list, &group_infos, &other_windows)));
                                         }
                                     }
                                 }
@@ -6189,7 +6279,34 @@ impl Browser {
         for (id, event) in group_events {
             actions.push(Action::Group(id, event));
         }
+        // The tab under the pointer (hover card) and a chip drag starting.
+        self.hover_anchor = None;
+        for (i, row) in &tab_events {
+            if row.hovered
+                && let Some(rect) = row.rect
+            {
+                self.hover_anchor = Some((self.tab_id_at(*i), rect));
+            }
+            if row.drag_started {
+                self.strip_drag = Some(self.tab_id_at(*i));
+                self.hover.cancel();
+            }
+        }
+        #[cfg(debug_assertions)]
+        if let Some(i) = self.hover_force.filter(|i| *i < self.tabs.len()) {
+            let rect = tab_events.iter().find(|(j, _)| *j == i).and_then(|(_, r)| r.rect);
+            if let Some(rect) = rect {
+                self.hover_anchor = Some((self.tab_id_at(i), rect));
+            }
+        }
         for (i, row) in tab_events {
+            if row.move_to_new_window {
+                actions.push(Action::MoveToNewWindow(i));
+                continue;
+            } else if let Some(key) = row.move_to_window {
+                actions.push(Action::MoveToWindow(i, key));
+                continue;
+            }
             if row.new_group {
                 actions.push(Action::GroupNew(i));
             } else if let Some(g) = row.add_to_group {
@@ -6256,7 +6373,10 @@ impl Browser {
         if titlebar {
             titlebar::window_edges(&ctx, &c, edge, &mut win_ops);
         }
-        let popup_now = egui::Popup::is_any_open(&ctx) || self.feat.palette.is_open();
+        if let Some(name) = self.rename_dialog(&ctx, &c) {
+            actions.push(Action::NameWindow(name));
+        }
+        let popup_now = egui::Popup::is_any_open(&ctx) || self.feat.palette.is_open() || self.rename.is_some();
         if popup_now != self.egui_popup_open {
             self.egui_popup_open = popup_now;
             // Show or hide the web view, and draw the snapshot, on the next frame.
@@ -6412,8 +6532,25 @@ impl Browser {
                         self.switch_tab(i);
                     }
                 }
+                Action::MoveToNewWindow(i) => {
+                    let tab = self.tab_id_at(i);
+                    self.app_requests.push(windows::AppRequest::MoveTab { tab, to: windows::MoveTarget::NewWindow(None) });
+                }
+                Action::MoveToWindow(i, key) => {
+                    let tab = self.tab_id_at(i);
+                    self.app_requests.push(windows::AppRequest::MoveTab { tab, to: windows::MoveTarget::Window(key, None) });
+                }
+                Action::ShowAllTabs => self.toggle_overview(),
+                Action::NameWindow(name) => self.set_window_name(&name),
             }
         }
+        // The hover card follows the pointer over the tabs.
+        let sidebar = match position {
+            TabsPosition::Left => Some(true),
+            TabsPosition::Right => Some(false),
+            _ => None,
+        };
+        self.update_hover_card(ppp, sidebar);
         if changed {
             self.request_redraw();
         }
@@ -6487,10 +6624,13 @@ impl Browser {
     }
 }
 
-impl ApplicationHandler<UserMessage> for Browser {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+impl Browser {
+    /// Creates this browser's window (with `setup`'s place, size and name)
+    /// and its chrome. The first window also finds out whether the system
+    /// web view works. Returns false when no window could be made.
+    fn open_window(&mut self, event_loop: &ActiveEventLoop, setup: &windows::WindowSetup) -> bool {
         if self.gfx.is_some() {
-            return;
+            return true;
         }
         let window_icon = image::load_from_memory(icons::LOGO_PNG)
             .map_err(|e| eprintln!("browsecraft: could not decode the window logo: {e}"))
@@ -6502,14 +6642,21 @@ impl ApplicationHandler<UserMessage> for Browser {
                 let (width, height) = rgba.dimensions();
                 winit::window::Icon::from_rgba(rgba.into_raw(), width, height).ok()
             });
-        let attrs = Window::default_attributes()
+        let mut attrs = Window::default_attributes()
             .with_title("BrowseCraft")
             .with_window_icon(window_icon)
             .with_inner_size(LogicalSize::new(1280.0, 800.0))
             .with_min_inner_size(LogicalSize::new(480.0, 320.0))
+            .with_maximized(setup.maximized)
             // The browser's own title bar unless the system's is asked for
             // (the software chrome always has the system's).
             .with_decorations(flags::get().system_titlebar || flags::get().chrome == Chrome::Engine);
+        if let Some((w, h)) = setup.size {
+            attrs = attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h));
+        }
+        if let Some((x, y)) = setup.position {
+            attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(x, y));
+        }
         // The desktop entry's StartupWMClass, so the dock groups the window
         // under the launcher icon.
         #[cfg(target_os = "linux")]
@@ -6521,19 +6668,25 @@ impl ApplicationHandler<UserMessage> for Browser {
             Ok(w) => Arc::new(w),
             Err(e) => {
                 eprintln!("browsecraft: could not create a window: {e}");
-                event_loop.exit();
-                return;
+                return false;
             }
         };
-        // The first tab's web view also tells whether the system web view
-        // works here; every tab then gets its own.
-        self.webview = self.create_webview(&window, self.tab_id, None);
-        self.wry_ok = self.webview.is_some();
-        if self.webview.is_none() {
-            // No system web view (Linux): Servo, if this build has it.
-            let size = window.inner_size();
-            self.webview = ServoPane::start(self.proxy.clone(), self.web_epoch.clone(), size.width, size.height)
-                .map(WebPane::Servo);
+        let known = self.shared.borrow().wry_ok;
+        match known {
+            // The first tab's web view also tells whether the system web
+            // view works here; every tab then gets its own.
+            None => {
+                self.webview = self.create_webview(&window, self.tab_id, None);
+                self.wry_ok = self.webview.is_some();
+                self.shared.borrow_mut().wry_ok = Some(self.wry_ok);
+                if self.webview.is_none() {
+                    // No system web view (Linux): Servo, if this build has it.
+                    let size = window.inner_size();
+                    self.webview = ServoPane::start(self.proxy.clone(), self.web_epoch.clone(), size.width, size.height)
+                        .map(WebPane::Servo);
+                }
+            }
+            Some(ok) => self.wry_ok = ok,
         }
 
         // Chrome: egui on the GPU when asked for and available, otherwise the
@@ -6551,6 +6704,11 @@ impl ApplicationHandler<UserMessage> for Browser {
             surface = Surface::new(&ctx, window.clone()).ok();
             context = Some(ctx);
         }
+        // The hover card: a child window above the web views (hover.rs).
+        #[cfg(target_os = "linux")]
+        if self.gpu_chrome {
+            self.card = hover::CardWindow::new(event_loop, &window);
+        }
         self.gfx = Some(Gfx {
             window: window.clone(),
             surface,
@@ -6558,25 +6716,21 @@ impl ApplicationHandler<UserMessage> for Browser {
         });
         self.system_dark = system_prefers_dark(Some(&window));
         self.sync_decorations();
-        #[cfg(debug_assertions)]
-        {
-            let start = Instant::now();
-            self.window_script = titlebar::test_script().into_iter().map(|(after, op)| (start + after, op)).collect();
-        }
         self.apply_theme(self.theme());
-        self.open_start_tabs();
-        // The control API, when enabled in settings or with --automation.
-        self.start_automation();
+        self.update_window_title();
         window.request_redraw();
+        true
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn on_window_event(&mut self, event_loop: &ActiveEventLoop, event: WindowEvent) {
+        let _ = event_loop;
         let consumed = match (&mut self.egui, &self.gfx) {
             (Some(egui), Some(g)) => egui.on_window_event(&g.window, &event),
             _ => false,
         };
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            // The window's close button (system title bar): this window.
+            WindowEvent::CloseRequested => self.quit = true,
             WindowEvent::RedrawRequested => self.render(),
             WindowEvent::Resized(size) => {
                 if let Some(egui) = &mut self.egui {
@@ -6604,6 +6758,7 @@ impl ApplicationHandler<UserMessage> for Browser {
                 }
                 if !focused {
                     self.release_servo_buttons();
+                    self.hide_hover_card();
                 }
                 // Focus changes must reach Servo even if an unfocused window
                 // is not being repainted by the window manager.
@@ -6613,7 +6768,7 @@ impl ApplicationHandler<UserMessage> for Browser {
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
             _ if self.servo_input(&event, consumed) => self.request_redraw(),
             WindowEvent::KeyboardInput { event, .. } => {
-                        if !consumed || self.is_shortcut(&event) {
+                if !consumed || self.is_shortcut(&event) {
                     self.key(&event);
                 }
                 self.request_redraw();
@@ -6621,11 +6776,15 @@ impl ApplicationHandler<UserMessage> for Browser {
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse = (position.x as f32, position.y as f32);
                 self.mouse_moved();
+                if self.strip_drag.is_some() {
+                    self.request_redraw();
+                }
             }
             WindowEvent::CursorLeft { .. } => {
                 self.hover_button = None;
                 self.hover_tab = None;
                 self.hover_link = None;
+                self.hover_anchor = None;
                 self.request_redraw();
             }
             WindowEvent::MouseInput { state, button, .. } => match state {
@@ -6635,10 +6794,13 @@ impl ApplicationHandler<UserMessage> for Browser {
                     if !(consumed && self.page_rect().contains(self.mouse.0, self.mouse.1)) {
                         self.mouse_down(button);
                     }
+                    self.hover.cancel();
+                    self.hide_hover_card();
                 }
                 ElementState::Released => {
                     if button == MouseButton::Left {
                         self.drag = Drag::None;
+                        self.end_strip_drag();
                     }
                 }
             },
@@ -6649,39 +6811,13 @@ impl ApplicationHandler<UserMessage> for Browser {
             }
             _ => {}
         }
-        if self.quit {
-            event_loop.exit();
-        }
     }
 
-    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
-        self.save_session();
-    }
-
-    fn user_event(&mut self, event_loop: &ActiveEventLoop, message: UserMessage) {
-        self.handle_message(message);
-        if self.quit {
-            event_loop.exit();
-        }
-    }
-
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if self.quit {
-            event_loop.exit();
-            return;
-        }
-        let now = Instant::now();
+    /// Timers: notices, the feature modules, pictures to take, the hover
+    /// card's delay, the loading bar, tab suspension. Returns when to wake.
+    fn tick(&mut self, now: Instant) -> Option<Instant> {
         let mut wake: Option<Instant> = None;
         let mut sooner = |t: Instant| wake = Some(wake.map_or(t, |w| w.min(t)));
-        // WebKitGTK talks to its web processes through the GLib main
-        // context, which winit does not poll: service it here.
-        #[cfg(target_os = "linux")]
-        if self.wry_ok || self.webview.is_some() {
-            while gtk::events_pending() {
-                gtk::main_iteration_do(false);
-            }
-            sooner(now + Duration::from_millis(8));
-        }
         if let Some((_, at)) = &self.notice {
             let until = *at + NOTICE_LIFETIME;
             if now >= until {
@@ -6694,9 +6830,15 @@ impl ApplicationHandler<UserMessage> for Browser {
         if let Some(t) = self.tick_features() {
             sooner(t);
         }
-        #[cfg(debug_assertions)]
-        if let Some(t) = self.run_window_script(now) {
+        if let Some(t) = self.take_due_thumbnails(now) {
             sooner(t);
+        }
+        if let Some(t) = self.hover.due(hover_delay()) {
+            if t <= now {
+                self.request_redraw();
+            } else {
+                sooner(t);
+            }
         }
         if self.loading {
             // Animate the loading bar.
@@ -6706,14 +6848,96 @@ impl ApplicationHandler<UserMessage> for Browser {
         if now.duration_since(self.last_suspend_check) >= SUSPEND_CHECK_INTERVAL {
             self.last_suspend_check = now;
             self.enforce_tab_limits();
-            self.save_session();
         }
         sooner(self.last_suspend_check + SUSPEND_CHECK_INTERVAL);
-        event_loop.set_control_flow(match wake {
-            Some(t) => ControlFlow::WaitUntil(t),
-            None => ControlFlow::Wait,
-        });
+        wake
     }
+
+    /// Runs one step of the debug test hook (`BROWSECRAFT_WINDOW_SCRIPT`).
+    #[cfg(debug_assertions)]
+    fn run_script_op(&mut self, op: &str) {
+        match op {
+            "maximize" if !self.maximized => self.window_op(WindowOp::ToggleMaximize),
+            "restore" if self.maximized => self.window_op(WindowOp::ToggleMaximize),
+            "minimize" => self.window_op(WindowOp::Minimize),
+            "unminimize" => {
+                if let Some(g) = &self.gfx {
+                    g.window.set_minimized(false);
+                }
+            }
+            "fullscreen" => self.toggle_window_fullscreen(),
+            "system-titlebar" | "custom-titlebar" => {
+                if let Err(error) = flags::set_system_titlebar(op == "system-titlebar") {
+                    self.set_notice(error);
+                }
+                self.request_redraw();
+            }
+            "close" => self.window_op(WindowOp::Close),
+            // Screenshots of the overlays, which otherwise need input.
+            "palette" => self.toggle_palette(),
+            "themes" => self.run_command(crate::commands::CommandId::Theme),
+            "authenticator" => self.toggle_drawer(Drawer::Authenticator),
+            "containers" => self.toggle_drawer(Drawer::Containers),
+            "theme-next" => {
+                let ids = flags::Theme::ALL;
+                let at = ids.iter().position(|t| *t == flags::get().theme).unwrap_or(0);
+                self.set_theme(ids[(at + 1) % ids.len()]);
+            }
+            "overview" => self.toggle_overview(),
+            "overview-close" => self.overview.hide(),
+            "thumbs" => self.request_all_thumbnails(),
+            "hover-off" => self.hover_force = None,
+            "rename-dialog" => self.rename = Some(self.win_name.clone().unwrap_or_default()),
+            "tabs-top" | "tabs-left" | "tabs-right" => {
+                let mut f = flags::get();
+                f.tabs_position = match op {
+                    "tabs-left" => TabsPosition::Left,
+                    "tabs-right" => TabsPosition::Right,
+                    _ => TabsPosition::Top,
+                };
+                if let Err(e) = flags::set(f) {
+                    self.set_notice(e);
+                }
+            }
+            other => {
+                if let Some(q) = other.strip_prefix("overview-query:") {
+                    self.overview.query = q.to_string();
+                } else if let Some(n) = other.strip_prefix("overview-select:") {
+                    self.overview.selected = n.parse::<usize>().ok().map(|i| self.tab_id_at(i));
+                } else if let Some(i) = other.strip_prefix("hover:") {
+                    self.hover_force = i.parse().ok();
+                } else if let Some(name) = other.strip_prefix("name:") {
+                    self.set_window_name(name);
+                } else if let Some(url) = other.strip_prefix("open:") {
+                    self.open_in_new_tab(address::resolve(url));
+                } else if let Some(i) = other.strip_prefix("switch:").and_then(|i| i.parse().ok()).filter(|i| *i < self.tabs.len()) {
+                    self.switch_tab(i);
+                } else if let Some(i) = other.strip_prefix("split:").and_then(|i| i.parse().ok()).filter(|i| *i < self.tabs.len()) {
+                    self.split_with(i);
+                } else if let Some(i) = other.strip_prefix("group:").and_then(|i| i.parse().ok()).filter(|i| *i < self.tabs.len()) {
+                    self.group_new_from_tab(i);
+                    self.edit_group = None;
+                }
+            }
+        }
+        self.request_redraw();
+        if let Some(g) = &self.gfx {
+            eprintln!(
+                "browsecraft: window test hook: maximized={} minimized={:?} decorated={} size={:?} tabs={} overview={}",
+                g.window.is_maximized(),
+                g.window.is_minimized(),
+                g.window.is_decorated(),
+                g.window.inner_size(),
+                self.tabs.len(),
+                self.overview.open
+            );
+        }
+    }
+}
+
+/// The hover card delay (browsecraft://flags).
+fn hover_delay() -> Duration {
+    Duration::from_millis(u64::from(flags::get().hover_card_delay_ms))
 }
 
 /// Whether the desktop prefers a dark theme. winit knows it on Windows and
@@ -6744,6 +6968,15 @@ pub const APP_ID: &str = "io.github.matteomicheletti.browsecraft";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The session parsers read one window entry; these read a whole file.
+    fn parse_session(text: &str) -> (Vec<SessionTab>, usize) {
+        super::parse_session(&serde_json::from_str(text).unwrap_or_default())
+    }
+
+    fn parse_session_layout(text: &str) -> SessionLayout {
+        super::parse_session_layout(&serde_json::from_str(text).unwrap_or_default())
+    }
     use crate::html;
 
     #[test]
@@ -6785,7 +7018,11 @@ mod tests {
         assert_eq!(shortcut_for(&ch("t"), true, false, false, false), Some(Shortcut::NewTab));
         assert_eq!(shortcut_for(&ch("f"), true, false, false, true), Some(Shortcut::Find));
         assert_eq!(shortcut_for(&ch("N"), true, true, false, false), Some(Shortcut::NewTemporaryTab));
-        assert_eq!(shortcut_for(&ch("n"), true, false, false, false), None);
+        assert_eq!(shortcut_for(&ch("n"), true, false, false, false), Some(Shortcut::Command(crate::commands::CommandId::NewWindow)));
+        let all = Some(Shortcut::Command(crate::commands::CommandId::ShowAllTabs));
+        assert_eq!(shortcut_for(&ch("\\"), true, true, false, false), all, "Ctrl+Shift+\\");
+        assert_eq!(shortcut_for(&ch("|"), true, true, false, false), all, "the same key as GTK reports it");
+        assert_eq!(shortcut_for(&ch("\\"), true, false, false, false), None);
         assert_eq!(shortcut_for(&ch("p"), true, false, false, false), Some(Shortcut::Palette));
         assert_eq!(shortcut_for(&Key::Named(NamedKey::F1), false, false, false, true), Some(Shortcut::Palette));
     }
