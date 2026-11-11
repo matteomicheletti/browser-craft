@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- BrowseCraft app icon. CC-BY-4.0, see assets/icon/LICENSE.md -->
+  <rect width="1024" height="1024" rx="215" fill="#4B3FD1"/>
+  <g stroke="#111" stroke-width="40" stroke-linejoin="round" stroke-linecap="round">
+    <!-- browser window -->
+    <rect x="150" y="214" width="724" height="596" rx="56" fill="#F3EAD7"/>
+    <path d="M150 342 H874" fill="none"/>
+    <!-- address pill -->
+    <rect x="396" y="252" width="420" height="52" rx="26" fill="#FFFFFF" stroke-width="28"/>
+  </g>
+  <!-- window dots -->
+  <circle cx="222" cy="278" r="22" fill="#E8553E" stroke="#111" stroke-width="16"/>
+  <circle cx="290" cy="278" r="22" fill="#F2B233" stroke="#111" stroke-width="16"/>
+  <!-- globe -->
+  <g stroke="#111" stroke-width="34" fill="none" stroke-linecap="round">
+    <circle cx="512" cy="576" r="168" fill="#FFFFFF"/>
+    <ellipse cx="512" cy="576" rx="72" ry="168"/>
+    <path d="M344 576 H680"/>
+    <path d="M370 492 Q512 528 654 492"/>
+    <path d="M370 660 Q512 624 654 660"/>
+  </g>
+  <!-- cursor -->
+  <path d="M650 650 L650 862 L700 812 L742 896 L784 876 L742 794 L812 794 Z" fill="#F3EAD7" stroke="#111" stroke-width="30" stroke-linejoin="round"/>
+</svg>
