@@ -94,13 +94,22 @@ first-class requirements:
 - Isolation tests: same origin, different containers, cookie/storage not
   shared; persistence across restarts; temporary container wiped on close.
 
-### M4: Authenticator (planned)
+### M4: Authenticator (in progress: module done, integration pending)
 
 - TOTP (RFC 6238) / HOTP (RFC 4226), configurable algorithm/digits/period;
   `otpauth://` and QR import; encrypted vault (Argon2id + XChaCha20-Poly1305
   or the existing KeePass vault's TOTP fields: decide in design note);
   lock/unlock, encrypted backup/export; toolbar button; never exposed to
   pages, plugins or the MCP server.
+- Done (`src/authenticator/`, `docs/AUTHENTICATOR.md`, 40 unit tests):
+  separate vault (decision and format in the design note), RFC vectors,
+  `otpauth://` and Google export links, QR images (rqrr), encrypted backup,
+  plain link export with confirmation, Aegis import (plain and encrypted,
+  tested on spec-built samples), auto-lock, drawer panel
+  (`AuthenticatorPanel::ui` → `AuthEvent`).
+- Open: toolbar button, drawer and palette wiring, clipboard copy/clear in
+  core, visual check in the running browser; clipboard image import;
+  tests against files exported by the real Aegis / Google apps.
 
 ### M5: Smart dark mode (module done, not wired)
 

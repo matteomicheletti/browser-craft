@@ -39,6 +39,16 @@ serde_json = "1"
 toml = "0.9"
 # Interpreter for untrusted plugin logic (feature `wasm`): pure Rust, no JIT.
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate"], optional = true }
+# Authenticator (src/authenticator): HMAC-SHA1/256/512 for HOTP/TOTP, the
+# vault's XChaCha20-Poly1305, QR decoding, and scrypt + AES-256-GCM to read
+# encrypted Aegis backups. All RustCrypto, already in the lock graph.
+chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc"] }
+hmac = "0.13.0"
+sha1 = "0.11.0"
+sha2 = "0.11.1"
+rqrr = { version = "0.11.0", default-features = false }
+aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "alloc"] }
+scrypt = { version = "0.12.0", default-features = false }
 
 # Release builds abort on panic, so production code may not unwrap or
 # expect; the few proven invariants say why in an `allow` attribute. Tests
@@ -73,3 +83,4 @@ windows = { version = "0.61", features = ["Win32_System_Com", "Win32_Security_Au
 flate2 = "1"
 # Assembles the WASM test modules from text.
 wat = "1"
+qrcode = { version = "0.14.1", default-features = false }
