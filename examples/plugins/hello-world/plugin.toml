@@ -1,0 +1,19 @@
+id = "dev.browsecraft.examples.hello-world"
+name = "Hello World"
+version = "1.0.0"
+api_version = "1.0"
+description = "Adds a small banner to example.com and a style rule. The shortest useful plugin."
+author = "BrowseCraft"
+permissions = ["page.modify"]
+
+[[content_scripts]]
+matches = ["*://example.com/*", "*://*.example.com/*"]
+js = ["hello.js"]
+css = ["hello.css"]
+run_at = "document_end"
+
+[[options]]
+key = "greeting"
+type = "string"
+label = "Greeting"
+default = "Hello from a BrowseCraft plugin"

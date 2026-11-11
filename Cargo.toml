@@ -37,6 +37,8 @@ psl = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"
+# Interpreter for untrusted plugin logic (feature `wasm`): pure Rust, no JIT.
+wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate"], optional = true }
 
 # Release builds abort on panic, so production code may not unwrap or
 # expect; the few proven invariants say why in an `allow` attribute. Tests
@@ -49,6 +51,8 @@ expect_used = "deny"
 # Experimental (issue #65): render web pages with Servo on Linux, where there
 # is no system web view. Off by default; other platforms ignore it.
 servo = ["dep:servo", "dep:rustls"]
+# Sandboxed (interpreted, pure Rust) WASM plugin modules; see docs/EXTENSIONS.md.
+wasm = ["dep:wasmi"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # `webcrypto` provides `crypto.getRandomValues()` and `crypto.subtle`, which
@@ -67,3 +71,5 @@ windows = { version = "0.61", features = ["Win32_System_Com", "Win32_Security_Au
 
 [dev-dependencies]
 flate2 = "1"
+# Assembles the WASM test modules from text.
+wat = "1"

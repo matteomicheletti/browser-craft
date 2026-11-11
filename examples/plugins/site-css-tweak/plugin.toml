@@ -1,0 +1,13 @@
+id = "dev.browsecraft.examples.site-css-tweak"
+name = "Wikipedia Reading Tweak"
+version = "1.0.0"
+api_version = "1.0"
+description = "Styles only, no script: narrower text column and larger line height on Wikipedia."
+author = "BrowseCraft"
+permissions = ["page.modify"]
+
+[[content_scripts]]
+matches = ["*://*.wikipedia.org/wiki/*"]
+exclude_matches = ["*://*.wikipedia.org/wiki/Special:*"]
+css = ["tweak.css"]
+run_at = "document_start"

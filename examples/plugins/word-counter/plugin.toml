@@ -1,0 +1,28 @@
+id = "dev.browsecraft.examples.word-counter"
+name = "Page Word Counter"
+version = "1.0.0"
+api_version = "1.0"
+description = "Counts the words on every page, shows a badge and remembers the largest page seen (bridge + storage)."
+author = "BrowseCraft"
+permissions = ["page.read", "page.modify", "storage"]
+
+[[content_scripts]]
+matches = ["http://*/*", "https://*/*"]
+exclude_matches = ["*://mail.google.com/*"]
+js = ["count.js"]
+css = ["badge.css"]
+run_at = "idle"
+
+[[options]]
+key = "badge"
+type = "bool"
+label = "Show badge on the page"
+default = true
+
+[[options]]
+key = "minimum"
+type = "number"
+label = "Only report pages with at least N words"
+default = 1
+min = 1
+max = 100000

@@ -30,6 +30,7 @@ mod paint;
 mod palette;
 mod passwords;
 mod recording;
+mod plugins;
 mod servo_pane;
 mod storage;
 mod style;

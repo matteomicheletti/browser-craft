@@ -61,17 +61,24 @@ first-class requirements:
   to password or authenticator vaults.
 - Scripting: the same API from a CLI (`browsecraft ctl …`).
 
-### M2: Extensibility and UX core (planned)
+### M2: Extensibility and UX core (in progress)
 
-- Plugin manager: manifest (`plugin.toml`: id, version, API version,
-  permissions, match patterns, scripts/styles), install/remove,
-  enable/disable, per-plugin settings, permission display.
-- **Local plugin folders**: point the browser at a directory; changes
-  reload in development mode.
-- Content scripts/styles per domain through WebKit user content manager;
-  message bridge with permission checks. WASM (wasmtime) sandbox for
-  untrusted logic; no native libraries loaded in process.
-- Partial WebExtensions compatibility evaluated, never claimed complete.
+- Plugin manager (done in `src/plugins/`, see `docs/EXTENSIONS.md`; wiring
+  into the browser window pending): manifest (`plugin.toml`: id, version,
+  API version, permissions, match patterns, scripts/styles),
+  install/remove, enable/disable, per-plugin settings, permission and API
+  display, built-in entries with an enable flag.
+- **Local plugin folders** (done): point the browser at a directory; changes
+  reload in development mode (polling, about once a second).
+- Content scripts/styles per domain through one init script; message bridge
+  with nonce, permission checks and quotas (done). WASM sandbox for untrusted
+  logic on **wasmi** (cargo feature `wasm`; wasmtime was evaluated and not
+  chosen, see EXTENSIONS.md); no native libraries loaded in process (done).
+  Open: wire into `browser.rs` (init script, IPC, events, drawer, command
+  palette entry), run the WASM feature in default builds once reviewed, one init
+  script per file for strict-CSP pages, per-permission prompts.
+- Partial WebExtensions compatibility evaluated, never claimed complete
+  (done: evaluation in EXTENSIONS.md; no converter).
 - **Dev console** (inspector) working on Linux; JS error console.
 - **F1 command palette**; **tabs on top** + bookmarks bar; full Chrome
   shortcut table (doc in `docs/usage.md`).
