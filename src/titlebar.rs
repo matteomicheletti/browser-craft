@@ -256,12 +256,20 @@ pub fn test_script() -> Vec<(std::time::Duration, &'static str)> {
         .filter_map(|step| {
             let (secs, op) = step.split_once(':')?;
             let secs: f32 = secs.trim().parse().ok()?;
-            let op = [
-                "maximize", "restore", "minimize", "unminimize", "close", "fullscreen", "system-titlebar", "custom-titlebar",
-                "palette", "themes", "authenticator", "containers", "theme-next",
-            ]
+            let op = op.trim();
+            // Steps with an argument (`command:<key>`, `plugin-command:<plugin>:<command>`,
+            // ...) are run by `browser/plugins_host.rs`; leaked once, debug builds only.
+            const WITH_ARG: [&str; 6] = ["command:", "plugin-command:", "open:", "modal-js:", "tab-js:", "key:"];
+            let op: &'static str = if WITH_ARG.iter().any(|p| op.starts_with(p)) {
+                Box::leak(op.to_string().into_boxed_str())
+            } else {
+                [
+                    "maximize", "restore", "minimize", "unminimize", "close", "fullscreen", "system-titlebar", "custom-titlebar",
+                    "palette", "themes", "authenticator", "containers", "theme-next",
+                ]
                 .into_iter()
-                .find(|o| *o == op.trim())?;
+                .find(|o| *o == op)?
+            };
             Some((std::time::Duration::from_secs_f32(secs.max(0.0)), op))
         })
         .collect()

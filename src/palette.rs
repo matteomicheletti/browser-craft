@@ -36,6 +36,19 @@ pub enum PaletteOutcome {
     FocusGroup(u64),
     /// Switch the browser to this theme.
     SetTheme(crate::theme::ThemeId),
+    /// Run a plugin's command (API 1.1 `[[commands]]`).
+    PluginCommand { plugin: String, command: String },
+}
+
+/// A command an enabled plugin adds to the palette.
+#[derive(Clone, Debug, Default)]
+pub struct PluginCommandItem {
+    pub plugin: String,
+    pub command: String,
+    pub title: String,
+    pub plugin_name: String,
+    /// The shortcut in effect, as the user reads it.
+    pub shortcut: Option<String>,
 }
 
 /// A container's colour and name, shown as a dot next to a tab.
@@ -94,6 +107,8 @@ pub struct PaletteSources {
     pub recording: bool,
     /// The theme chosen now (marked in the theme list).
     pub theme: crate::theme::ThemeId,
+    /// Commands of enabled plugins.
+    pub plugin_commands: Vec<PluginCommandItem>,
 }
 
 // ---- fuzzy matching --------------------------------------------------------
@@ -505,6 +520,25 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
     }
     if let Some(r) = search_row {
         rows.push(r);
+    }
+
+    if mode == Mode::Commands || (mode == Mode::All && !q.is_empty()) {
+        for pc in &s.plugin_commands {
+            let Some(m) = score_terms(q, &pc.title, &[&pc.plugin_name, "plugin"]) else {
+                continue;
+            };
+            let mut r = Row::new(
+                "Plugins",
+                Action::Outcome(PaletteOutcome::PluginCommand { plugin: pc.plugin.clone(), command: pc.command.clone() }),
+                egui_phosphor::regular::PUZZLE_PIECE,
+                pc.title.clone(),
+            );
+            r.detail = pc.plugin_name.clone();
+            r.shortcut = pc.shortcut.clone();
+            r.tag = Some("Plugin");
+            r.matches = m.positions;
+            rows.push(r);
+        }
     }
 
     if matches!(mode, Mode::All | Mode::Tabs) && (mode == Mode::Tabs || !q.is_empty()) {
@@ -1513,6 +1547,13 @@ mod tests {
             on_web_page: true,
             recording: false,
             theme: crate::theme::ThemeId::Olive,
+            plugin_commands: vec![PluginCommandItem {
+                plugin: "local.t.clip".into(),
+                command: "open".into(),
+                title: "Open the clipboard manager".into(),
+                plugin_name: "Clipboard".into(),
+                shortcut: Some("Ctrl+V".into()),
+            }],
         }
     }
 
@@ -1566,6 +1607,11 @@ mod tests {
 
     #[test]
     fn empty_query_lists_commands_and_recent_first() {
+        let plugin = build_rows("clipboard man", &sources(), &[]);
+        let row = plugin.iter().find(|r| r.section == "Plugins").expect("plugin command row");
+        assert_eq!(row.shortcut.as_deref(), Some("Ctrl+V"));
+        assert!(matches!(&row.action, Action::Outcome(PaletteOutcome::PluginCommand { plugin, command }) if plugin == "local.t.clip" && command == "open"));
+        assert!(build_rows("# clipboard", &sources(), &[]).iter().all(|r| r.section != "Plugins"), "not in the links list");
         let rows = build_rows("", &sources(), &[CommandId::Print, CommandId::Find]);
         assert_eq!(rows[0].section, "Recent");
         assert_eq!(rows[0].label, "Print page…");

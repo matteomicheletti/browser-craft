@@ -53,6 +53,7 @@ pub enum CommandId {
     // Capture
     Screenshot,
     ScreenshotFullPage,
+    ScreenshotArea,
     StartRecording,
     StopRecording,
     // Developer
@@ -152,6 +153,7 @@ pub fn needs_page(id: CommandId) -> bool {
             | ViewSource
             | Screenshot
             | ScreenshotFullPage
+            | ScreenshotArea
             | DevTools
             | JsConsole
             | Bookmark
@@ -199,7 +201,7 @@ pub fn catalog() -> &'static [Command] {
     &CATALOG
 }
 
-static CATALOG: [Command; 56] = [
+static CATALOG: [Command; 57] = [
     cmd!(
         NewTab,
         "new-tab",
@@ -513,6 +515,15 @@ static CATALOG: [Command; 56] = [
         ["capture", "long", "scrolling", "png"],
         None,
         ph::FRAME_CORNERS,
+        Capture
+    ),
+    cmd!(
+        ScreenshotArea,
+        "screenshot-area",
+        "Screenshot area…",
+        ["capture", "region", "select", "crop", "snip", "flameshot"],
+        None,
+        ph::SELECTION,
         Capture
     ),
     cmd!(

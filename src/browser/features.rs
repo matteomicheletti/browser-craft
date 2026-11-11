@@ -99,6 +99,8 @@ pub(super) struct Features {
     pub next_job: u64,
     pub nav_waits: Vec<NavWait>,
     pub clear_armed: Option<Instant>,
+    /// Plugin pages, commands, clipboard history (`plugins_host.rs`).
+    pub host: super::plugins_host::HostState,
 }
 
 impl Features {
@@ -129,6 +131,7 @@ impl Features {
             next_job: 1,
             nav_waits: Vec::new(),
             clear_armed: None,
+            host: super::plugins_host::HostState::new(),
         }
     }
 }
@@ -206,6 +209,8 @@ impl Browser {
             let reg = reg.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             scripts.push((plugins::page_script(&reg), false));
         }
+        // `bc.host` for plugin pages opened in tabs (inert anywhere else).
+        scripts.push((plugins::host::runtime_script(false), true));
         scripts.push((crate::automation::console::console_capture_script(), true));
         scripts
     }
@@ -404,6 +409,9 @@ impl Browser {
             }
         }
         sooner(self.feat.last_plugin_poll + PLUGIN_POLL);
+        if let Some(t) = self.plugin_host_tick() {
+            sooner(t);
+        }
         // Automation: scripts waiting for the poll interval, navigations
         // that took too long.
         let due: Vec<(u64, String)> = {
@@ -486,6 +494,7 @@ impl Browser {
             on_web_page: self.web_page,
             recording: self.feat.recorder.path().is_some(),
             theme: crate::flags::get().theme,
+            plugin_commands: self.plugin_palette_commands(),
         }
     }
 
@@ -503,6 +512,10 @@ impl Browser {
             PaletteOutcome::AddToGroup(Some(g)) => self.group_add_tab(self.active, g),
             PaletteOutcome::FocusGroup(g) => self.focus_group(g),
             PaletteOutcome::SetTheme(id) => self.set_theme(id),
+            PaletteOutcome::PluginCommand { plugin, command } => {
+                let target = if self.web_page { super::plugins_host::Target::Page(self.tab_id) } else { super::plugins_host::Target::Nothing };
+                self.run_plugin_command(&plugin, &command, target);
+            }
         }
     }
 
@@ -596,6 +609,9 @@ impl Browser {
             SavePage => self.save_page(),
             ViewSource => self.view_source(),
             Screenshot => self.save_screenshot(),
+            ScreenshotArea => {
+                self.plugin_screenshot(super::plugins_host::ShotMode::Area);
+            }
             ScreenshotFullPage => {
                 if !self.webkit_screenshot(true) {
                     self.set_notice("Full-page screenshots are not available yet on this platform");
@@ -740,6 +756,11 @@ impl Browser {
     /// The visible page or the whole document as a PNG in Pictures, rendered
     /// by WebKitGTK (Linux). False when this platform cannot.
     pub(super) fn webkit_screenshot(&mut self, full_page: bool) -> bool {
+        // A screenshot editor plugin gets the picture instead of Pictures.
+        let mode = if full_page { super::plugins_host::ShotMode::FullPage } else { super::plugins_host::ShotMode::Visible };
+        if self.plugin_screenshot(mode) {
+            return true;
+        }
         #[cfg(target_os = "linux")]
         if self.web_page
             && let Some(WebPane::Wry(wv)) = &self.webview
@@ -1033,6 +1054,8 @@ impl Browser {
 
     /// Draws the open palette; its outcome becomes an action.
     pub(super) fn feature_palette(&mut self, ctx: &egui::Context, c: &Colors, actions: &mut Vec<Action>) {
+        // The plugin modal's dimmed backdrop (an overlay like the palette).
+        self.plugin_modal_frame(ctx);
         if !self.feat.palette.is_open() {
             return;
         }

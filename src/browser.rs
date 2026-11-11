@@ -55,6 +55,7 @@ use crate::vault;
 mod automation_rpc;
 mod features;
 mod groups_split;
+mod plugins_host;
 
 pub const HOME_URL: &str = "https://www.startpage.com/";
 /// What a new tab opens: the built-in start page (`src/home.html`).
@@ -180,6 +181,9 @@ pub enum UserMessage {
     Notice(String),
     /// The screen recording finished writing its file (or failed).
     RecordingStopped(Result<PathBuf, String>),
+    /// Plugin pages, plugin shortcuts, clipboard history, screenshots
+    /// (`browser/plugins_host.rs`).
+    PluginHost(plugins_host::HostMessage),
 }
 
 /// A key for egui, forwarded from the page's GTK window.
@@ -1577,7 +1581,21 @@ fn attach_webview_shortcuts_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>
     });
     // An input method can hand the same key over twice; act on it once.
     let last = std::cell::Cell::new((0u32, 0u32));
-    wv.webview().connect_key_press_event(move |_, event| {
+    wv.webview().connect_key_press_event(move |view, event| {
+        // Plugin shortcuts first; plugin pages keep their editing keys.
+        match plugins_host::gtk_key(view, event) {
+            plugins_host::GtkKey::Command(plugin, command) => {
+                let stamp = (event.time(), *event.keyval());
+                if last.get() != stamp {
+                    last.set(stamp);
+                    let host = plugins_host::HostMessage::Command { plugin, command, tab, address: chrome_keys.get() };
+                    let _ = proxy.send_event(UserMessage::PluginHost(host));
+                }
+                return Propagation::Stop;
+            }
+            plugins_host::GtkKey::PageOwns => return Propagation::Proceed,
+            plugins_host::GtkKey::Browser => {}
+        }
         let state = event.state();
         let ctrl = state.contains(ModifierType::CONTROL_MASK);
         let shift = state.contains(ModifierType::SHIFT_MASK);
@@ -3793,10 +3811,13 @@ impl Browser {
                 return None;
             }
         };
+        // Plugin pages (`bc-plugin:`): the scheme is registered once per data store.
+        let plugin_scheme = context.as_ref().is_none_or(|c| !c.is_custom_protocol_registered(crate::plugins::ui_pages::SCHEME));
         let mut builder = match context {
             Some(context) => WebViewBuilder::new_with_web_context(context),
             None => WebViewBuilder::new(),
         };
+        builder = plugins_host::register_protocol(builder, plugin_scheme);
         for (script, main_only) in scripts {
             builder = builder.with_initialization_script_for_main_only(script, main_only);
         }
@@ -3811,6 +3832,9 @@ impl Browser {
                 let to_tab = |m| {
                     let _ = ipc_proxy.send_event(UserMessage::Tab(tab, m));
                 };
+                if plugins_host::ipc_message(body, &request.uri().to_string(), tab, &ipc_proxy) {
+                    return;
+                }
                 if body.starts_with(crate::plugins::bridge::PREFIX) {
                     if let Some(call) = crate::plugins::parse_page_message(body) {
                         to_tab(TabMessage::Plugin { sender: request.uri().to_string(), call });
@@ -3836,7 +3860,10 @@ impl Browser {
                     let _ = ipc_proxy.send_event(UserMessage::Tab(tab, TabMessage::Page { sender, message }));
                 }
             })
-            .with_navigation_handler(move |url| match web_navigation(&url) {
+            .with_navigation_handler(move |url| match plugins_host::navigation_policy(tab, &url) {
+                // Plugin pages only where the browser opened them.
+                Some(allowed) => allowed,
+                None => match web_navigation(&url) {
                 WebNavigation::Allow => {
                     // "Always open in": a site a rule puts in another
                     // container leaves this tab's data store.
@@ -3861,6 +3888,7 @@ impl Browser {
                     let _ = nav_proxy.send_event(UserMessage::Tab(tab, TabMessage::Open { epoch, url, popup: false }));
                     false
                 }
+                },
             })
             .with_document_title_changed_handler(move |title| {
                 let _ = title_proxy.send_event(UserMessage::Tab(tab, TabMessage::Title(title)));
@@ -4159,6 +4187,7 @@ impl Browser {
                 "themes" => self.run_command(crate::commands::CommandId::Theme),
                 "authenticator" => self.toggle_drawer(Drawer::Authenticator),
                 "containers" => self.toggle_drawer(Drawer::Containers),
+                op if op.contains(':') => self.plugin_window_step(op),
                 "theme-next" => {
                     let ids = flags::Theme::ALL;
                     let at = ids.iter().position(|t| *t == flags::get().theme).unwrap_or(0);
@@ -4192,6 +4221,8 @@ impl Browser {
                 self.reload();
             }
         }
+        // Plugin pages use the theme's colours as CSS variables.
+        self.plugin_theme_changed();
         let follow = flags::get().theme == flags::Theme::System;
         if let Some(g) = &self.gfx {
             // "Follow system" leaves the window on the desktop's theme, so
@@ -6256,7 +6287,7 @@ impl Browser {
         if titlebar {
             titlebar::window_edges(&ctx, &c, edge, &mut win_ops);
         }
-        let popup_now = egui::Popup::is_any_open(&ctx) || self.feat.palette.is_open();
+        let popup_now = egui::Popup::is_any_open(&ctx) || self.feat.palette.is_open() || self.plugin_modal_open();
         if popup_now != self.egui_popup_open {
             self.egui_popup_open = popup_now;
             // Show or hide the web view, and draw the snapshot, on the next frame.
@@ -6468,6 +6499,7 @@ impl Browser {
             UserMessage::AutomationScript { job, json } => self.job_result(job, &json),
             UserMessage::Notice(text) => self.set_notice_long(text),
             UserMessage::RecordingStopped(result) => self.recording_stopped(result),
+            UserMessage::PluginHost(m) => self.plugin_host_message(m),
             UserMessage::ChromeKey(key) => self.chrome_key(key),
             UserMessage::PageClicked(tab) => {
                 self.page_clicked(tab);
@@ -6571,6 +6603,13 @@ impl ApplicationHandler<UserMessage> for Browser {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        // A plugin's shortcut (Ctrl+V for the clipboard manager) comes before egui.
+        if let WindowEvent::KeyboardInput { event: key, .. } = &event
+            && self.plugin_chrome_key(key)
+        {
+            self.request_redraw();
+            return;
+        }
         let consumed = match (&mut self.egui, &self.gfx) {
             (Some(egui), Some(g)) => egui.on_window_event(&g.window, &event),
             _ => false,
