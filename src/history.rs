@@ -57,6 +57,29 @@ pub fn record(url: &str, title: &str) {
     }
 }
 
+/// Up to `limit` visits whose title or URL contains `query` (any case),
+/// newest first, as (url, title). An empty query matches everything.
+pub fn search(query: &str, limit: usize) -> Vec<(String, String)> {
+    let query = query.trim().to_lowercase();
+    let entries = store().lock().map(|e| e.clone()).unwrap_or_default();
+    let mut seen = std::collections::HashSet::new();
+    entries
+        .into_iter()
+        .rev()
+        .filter(|e| query.is_empty() || e.url.to_lowercase().contains(&query) || e.title.to_lowercase().contains(&query))
+        .filter(|e| seen.insert(e.url.clone()))
+        .take(limit)
+        .map(|e| (e.url, e.title))
+        .collect()
+}
+
+/// Forgets every visit.
+pub fn clear() {
+    if let Ok(mut entries) = store().lock() {
+        entries.clear();
+    }
+}
+
 /// Pages that shouldn't clutter the history (the history page itself, blank
 /// tabs, view-source of another page).
 fn is_internal(url: &str) -> bool {
@@ -132,6 +155,17 @@ mod tests {
         assert!(!html.contains("long.test"));
         assert!(!html.contains("secret"));
         assert!(html.contains("https://creds.test/"));
+    }
+
+    #[test]
+    fn search_finds_newest_unique_visits() {
+        record("https://search-a.test/one", "Alpha page");
+        record("https://search-b.test/two", "Beta");
+        record("https://search-a.test/one", "Alpha page");
+        let hits = search("SEARCH-A", 10);
+        assert_eq!(hits, vec![("https://search-a.test/one".to_string(), "Alpha page".to_string())]);
+        assert!(search("beta", 10).iter().any(|(u, _)| u == "https://search-b.test/two"));
+        assert!(search("", 1).len() <= 1);
     }
 
     #[test]
