@@ -188,6 +188,20 @@
       // `color-scheme: dark` (or `light dark` with a dark system) makes the
       // canvas itself dark even when no element has a background.
       var canvasDark = /\bdark\b/.test(cs) && (!/\blight\b/.test(cs) || isSystemDark());
+      // The canvas takes the root's background, else the body's (CSS
+      // background propagation), so a short body still paints the viewport.
+      var canvasLum = canvasDark ? 0 : 1;
+      var holders = [rootEl, document.body];
+      for (var k = 0; k < holders.length; k++) {
+        if (!holders[k]) {
+          continue;
+        }
+        var hc = parseRgb(getComputedStyle(holders[k]).backgroundColor);
+        if (hc && hc.a >= 0.5) {
+          canvasLum = lum(hc);
+          break;
+        }
+      }
       var w = window.innerWidth || 800;
       var h = window.innerHeight || 600;
       var pts = [[0.5, 0.5], [0.5, 0.15], [0.25, 0.5], [0.75, 0.5], [0.5, 0.85]];
@@ -207,7 +221,7 @@
             break;
           }
         }
-        sum += found ? lum(found) : canvasDark ? 0 : 1;
+        sum += found ? lum(found) : canvasLum;
         n++;
       }
       return sum / n < 0.2;

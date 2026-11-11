@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Shadow DOM page</title>
+<style>body{font:16px/1.5 sans-serif;margin:24px;background:#fff;color:#222}</style></head><body>
+<h1>Shadow DOM</h1>
+<p>The box below lives in an open shadow root with its own light styles.</p>
+<my-card></my-card>
+<script>
+class MyCard extends HTMLElement{connectedCallback(){
+ var r=this.attachShadow({mode:'open'});
+ r.innerHTML='<style>.c{background:#e3f2fd;color:#0d47a1;border:1px solid #90caf9;padding:14px;max-width:420px}button{background:#fff;border:1px solid #888;padding:4px 10px}</style><div class="c"><b>Inside shadow root</b><p>Light blue card with dark blue text.</p><button>Shadow button</button></div>';}}
+customElements.define('my-card',MyCard);
+</script></body></html>

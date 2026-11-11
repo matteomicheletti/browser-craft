@@ -17,7 +17,9 @@
 mod panel;
 mod settings;
 
+#[allow(unused_imports)] // re-exports for the integration step
 pub use panel::{DarkEvent, DarkModePanel};
+#[allow(unused_imports)]
 pub use settings::{
     DarkSettings, Decision, Mode, Schedule, SiteMode, SiteSettings, host_matches, load, normalize_host, save,
 };
@@ -229,6 +231,41 @@ mod tests {
         std::fs::write(&file, wrapper).unwrap();
         let out = std::process::Command::new("node").arg(&file).output().unwrap();
         assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    }
+
+    /// Writes the scripts the visual harness (`tools/darkmode-harness`) loads.
+    #[test]
+    #[ignore = "writes files for tools/darkmode-harness; set BC_DARK_DUMP_DIR"]
+    fn dump_scripts() {
+        let Some(dir) = std::env::var_os("BC_DARK_DUMP_DIR") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dark = DarkSettings { mode: Mode::Dark, ..Default::default() };
+        let mut variants: Vec<(&str, DarkSettings, Option<bool>)> = vec![
+            ("dark", dark.clone(), None),
+            ("dark-keep-native-off", DarkSettings { respect_native: false, ..dark.clone() }, None),
+            ("dimmed", DarkSettings { brightness: 80, contrast: 90, sepia: 30, ..dark.clone() }, None),
+            ("system-light", DarkSettings::default(), Some(false)),
+            ("system-dark", DarkSettings::default(), Some(true)),
+            ("off", DarkSettings { enabled: false, ..dark.clone() }, None),
+        ];
+        // File URLs have an empty host; the harness serves pages over http
+        // on localhost to exercise the per-site rules.
+        let mut css = dark.clone();
+        css.set_site_css("localhost", "h1{color:#ff6b6b !important}");
+        variants.push(("custom-css", css, None));
+        let mut excl = dark;
+        excl.set_excluded("localhost", true);
+        variants.push(("excluded", excl, None));
+        let light = DarkSettings { mode: Mode::Light, ..Default::default() };
+        let sepia = DarkSettings { mode: Mode::Dark, sepia: 60, brightness: 85, ..Default::default() };
+        std::fs::write(dir.join("update-light.js"), update_script(&light, None)).unwrap();
+        std::fs::write(dir.join("update-sepia.js"), update_script(&sepia, None)).unwrap();
+        for (name, s, sys) in variants {
+            std::fs::write(dir.join(format!("{name}.js")), page_script(&s, sys)).unwrap();
+        }
     }
 
     #[test]

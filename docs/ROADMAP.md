@@ -95,12 +95,15 @@ first-class requirements:
   lock/unlock, encrypted backup/export; toolbar button; never exposed to
   pages, plugins or the MCP server.
 
-### M5: Smart dark mode (planned)
+### M5: Smart dark mode (module done, not wired)
 
 - Dynamic colour adaptation (computed styles, CSS variables, mutation
   observer, shadow roots), per-site rules, brightness/contrast/sepia,
-  native dark detection, no white flash. Dark Reader is MIT: reuse with
-  attribution is possible and will be evaluated before writing our own.
+  native dark detection, no white flash. Dark Reader is MIT: its dynamic
+  theme engine is vendored (4.9.135) and wrapped; see `docs/DARKMODE.md`.
+- Done: settings, page/update scripts, IPC parser, drawer panel, WebKitGTK
+  screenshot harness. Open: wiring (init script, palette command, drawer,
+  `update_script` on tabs) by core; native-side CSS fetch for non-CORS sheets.
 
 ### M6: Performance (planned)
 

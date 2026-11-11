@@ -119,10 +119,10 @@ pub fn normalize_host(input: &str) -> String {
         s = s[i + 1..].to_string();
     }
     // Keep IPv6 literals whole, drop a port otherwise.
-    if !s.starts_with('[') {
-        if let Some(i) = s.rfind(':') {
-            s.truncate(i);
-        }
+    if !s.starts_with('[')
+        && let Some(i) = s.rfind(':')
+    {
+        s.truncate(i);
     }
     let s = s.trim_end_matches('.');
     let s = s.strip_prefix("*.").unwrap_or(s);

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Smart dark mode (`src/darkmode/`, docs in `docs/DARKMODE.md`): the MIT-licensed Dark Reader dynamic theme engine (vendored, credited in `THIRD_PARTY_NOTICES.md`) with our own settings (system/dark/light/off, per-site on/off/exclusion, brightness, contrast, sepia, grayscale, font, custom CSS per site, schedule), a no-flash start, detection of pages that are already dark, live updates and a drawer panel. Not wired into the browser yet. Visual harness in `tools/darkmode-harness/`, test pages in `tests/web/darkmode/`.
 - Fork `matteomicheletti/browser-craft`: web pages on Linux render with **WebKitGTK** through wry (full JavaScript, IndexedDB, workers, WebSocket, service workers), with the web processes in WebKit's bubblewrap sandbox and a persistent profile in `~/.local/share/BrowseCraft/profiles/default`. The window runs on X11 (XWayland under Wayland). `BROWSECRAFT_NO_WEBKIT=1` keeps the own engine. See `docs/ARCHITECTURE_DECISION.md`.
 - Browser shortcuts work while a WebKitGTK page has the keyboard.
 - Developer tools shortcut: `F12`, `Ctrl+Shift+I`, `Ctrl+Shift+J` (WebKit inspector; on Linux the inspector window is not yet shown, see ROADMAP).

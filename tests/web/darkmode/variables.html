@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>CSS variables page</title>
+<style>
+:root{--bg:#ffffff;--fg:#1a1a1a;--panel:#fff7e0;--accent:#c2185b;--border:#e0c97a}
+body{font:16px/1.5 sans-serif;margin:24px;background:var(--bg);color:var(--fg)}
+.panel{background:var(--panel);border:2px solid var(--border);padding:14px;max-width:420px;border-radius:8px}
+.panel h2{color:var(--accent);margin-top:0}
+.btn{background:var(--accent);color:#fff;border:0;padding:6px 14px;border-radius:4px}
+.inline{padding:8px;margin-top:12px}
+</style></head><body>
+<h1>CSS variables</h1>
+<div class="panel"><h2>Themed with custom properties</h2><p>Colours come from <code>var(--*)</code>.</p><button class="btn">Accent</button></div>
+<div class="inline" style="background:#e8f5e9;color:#1b5e20;border:1px solid #a5d6a7">Inline style, light green</div>
+<div id="late"></div>
+<script>setTimeout(function(){var d=document.createElement('div');d.className='panel';d.style.marginTop='12px';d.innerHTML='<p>Added by script after load (mutation observer).</p>';document.getElementById('late').appendChild(d);},300)</script>
+</body></html>
