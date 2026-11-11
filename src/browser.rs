@@ -51,6 +51,9 @@ use crate::style::{self, Style, StyleContext};
 use crate::textfield::TextField;
 use crate::vault;
 
+mod automation_rpc;
+mod features;
+
 pub const HOME_URL: &str = "https://www.startpage.com/";
 /// What a new tab opens: the built-in start page (`src/home.html`).
 const NEW_TAB_URL: &str = "about:home";
@@ -88,6 +91,11 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl + Shift + N", "New tab in a temporary container"),
     ("Ctrl + F", "Find in page"),
     ("Ctrl + P / F1", "Command palette"),
+    ("Ctrl + Shift + P", "Print"),
+    ("Ctrl + Shift + J", "JavaScript console"),
+    ("Ctrl + Shift + R", "Reload, bypassing the cache"),
+    ("Ctrl + Shift + Delete", "Clear browsing data"),
+    ("Ctrl + ,", "Settings"),
     ("F12", "Developer tools"),
     ("Ctrl + L", "Focus the address bar"),
     ("Ctrl + S", "Select the address bar to type"),
@@ -105,7 +113,7 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl + Q", "Quit BrowseCraft"),
 ];
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub enum UserMessage {
     /// A background engine load made progress (generation, event).
     Load(u64, LoadEvent),
@@ -160,6 +168,14 @@ pub enum UserMessage {
     /// An event from the web view of the tab with this id (each tab has its
     /// own web view; events of background tabs update their saved state).
     Tab(u64, TabMessage),
+    /// A control API request from the automation server thread.
+    Automation(crate::automation::Request),
+    /// What an automation page script returned (JSON), for job `job`.
+    AutomationScript { job: u64, json: String },
+    /// A message for the notice strip from a background task.
+    Notice(String),
+    /// The screen recording finished writing its file (or failed).
+    RecordingStopped(Result<PathBuf, String>),
 }
 
 /// A key for egui, forwarded from the page's GTK window.
@@ -201,6 +217,13 @@ pub enum TabMessage {
     /// A snapshot of the page, shown while a menu covers it.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     Snapshot { w: usize, h: usize, rgba: Vec<u8> },
+    /// The dark mode script judged the page (`bc-dark:`).
+    Dark(crate::darkmode::PageMessage),
+    /// A plugin content script called `bc.*` (`bc-plugin:`); `sender` is
+    /// the page's address.
+    Plugin { sender: String, call: crate::plugins::PageCall },
+    /// The page logged to its console (`bc-console:`).
+    Console { url: String, msg: crate::automation::console::PageConsoleMessage },
 }
 
 /// A tab to open at start-up (command line): the URL and the container.
@@ -221,10 +244,9 @@ pub enum ContainerChoice {
     Temporary,
 }
 
-/// The right-hand drawer panels. Only `Containers` is implemented by the
-/// core; the others are drawn by their modules once integrated.
+/// The right-hand drawer panels: containers (core) and the feature
+/// modules' panels (`browser/features.rs`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)] // the feature panels are opened once their modules are integrated
 pub enum Drawer {
     Containers,
     Authenticator,
@@ -233,8 +255,8 @@ pub enum Drawer {
     Automation,
 }
 
-#[allow(dead_code)]
 impl Drawer {
+    #[cfg(test)]
     pub const ALL: [Drawer; 5] = [
         Drawer::Containers,
         Drawer::Authenticator,
@@ -341,6 +363,9 @@ enum Action {
     ToggleDrawer(Drawer),
     Containers(Vec<crate::containers::ContainersEvent>),
     Find(egui_chrome::FindEvent),
+    /// Open or close the command palette.
+    Palette,
+    Feature(features::FeatureAction),
 }
 
 struct HistoryEntry {
@@ -558,6 +583,8 @@ pub struct Browser {
     /// The window was already fullscreen (F11 / the OS) when the page asked,
     /// so leaving page fullscreen must keep it that way.
     fullscreen_restore: bool,
+    /// The feature modules: palette, drawers, automation (`features.rs`).
+    feat: features::Features,
 }
 
 struct FindBar {
@@ -1392,6 +1419,9 @@ pub enum Shortcut {
     NewTemporaryTab,
     /// Ctrl+P, F1: the command palette.
     Palette,
+    /// A palette command that also has a key: Ctrl+Shift+P (print),
+    /// Ctrl+Shift+R, Ctrl+Shift+J, Ctrl+Shift+Delete, Ctrl+,.
+    Command(crate::commands::CommandId),
 }
 
 /// The browser-wide shortcut for `key` with these modifiers, if any. `typing`
@@ -1403,6 +1433,7 @@ fn shortcut_for(key: &Key, ctrl: bool, shift: bool, alt: bool, typing: bool) -> 
             Key::Named(NamedKey::Tab) => Some(Shortcut::CycleTab(if shift { -1 } else { 1 })),
             Key::Named(NamedKey::PageUp) if !shift => Some(Shortcut::CycleTab(-1)),
             Key::Named(NamedKey::PageDown) if !shift => Some(Shortcut::CycleTab(1)),
+            Key::Named(NamedKey::Delete) if shift => Some(Shortcut::Command(crate::commands::CommandId::ClearBrowsingData)),
             Key::Named(NamedKey::ArrowLeft) if !typing => Some(Shortcut::Go(-1)),
             Key::Named(NamedKey::ArrowRight) if !typing => Some(Shortcut::Go(1)),
             Key::Character(c) => match c.to_ascii_lowercase().as_str() {
@@ -1411,6 +1442,10 @@ fn shortcut_for(key: &Key, ctrl: bool, shift: bool, alt: bool, typing: bool) -> 
                 "n" if shift => Some(Shortcut::NewTemporaryTab),
                 "f" if !shift => Some(Shortcut::Find),
                 "p" if !shift => Some(Shortcut::Palette),
+                "p" => Some(Shortcut::Command(crate::commands::CommandId::Print)),
+                "r" if shift => Some(Shortcut::Command(crate::commands::CommandId::HardReload)),
+                "j" if shift => Some(Shortcut::Command(crate::commands::CommandId::JsConsole)),
+                "," if !shift => Some(Shortcut::Command(crate::commands::CommandId::Settings)),
                 "9" if !shift => Some(Shortcut::LastTab),
                 d @ ("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8") if !shift => {
                     d.parse::<usize>().ok().map(|n| Shortcut::SelectTab(n - 1))
@@ -1422,7 +1457,6 @@ fn shortcut_for(key: &Key, ctrl: bool, shift: bool, alt: bool, typing: bool) -> 
                 "r" => Some(Shortcut::Reload),
                 "u" => Some(Shortcut::ViewSource),
                 "i" if shift => Some(Shortcut::DevTools),
-                "j" if shift => Some(Shortcut::DevTools),
                 "h" => Some(Shortcut::History),
                 "d" => Some(Shortcut::Bookmark),
                 "b" if shift => Some(Shortcut::BookmarksBar),
@@ -1496,6 +1530,7 @@ fn attach_webview_shortcuts_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>
             k::Home => Some(Key::Named(NamedKey::Home)),
             k::Page_Up | k::KP_Page_Up => Some(Key::Named(NamedKey::PageUp)),
             k::Page_Down | k::KP_Page_Down => Some(Key::Named(NamedKey::PageDown)),
+            k::Delete | k::KP_Delete => Some(Key::Named(NamedKey::Delete)),
             // Ctrl+digit: matched by the digit key whatever the layout
             // makes of it with Shift.
             k::_1 => Some(Key::Character("1".into())),
@@ -2054,6 +2089,7 @@ impl Browser {
             egui_popup_open: false,
             popup_snapshot: None,
             fullscreen_restore: false,
+            feat: features::Features::new(),
         }
     }
 
@@ -2652,11 +2688,9 @@ impl Browser {
         }
     }
 
-    /// The command palette (Ctrl+P, F1).
-    // TODO(palette): open the palette widget from src/palette.rs once it is
-    // integrated (`self.palette.open()`), and route its outcome.
+    /// The command palette (Ctrl+P, F1): opens it, or closes it.
     fn open_palette(&mut self) {
-        self.set_notice("The command palette is coming soon (Ctrl+P / F1)");
+        self.toggle_palette();
     }
 
     /// Shows a drawer panel, or hides it when it is already shown.
@@ -2667,7 +2701,6 @@ impl Browser {
     }
 
     /// Shows a drawer panel on the right of the page.
-    #[allow(dead_code)] // for the palette and the feature modules
     pub fn open_drawer(&mut self, drawer: Drawer) {
         self.drawer = Some(drawer);
         self.web_bounds = None;
@@ -2754,7 +2787,7 @@ impl Browser {
             self.set_notice("Find in page works on web pages");
             return;
         }
-        if self.egui.is_none() {
+        if !self.gpu_chrome {
             self.set_notice("Find in page needs the GPU interface");
             return;
         }
@@ -2805,6 +2838,26 @@ impl Browser {
     // ---- events from the tabs' web views ----
 
     fn tab_message(&mut self, id: u64, message: TabMessage) {
+        // Messages of the feature page scripts, from any tab.
+        let message = match message {
+            TabMessage::Console { url, msg } => return self.console_message(id, &url, msg),
+            TabMessage::Plugin { sender, call } => return self.plugin_call(id, sender, call),
+            TabMessage::Dark(m) => return self.dark_message(m),
+            other => other,
+        };
+        // Loads that automation clients wait for.
+        let load = match &message {
+            TabMessage::Start(url) if url != "about:blank" => Some(false),
+            TabMessage::Load(url) if !url.is_empty() && url != "about:blank" => Some(true),
+            _ => None,
+        };
+        self.tab_message_inner(id, message);
+        if let Some(finished) = load {
+            self.automation_load_event(id, finished);
+        }
+    }
+
+    fn tab_message_inner(&mut self, id: u64, message: TabMessage) {
         if id == self.tab_id {
             match message {
                 TabMessage::Title(title) => self.web_titled(title),
@@ -2825,6 +2878,7 @@ impl Browser {
                     self.web_bounds = None;
                     self.sync_webview();
                 }
+                TabMessage::Dark(_) | TabMessage::Plugin { .. } | TabMessage::Console { .. } => {}
             }
             return;
         }
@@ -3575,11 +3629,13 @@ impl Browser {
             position: WryPosition::Physical(WryPhysicalPosition::new(0, 0)),
             size: WrySize::Physical(WryPhysicalSize::new(size.width.max(1), size.height.max(1))),
         };
+        // (script, main frame only)
         let mut scripts = vec![
-            adblock::instance().page_script_with_network(!cfg!(windows)),
-            passwords::PAGE_SCRIPT.to_string(),
+            (adblock::instance().page_script_with_network(!cfg!(windows)), true),
+            (passwords::PAGE_SCRIPT.to_string(), true),
         ];
-        scripts.extend(self.extra_page_scripts.iter().cloned());
+        scripts.extend(self.extra_page_scripts.iter().map(|s| (s.clone(), true)));
+        scripts.extend(self.feature_page_scripts());
         let context = match self.web_context(container) {
             Ok(context) => context,
             Err(e) => {
@@ -3591,18 +3647,41 @@ impl Browser {
             Some(context) => WebViewBuilder::new_with_web_context(context),
             None => WebViewBuilder::new(),
         };
-        for script in scripts {
-            builder = builder.with_initialization_script(script);
+        for (script, main_only) in scripts {
+            builder = builder.with_initialization_script_for_main_only(script, main_only);
         }
         let builder = builder
             .with_devtools(true)
             .with_visible(false)
             .with_bounds(bounds)
             .with_ipc_handler(move |request| {
-                // Reports from the password script. The page is untrusted:
-                // messages are parsed defensively and only ever lead to an
-                // offer the user can decline.
-                if let Some(message) = passwords::parse_page_message(request.body()) {
+                // The page is untrusted: each module's messages are parsed
+                // defensively (prefix, size, shape) before they go anywhere.
+                let body = request.body();
+                let to_tab = |m| {
+                    let _ = ipc_proxy.send_event(UserMessage::Tab(tab, m));
+                };
+                if body.starts_with(crate::plugins::bridge::PREFIX) {
+                    if let Some(call) = crate::plugins::parse_page_message(body) {
+                        to_tab(TabMessage::Plugin { sender: request.uri().to_string(), call });
+                    }
+                    return;
+                }
+                if body.starts_with(crate::automation::console::PREFIX) {
+                    if let Some(msg) = crate::automation::console::parse_page_message(body) {
+                        to_tab(TabMessage::Console { url: request.uri().to_string(), msg });
+                    }
+                    return;
+                }
+                if body.starts_with(crate::darkmode::IPC_PREFIX) {
+                    if let Some(m) = crate::darkmode::parse_page_message(body) {
+                        to_tab(TabMessage::Dark(m));
+                    }
+                    return;
+                }
+                // Reports from the password script: they only ever lead to
+                // an offer the user can decline.
+                if let Some(message) = passwords::parse_page_message(body) {
                     let sender = request.uri().to_string();
                     let _ = ipc_proxy.send_event(UserMessage::Tab(tab, TabMessage::Page { sender, message }));
                 }
@@ -3859,6 +3938,8 @@ impl Browser {
     /// Pushes the effective theme to the window and the web view.
     fn apply_theme(&mut self, dark: bool) {
         self.last_dark = Some(dark);
+        // Pages whose dark mode follows the system follow the browser theme.
+        self.dark_theme_changed();
         // Internal pages are generated for one theme: rebuild the open one.
         if internal::set_dark(dark) && !self.web_page {
             let url = self.current_url();
@@ -4348,7 +4429,7 @@ impl Browser {
         m.control_key()
             || m.alt_key()
             || (cfg!(target_os = "macos") && m.super_key())
-            || matches!(&event.logical_key, Key::Named(NamedKey::F5 | NamedKey::F6))
+            || matches!(&event.logical_key, Key::Named(NamedKey::F1 | NamedKey::F5 | NamedKey::F6))
     }
 
     fn key(&mut self, event: &KeyEvent) {
@@ -4381,6 +4462,10 @@ impl Browser {
 
         if let Some(shortcut) = shortcut_for(&base, ctrl, shift, alt, typing) {
             self.run_shortcut(shortcut);
+            return;
+        }
+        if self.feat.palette.is_open() {
+            // The palette (egui) owns every other key while it is open.
             return;
         }
         self.key_in_focus(event, &base, typing);
@@ -4419,6 +4504,7 @@ impl Browser {
             Shortcut::Find => self.open_find(),
             Shortcut::NewTemporaryTab => self.new_tab_in(ContainerChoice::Temporary, None),
             Shortcut::Palette => self.open_palette(),
+            Shortcut::Command(id) => self.run_command(id),
         }
         self.request_redraw();
     }
@@ -5598,9 +5684,9 @@ impl Browser {
                             if egui_chrome::icon_button(ui, true, ICON_GEAR, "Settings", 16.0).clicked() {
                                 actions.push(Action::Flags);
                             }
-                            if egui_chrome::icon_button(ui, true, Drawer::Containers.icon(), "Containers", 16.0).clicked() {
-                                actions.push(Action::ToggleDrawer(Drawer::Containers));
-                            }
+                            // Authenticator, plugins, dark mode, containers
+                            // (an overflow menu on a narrow window).
+                            self.feature_toolbar(ui, &c, &mut actions);
                             if egui_chrome::icon_button(ui, true, theme_icon, "Toggle light / dark", 16.0).clicked() {
                                 actions.push(Action::Theme);
                             }
@@ -5789,7 +5875,6 @@ impl Browser {
                 .filter(|u| matches!(u.scheme(), "http" | "https"))
                 .and_then(|u| u.host_str().map(str::to_string))
                 .unwrap_or_default();
-            let panel = &mut self.containers_panel;
             egui::Panel::right("drawer")
                 .exact_size(DRAWER_WIDTH)
                 .resizable(false)
@@ -5807,25 +5892,20 @@ impl Browser {
                     ui.separator();
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match drawer {
                         Drawer::Containers => {
-                            let events = panel.ui(ui, &c);
+                            let events = self.containers_panel.ui(ui, &c);
                             if !events.is_empty() {
                                 actions.push(Action::Containers(events));
                             }
                         }
-                        // TODO(integration): draw each module's panel here
-                        // (`XPanel::ui(ui, &c)`) and apply its events.
-                        other => {
-                            ui.add_space(12.0);
-                            ui.label(
-                                egui::RichText::new(format!("{} is not available in this build yet.", other.title()))
-                                    .color(c.muted),
-                            );
-                        }
+                        other => self.feature_drawer(ui, other, &c, &mut actions),
                     });
                 });
         }
 
-        let popup_now = egui::Popup::is_any_open(&ctx);
+        // The palette is an overlay too: the page's native window hides
+        // behind its snapshot while it is open.
+        self.feature_palette(&ctx, &c, &mut actions);
+        let popup_now = egui::Popup::is_any_open(&ctx) || self.feat.palette.is_open();
         if popup_now != self.egui_popup_open {
             self.egui_popup_open = popup_now;
             // Show or hide the web view, and draw the snapshot, on the next frame.
@@ -5937,6 +6017,8 @@ impl Browser {
                     egui_chrome::FindEvent::Previous => self.find_in_page(true, true),
                     egui_chrome::FindEvent::Close => self.close_find(),
                 },
+                Action::Palette => self.toggle_palette(),
+                Action::Feature(action) => self.feature_action(action),
             }
         }
         if changed {
@@ -5989,6 +6071,10 @@ impl Browser {
             }
             UserMessage::Stop => self.stop(),
             UserMessage::Tab(id, message) => self.tab_message(id, message),
+            UserMessage::Automation(req) => self.automation_request(req),
+            UserMessage::AutomationScript { job, json } => self.job_result(job, &json),
+            UserMessage::Notice(text) => self.set_notice_long(text),
+            UserMessage::RecordingStopped(result) => self.recording_stopped(result),
             UserMessage::ChromeKey(key) => self.chrome_key(key),
             UserMessage::PageClicked => {
                 self.chrome_keys.set(false);
@@ -6075,6 +6161,8 @@ impl ApplicationHandler<UserMessage> for Browser {
         });
         self.apply_theme(self.dark());
         self.open_start_tabs();
+        // The control API, when enabled in settings or with --automation.
+        self.start_automation();
         window.request_redraw();
     }
 
@@ -6184,6 +6272,9 @@ impl ApplicationHandler<UserMessage> for Browser {
             } else {
                 sooner(until);
             }
+        }
+        if let Some(t) = self.tick_features() {
+            sooner(t);
         }
         if self.loading {
             // Animate the loading bar.
