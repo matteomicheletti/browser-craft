@@ -71,8 +71,8 @@ struct State {
 pub fn attach(view: &WebView, allow: impl Fn(String) -> bool + 'static) {
     apply(view, &Resolved::default_ua());
     // Real-time apps (Teams, Meet) need RTCPeerConnection, which WebKitGTK
-    // ships switched off. Camera and microphone stay denied until the
-    // permission prompt exists: WebKit refuses unhandled permission requests.
+    // ships switched off (and Arch/Manjaro builds leave out entirely).
+    // Camera and microphone go through the site permission prompt.
     if let Some(settings) = WebViewExt::settings(view) {
         settings.set_enable_webrtc(true);
     }
