@@ -137,6 +137,9 @@ either `selector` (CSS, searched through open shadow roots) or `ref` (from
 | `bookmarks.list` | `query?`, `limit?` | `{bookmarks: [{title, url, folder?}]}` |
 | `history.search` | `query?`, `limit?` | `{entries: [{title, url, visited?}]}` |
 | `browser.version` | – | `{name, version, api_version, methods}` (answered by the server itself) |
+| `sessions.list` | – | `{sessions: [{name, windows, tabs, created, updated}]}`: the session presets, in the user's order (times in Unix seconds) |
+| `sessions.open` | `name` (case-insensitive), `window?` (`"new"`, the default, or `"current"`) | `{session: {name, windows, tabs, created, updated}, notice?}`: `new` opens each of the preset's windows as a new window, `current` adds its tabs after those of the window last used; tabs load when first shown; `notice` mentions tabs whose container no longer exists. Needs `allow_navigation`, refused while `allowed_hosts` is set |
+| `sessions.save` | `name`, `scope?` (`"window"`, the default: the window last used, or `"all"`) | `{session: {…}}`; an existing name is an error (update a preset on `browsecraft://sessions`); tabs in temporary containers are left out. Needs `allow_navigation` |
 
 The exact serde types are in `src/automation/protocol.rs`.
 
@@ -239,6 +242,7 @@ false`) and annotations (`readOnlyHint`, `destructiveHint`):
 | `browser_pdf` | `page.pdf` | embedded `application/pdf` resource |
 | `browser_console` | `console.read` | JSON |
 | `browser_containers`, `browser_bookmarks`, `browser_history`, `browser_version` | … | JSON |
+| `browser_sessions_list`, `browser_sessions_open`, `browser_sessions_save` | `sessions.*` | JSON |
 
 Errors from the browser (permission denied, no element, bad arguments) are
 returned as tool results with `isError: true`, so the model can read and
@@ -262,7 +266,7 @@ A typical agent loop: `browser_navigate` → `browser_snapshot` →
   ```toml
   enabled = false          # start the control server with the browser
   allow_eval = false       # page.eval (arbitrary JavaScript in pages)
-  allow_navigation = true  # tabs.open, page.navigate, back/forward/reload
+  allow_navigation = true  # tabs.open, page.navigate, back/forward/reload, sessions.open/save
   allow_file_urls = false  # file:// in tabs.open / page.navigate
   # allowed_hosts = ["example.com", "intranet.local"]  # and their subdomains
   ```

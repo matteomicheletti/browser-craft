@@ -28,6 +28,10 @@ pub enum CommandId {
     ShowAllTabs,
     NameWindow,
     MoveTabToNewWindow,
+    // Session presets
+    SavePreset,
+    OpenPreset,
+    SessionPresets,
     // Tab groups and split view
     NewTabGroup,
     AddTabToGroup,
@@ -218,7 +222,7 @@ pub fn catalog() -> &'static [Command] {
     &CATALOG
 }
 
-static CATALOG: [Command; 69] = [
+static CATALOG: [Command; 72] = [
     cmd!(
         NewTab,
         "new-tab",
@@ -280,6 +284,33 @@ static CATALOG: [Command; 69] = [
         ["detach", "tear off", "pop out"],
         None,
         ph::ARROW_SQUARE_OUT,
+        Tabs
+    ),
+    cmd!(
+        SavePreset,
+        "save-preset",
+        "Save session as preset…",
+        ["session", "preset", "workspace", "save tabs", "snapshot"],
+        None,
+        ph::FLOPPY_DISK,
+        Tabs
+    ),
+    cmd!(
+        OpenPreset,
+        "open-preset",
+        "Open session preset…",
+        ["session", "preset", "workspace", "restore tabs"],
+        None,
+        ph::STACK,
+        Tabs
+    ),
+    cmd!(
+        SessionPresets,
+        "session-presets",
+        "Manage session presets",
+        ["session", "preset", "workspace", "rename", "delete", "export", "import"],
+        None,
+        ph::BROWSERS,
         Tabs
     ),
     cmd!(

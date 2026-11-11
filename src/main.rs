@@ -37,6 +37,8 @@ mod palette;
 mod passwords;
 mod recording;
 mod plugins;
+mod presets;
+mod presets_page;
 mod servo_pane;
 mod split;
 mod storage;
@@ -65,6 +67,18 @@ fn main() {
         std::process::exit(code);
     }
     automation::take_cli_flag(&mut args);
+    // `--preset NAME`: start with that session preset (see crate::presets).
+    let start_preset = match args.get(1).map(String::as_str) {
+        Some("import" | "--screenshot") => Ok(None),
+        _ => presets::take_cli_preset(&mut args),
+    };
+    let start_preset = match start_preset {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("browsecraft: {e}");
+            std::process::exit(2);
+        }
+    };
 
     flags::load();
     bookmarks::load();
@@ -139,7 +153,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let mut app = browser::App::new(event_loop.create_proxy(), fonts, start_tabs);
+    let mut app = browser::App::new(event_loop.create_proxy(), fonts, start_tabs, start_preset);
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("browsecraft: {e}");
     }

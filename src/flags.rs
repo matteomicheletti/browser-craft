@@ -35,6 +35,47 @@ pub enum Chrome {
     Engine,
 }
 
+/// What the browser opens at start-up ("On startup" on the settings page).
+/// Addresses on the command line and `--preset` come first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum Startup {
+    /// The previous session's windows and tabs.
+    #[default]
+    Continue,
+    /// A new tab (the session is not remembered).
+    NewTab,
+    /// The preset chosen on the settings page (`crate::presets`).
+    Preset,
+    /// A chooser: the previous session, a preset or a blank page.
+    Ask,
+}
+
+impl Startup {
+    pub const ALL: [Startup; 4] = [Startup::Continue, Startup::NewTab, Startup::Preset, Startup::Ask];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Startup::Continue => "continue",
+            Startup::NewTab => "new-tab",
+            Startup::Preset => "preset",
+            Startup::Ask => "ask",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Startup> {
+        Startup::ALL.into_iter().find(|s| s.key() == key)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Startup::Continue => "Continue previous session",
+            Startup::NewTab => "Open a new tab",
+            Startup::Preset => "Open a preset",
+            Startup::Ask => "Ask every time",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Flags {
     pub theme: Theme,
@@ -47,9 +88,11 @@ pub struct Flags {
     /// The most web views kept alive at once; the least recently used
     /// background tabs are unloaded beyond it.
     pub max_live_tabs: u32,
-    /// Reopen the previous session's tabs at start-up (each loads only when
-    /// first shown).
+    /// Remember the session (every window's tabs) so it can be reopened at
+    /// start-up; off exactly when `startup` is `NewTab`.
     pub restore_tabs: bool,
+    /// What opens at start-up.
+    pub startup: Startup,
     /// Use the desktop's own title bar and window frame instead of the
     /// browser's (tabs in the title bar, window buttons on the right).
     pub system_titlebar: bool,
@@ -98,6 +141,7 @@ const DEFAULT_FLAGS: Flags = Flags {
     suspend_after_min: 30,
     max_live_tabs: 16,
     restore_tabs: true,
+    startup: Startup::Continue,
     system_titlebar: false,
     hover_cards: true,
     hover_card_images: true,
@@ -125,6 +169,7 @@ fn load_from_mut(flags: &mut Flags) {
     let Ok(text) = crate::storage::read_text_limited(&path, crate::storage::MAX_SETTINGS_FILE) else {
         return;
     };
+    let mut startup_line = false;
     for line in text.lines() {
         let Some((key, value)) = line.split_once('=') else {
             continue;
@@ -158,6 +203,12 @@ fn load_from_mut(flags: &mut Flags) {
             }
             ("restore-tabs", "on") => flags.restore_tabs = true,
             ("restore-tabs", "off") => flags.restore_tabs = false,
+            ("startup", v) => {
+                if let Some(mode) = Startup::from_key(v) {
+                    flags.startup = mode;
+                    startup_line = true;
+                }
+            }
             ("system-titlebar", "on") => flags.system_titlebar = true,
             ("system-titlebar", "off") => flags.system_titlebar = false,
             ("hover-cards", "on") => flags.hover_cards = true,
@@ -197,6 +248,11 @@ fn load_from_mut(flags: &mut Flags) {
             _ => {}
         }
     }
+    // Files from before "On startup": the switch decides.
+    if !startup_line {
+        flags.startup = if flags.restore_tabs { Startup::Continue } else { Startup::NewTab };
+    }
+    flags.restore_tabs = flags.startup != Startup::NewTab;
 }
 
 fn save_to(path: &Path, flags: &Flags) -> std::io::Result<()> {
@@ -215,6 +271,7 @@ fn save_to(path: &Path, flags: &Flags) -> std::io::Result<()> {
     text += &format!("suspend-after={}\n", flags.suspend_after_min);
     text += &format!("max-live-tabs={}\n", flags.max_live_tabs);
     text += if flags.restore_tabs { "restore-tabs=on\n" } else { "restore-tabs=off\n" };
+    text += &format!("startup={}\n", flags.startup.key());
     text += if flags.system_titlebar { "system-titlebar=on\n" } else { "system-titlebar=off\n" };
     text += if flags.hover_cards { "hover-cards=on\n" } else { "hover-cards=off\n" };
     text += if flags.hover_card_images { "hover-card-images=on\n" } else { "hover-card-images=off\n" };
@@ -378,10 +435,33 @@ fn apply_query(pairs: impl Iterator<Item = (String, String)>) -> bool {
             ("restore-tabs", "on") => {
                 changed |= !flags.restore_tabs;
                 flags.restore_tabs = true;
+                if flags.startup == Startup::NewTab {
+                    flags.startup = Startup::Continue;
+                }
             }
             ("restore-tabs", "off") => {
                 changed |= flags.restore_tabs;
                 flags.restore_tabs = false;
+                flags.startup = Startup::NewTab;
+            }
+            ("startup", v) => {
+                if let Some(mode) = Startup::from_key(v) {
+                    changed |= flags.startup != mode;
+                    flags.startup = mode;
+                    flags.restore_tabs = mode != Startup::NewTab;
+                }
+            }
+            ("startup-preset", v) => {
+                // Kept with the presets (`presets.json`).
+                let id = v.parse::<u64>().ok();
+                if id.is_some_and(|id| crate::presets::store().startup_preset != Some(id))
+                    && crate::presets::modify(|s| s.set_startup(id)).is_ok()
+                {
+                    changed = true;
+                    // Choosing a preset also means opening it.
+                    flags.startup = Startup::Preset;
+                    flags.restore_tabs = true;
+                }
             }
             ("system-titlebar", "on") => {
                 changed |= !flags.system_titlebar;
@@ -501,13 +581,7 @@ pub fn page_html() -> String {
         "Beyond this, the least recently used background tabs are unloaded.",
         &live,
     );
-    let restore = internal::switch_row(
-        false,
-        "Reopen tabs at start-up",
-        "Restores the last session's tabs (not temporary containers). Each loads when you first open it.",
-        flags.restore_tabs,
-        &to("restore-tabs", if flags.restore_tabs { "off" } else { "on" }),
-    );
+    let restore = startup_rows(flags.startup, &to);
     let hover = internal::switch_row(
         false,
         "Tab hover cards",
@@ -578,6 +652,45 @@ pub fn page_html() -> String {
          <a class=\"btn ghost\" href=\"browsecraft://passwords\">Open</a></div></div>"
     );
     internal::page("Settings", &body)
+}
+
+/// "On startup" and, for "Open a preset", the preset to open. `to(key,
+/// value)` builds a link carrying the form token.
+fn startup_rows(current: Startup, to: &dyn Fn(&str, &str) -> String) -> String {
+    let options: Vec<(&'static str, String, bool)> =
+        Startup::ALL.iter().map(|m| (m.label(), to("startup", m.key()), *m == current)).collect();
+    let mut out = internal::segmented_row(
+        false,
+        "On startup",
+        "Previous session reopens every window's tabs (not temporary containers), each loading when first shown. \
+         Addresses on the command line and --preset always win.",
+        &options,
+    );
+    if current == Startup::Preset {
+        let store = crate::presets::store();
+        if store.presets.is_empty() {
+            out.push_str(
+                "<div class=\"row\"><div class=\"grow\"><div class=\"t\">Preset to open</div>\
+                 <div class=\"d\">No presets yet: save one with \u{201c}Save session as preset\u{2026}\u{201d}. Until then the previous session opens.</div></div>\
+                 <a class=\"btn ghost\" href=\"browsecraft://sessions\">Presets</a></div>",
+            );
+        } else {
+            let mut links = String::new();
+            for p in &store.presets {
+                links.push_str(&format!(
+                    "<a{} href=\"{}\">{}</a>",
+                    if store.startup_preset == Some(p.id) { " class=\"on\"" } else { "" },
+                    internal::escape(&to("startup-preset", &p.id.to_string())),
+                    internal::escape(&p.name)
+                ));
+            }
+            out.push_str(&format!(
+                "<div class=\"row\"><div class=\"grow\"><div class=\"t\">Preset to open</div>\
+                 <div class=\"d\">If it is deleted, the previous session opens instead.</div></div><div class=\"seg\">{links}</div></div>"
+            ));
+        }
+    }
+    out
 }
 
 /// The theme picker of the settings page: one swatch per theme, the current
@@ -730,7 +843,7 @@ mod tests {
         assert!(html.contains("chrome=auto\">Auto"), "unselected links have no class");
         assert!(!html.contains("tabs-position"), "tabs are always on top");
         assert!(html.contains("class=\"on\" href=\"browsecraft://flags?token="));
-        assert_eq!(html.matches("class=\"on\"").count(), 6, "one selected option per control");
+        assert_eq!(html.matches("class=\"on\"").count(), 7, "one selected option per control");
         assert_eq!(html.matches("class=\"theme on\"").count(), 1, "one theme selected");
         assert!(html.contains("theme=sand"), "every theme is offered");
         // The bookmarks-bar switch is off and offers to turn it on.
@@ -780,6 +893,37 @@ mod tests {
         let mut flags = Flags::default();
         load_from_mut(&mut flags);
         assert_eq!((flags.suspend_after_min, flags.max_live_tabs, flags.restore_tabs), (5, 4, false));
+        set(before).unwrap();
+    }
+
+    #[test]
+    fn startup_choice_round_trips_and_follows_the_old_switch() {
+        let _guard = SERIAL.lock().unwrap();
+        let before = get();
+        set(Flags::default()).unwrap();
+        assert_eq!(get().startup, Startup::Continue, "the previous session by default");
+        assert!(apply_query(vec![("startup".into(), "ask".into())].into_iter()));
+        assert!(get().restore_tabs, "asking needs the session");
+        assert!(!apply_query(vec![("startup".into(), "sometimes".into())].into_iter()));
+        let mut flags = Flags::default();
+        load_from_mut(&mut flags);
+        assert_eq!((flags.startup, flags.restore_tabs), (Startup::Ask, true));
+        assert!(apply_query(vec![("startup".into(), "new-tab".into())].into_iter()));
+        assert!(!get().restore_tabs, "a new tab: the session is not kept");
+        assert!(page_html().contains("On startup"));
+        // A file from before the setting: the old switch decides.
+        let path = file_path().unwrap();
+        std::fs::write(&path, "restore-tabs=off\n").unwrap();
+        let mut flags = Flags::default();
+        load_from_mut(&mut flags);
+        assert_eq!((flags.startup, flags.restore_tabs), (Startup::NewTab, false));
+        std::fs::write(&path, "restore-tabs=off\nstartup=preset\n").unwrap();
+        let mut flags = Flags::default();
+        load_from_mut(&mut flags);
+        assert_eq!((flags.startup, flags.restore_tabs), (Startup::Preset, true), "the choice wins");
+        for m in Startup::ALL {
+            assert_eq!(Startup::from_key(m.key()), Some(m));
+        }
         set(before).unwrap();
     }
 

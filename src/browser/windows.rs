@@ -132,6 +132,14 @@ pub(super) enum AppRequest {
     StopAutomation,
     /// New automation settings from a window that does not run the server.
     AutomationSettings(crate::automation::Settings),
+    /// Open a session preset (`crate::presets`).
+    OpenPreset { id: u64, target: crate::presets::OpenTarget },
+    /// Save this window's tabs (`all`: every window's) as a new preset.
+    SavePreset { name: String, all: bool },
+    /// Replace a preset's tabs with the current ones.
+    UpdatePreset { id: u64, all: bool },
+    /// The start-up chooser's "Previous session".
+    RestorePrevious,
 }
 
 /// How a window starts.
@@ -250,6 +258,17 @@ pub(super) fn session_text(windows: &[Value]) -> String {
     root.to_string()
 }
 
+/// The notice after opening `name`, mentioning tabs that lost their
+/// container.
+pub(super) fn preset_notice(name: &str, missing: usize) -> String {
+    let opened = if name == "the previous session" { "Restored the previous session".to_string() } else { format!("Opened \u{201c}{name}\u{201d}") };
+    match missing {
+        0 => opened,
+        1 => format!("{opened}; 1 tab opened without its container, which no longer exists"),
+        n => format!("{opened}; {n} tabs opened without their containers, which no longer exist"),
+    }
+}
+
 /// The application: every browser window.
 /// How often bookmarks.json is checked for changes by other processes.
 const BOOKMARKS_POLL: Duration = Duration::from_secs(2);
@@ -259,6 +278,8 @@ pub struct App {
     shared: Rc<RefCell<Shared>>,
     browsers: Vec<Browser>,
     start_tabs: Vec<StartTab>,
+    /// `--preset NAME` from the command line.
+    start_preset: Option<String>,
     first_fonts: Option<Fonts>,
     next_key: u64,
     /// The window the user last used (keys from pages, new tabs from
@@ -280,7 +301,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(proxy: EventLoopProxy<UserMessage>, fonts: Fonts, start_tabs: Vec<StartTab>) -> Self {
+    pub fn new(proxy: EventLoopProxy<UserMessage>, fonts: Fonts, start_tabs: Vec<StartTab>, start_preset: Option<String>) -> Self {
         let imports = proxy.clone();
         crate::import::set_notifier(move |event| {
             let _ = imports.send_event(UserMessage::Import(event));
@@ -291,6 +312,7 @@ impl App {
             shared: Rc::new(RefCell::new(Shared::new())),
             browsers: Vec::new(),
             start_tabs,
+            start_preset,
             first_fonts: Some(fonts),
             next_key: 1,
             last_active: 1,
@@ -457,7 +479,113 @@ impl App {
                     b.request_redraw();
                 }
             }
+            AppRequest::OpenPreset { id, target } => {
+                let result = self.open_preset(event_loop, from, id, target);
+                self.preset_result(result);
+            }
+            AppRequest::SavePreset { name, all } => {
+                let result = self.save_preset(from, &name, all).map(|_| ());
+                let result = result.map(|()| format!("Saved preset \u{201c}{}\u{201d}", crate::presets::clean_name(&name)));
+                self.preset_result(result);
+            }
+            AppRequest::UpdatePreset { id, all } => {
+                let windows = self.capture_windows(from, all);
+                let result = crate::presets::modify(|s| s.update(id, windows, crate::presets::now()))
+                    .map(|()| format!("Updated preset \u{201c}{}\u{201d}", crate::presets::get(id).map(|p| p.name).unwrap_or_default()));
+                self.preset_result(result);
+            }
+            AppRequest::RestorePrevious => {
+                let result = self.restore_previous(event_loop, from);
+                self.preset_result(result);
+            }
         }
+    }
+
+    // ---- session presets ----
+
+    /// Shows the outcome of a preset action: a notice in the active
+    /// window, and on the presets page wherever it is open.
+    fn preset_result(&mut self, result: Result<String, String>) {
+        crate::presets_page::set_message(result.clone());
+        let i = self.active_index();
+        if let Some(b) = self.browsers.get_mut(i) {
+            match result {
+                Ok(m) | Err(m) => b.set_notice_long(m),
+            }
+        }
+        for b in &mut self.browsers {
+            b.refresh_if_internal(crate::presets_page::URL);
+        }
+    }
+
+    /// Window snapshots of window `from`, or of every window (`all`).
+    fn capture_windows(&self, from: u64, all: bool) -> Vec<crate::presets::PresetWindow> {
+        let values: Vec<Value> = self.browsers.iter().filter(|b| all || b.win_key == from).map(Browser::session_value).collect();
+        crate::presets::capture(&values)
+    }
+
+    /// Saves window `from` (or every window) as a new preset.
+    fn save_preset(&mut self, from: u64, name: &str, all: bool) -> Result<u64, String> {
+        let windows = self.capture_windows(from, all);
+        crate::presets::modify(|s| s.add(name, windows, crate::presets::now()))
+    }
+
+    /// Opens `windows` as new windows (each with its name), loading only
+    /// each one's shown tab. Returns how many opened.
+    fn open_new_windows(&mut self, event_loop: &ActiveEventLoop, windows: &[crate::presets::PresetWindow]) -> usize {
+        let mut opened = 0;
+        for w in windows {
+            let setup = WindowSetup { name: w.name.clone(), ..WindowSetup::default() };
+            if let Some(i) = self.spawn(event_loop, setup, Vec::new()) {
+                if !self.browsers[i].restore_window(&w.to_session()) {
+                    self.browsers[i].new_window_tab();
+                }
+                opened += 1;
+            }
+        }
+        opened
+    }
+
+    /// Opens preset `id` in new windows or in window `from`.
+    fn open_preset(&mut self, event_loop: &ActiveEventLoop, from: u64, id: u64, target: crate::presets::OpenTarget) -> Result<String, String> {
+        use crate::presets::OpenTarget;
+        let p = crate::presets::get(id).ok_or("That preset no longer exists")?;
+        let missing = match target {
+            OpenTarget::NewWindow => {
+                let gone = p.missing_containers(&|c| crate::containers::get(c).is_some());
+                if self.open_new_windows(event_loop, &p.windows) == 0 {
+                    return Err(format!("Could not open \u{201c}{}\u{201d}", p.name));
+                }
+                gone
+            }
+            OpenTarget::Here | OpenTarget::Replace => {
+                let i = self.index_of_key(from).ok_or("The window is gone")?;
+                let (opened, gone) = self.browsers[i].open_preset_here(&p.windows, target == OpenTarget::Replace);
+                if opened == 0 {
+                    return Err(format!("\u{201c}{}\u{201d} has no tabs to open here", p.name));
+                }
+                self.last_active = from;
+                gone
+            }
+        };
+        Ok(preset_notice(&p.name, missing))
+    }
+
+    /// The start-up chooser's "Previous session": its first window in
+    /// place of window `from`'s tabs, the others as new windows.
+    fn restore_previous(&mut self, event_loop: &ActiveEventLoop, from: u64) -> Result<String, String> {
+        let path = crate::storage::config_file(crate::presets::PREVIOUS_SESSION_FILE)?;
+        let text = crate::storage::read_text_limited(&path, crate::storage::MAX_SETTINGS_FILE).map_err(|_| "There is no previous session".to_string())?;
+        let mut windows = session_windows(&text);
+        if windows.is_empty() {
+            return Err("There is no previous session".into());
+        }
+        let rest = windows.split_off(1);
+        let first = crate::presets::PresetWindow::from_session(&windows[0]);
+        let i = self.index_of_key(from).ok_or("The window is gone")?;
+        let (_, missing) = self.browsers[i].open_preset_here(std::slice::from_ref(&first), true);
+        self.restore_rest(event_loop, rest);
+        Ok(preset_notice("the previous session", missing))
     }
 
     /// A tab dragged out of window `from` was released at screen point
@@ -675,10 +803,15 @@ impl App {
     /// An automation request: `tabs.list` covers every window; a request
     /// naming a tab goes to its window, `tabs.open` to the `window` asked
     /// for; the rest to the active window.
-    fn automation(&mut self, req: crate::automation::Request) {
+    fn automation(&mut self, event_loop: &ActiveEventLoop, req: crate::automation::Request) {
         use crate::automation::{Method, RpcError};
         if !self.browsers.iter().any(|b| b.feat.automation.is_some()) {
             req.respond(Err(RpcError::denied("automation is disabled")));
+            return;
+        }
+        if matches!(req.method, Method::SessionsList | Method::SessionsOpen | Method::SessionsSave) {
+            let result = self.automation_sessions(event_loop, &req);
+            req.respond(result);
             return;
         }
         if req.method == Method::TabsList {
@@ -711,6 +844,51 @@ impl App {
         };
         if let Some(b) = self.browsers.get_mut(target) {
             b.automation_request(req);
+        }
+    }
+
+    /// `sessions.list`, `sessions.open` and `sessions.save`.
+    fn automation_sessions(&mut self, event_loop: &ActiveEventLoop, req: &crate::automation::Request) -> Result<Value, crate::automation::RpcError> {
+        use crate::automation::protocol as p;
+        use crate::automation::{Method, RpcError};
+        use crate::presets::OpenTarget;
+        let info = |pr: &crate::presets::Preset| p::SessionInfo {
+            name: pr.name.clone(),
+            windows: pr.windows.len(),
+            tabs: pr.tab_count(),
+            created: pr.created,
+            updated: pr.updated,
+        };
+        fn to_value<T: serde::Serialize>(v: &T) -> Result<Value, RpcError> {
+            serde_json::to_value(v).map_err(|e| RpcError::new(RpcError::INTERNAL, e.to_string()))
+        }
+        match req.method {
+            Method::SessionsList => {
+                let sessions = crate::presets::all().iter().map(info).collect();
+                to_value(&p::SessionsListResult { sessions })
+            }
+            Method::SessionsOpen => {
+                let params: p::SessionsOpenParams = req.params()?;
+                let preset = crate::presets::find(&params.name).ok_or_else(|| RpcError::browser(format!("no preset named {:?} (see sessions.list)", params.name)))?;
+                let target = match params.window {
+                    p::SessionWindow::New => OpenTarget::NewWindow,
+                    p::SessionWindow::Current => OpenTarget::Here,
+                };
+                let from = self.browsers.get(self.active_index()).map_or(0, |b| b.win_key);
+                let notice = self.open_preset(event_loop, from, preset.id, target).map_err(RpcError::browser)?;
+                self.refresh_window_list();
+                to_value(&p::SessionResult { session: info(&preset), notice: Some(notice) })
+            }
+            _ => {
+                let params: p::SessionsSaveParams = req.params()?;
+                let from = self.browsers.get(self.active_index()).map_or(0, |b| b.win_key);
+                let id = self.save_preset(from, &params.name, params.scope == p::SessionScope::All).map_err(RpcError::browser)?;
+                for b in &mut self.browsers {
+                    b.refresh_if_internal(crate::presets_page::URL);
+                }
+                let saved = crate::presets::get(id).ok_or_else(|| RpcError::browser("the preset was not saved"))?;
+                to_value(&p::SessionResult { session: info(&saved), notice: None })
+            }
         }
     }
 
@@ -791,24 +969,71 @@ impl ApplicationHandler<UserMessage> for App {
         if !self.browsers.is_empty() {
             return;
         }
+        // What to open: command-line addresses, `--preset`, or the
+        // "On startup" setting (`crate::presets::startup_plan`).
+        use crate::presets::StartupPlan;
+        let mut start = std::mem::take(&mut self.start_tabs);
+        let store = crate::presets::store();
+        let (plan, notice) = crate::presets::startup_plan(!start.is_empty(), self.start_preset.as_deref(), flags::get().startup, &store);
+        let saved = flags::get()
+            .restore_tabs
+            .then(|| crate::storage::config_file(SESSION_FILE).ok())
+            .flatten()
+            .and_then(|path| crate::storage::read_text_limited(&path, crate::storage::MAX_SETTINGS_FILE).ok());
         // The session's windows: the first opens now, the rest after it.
-        let start = std::mem::take(&mut self.start_tabs);
         let mut session = Vec::new();
-        if start.is_empty()
-            && flags::get().restore_tabs
-            && let Ok(path) = crate::storage::config_file(SESSION_FILE)
-            && let Ok(text) = crate::storage::read_text_limited(&path, crate::storage::MAX_SETTINGS_FILE)
-        {
-            session = session_windows(&text);
-            self.saved_session = text;
+        let mut preset = Vec::new();
+        match &plan {
+            StartupPlan::Session => {
+                if let Some(text) = saved {
+                    session = session_windows(&text);
+                    self.saved_session = text;
+                }
+            }
+            StartupPlan::Ask => {
+                // The chooser restores it from a copy: session.json is
+                // rewritten with what opens now.
+                if let Ok(path) = crate::storage::config_file(crate::presets::PREVIOUS_SESSION_FILE) {
+                    match saved.filter(|t| !session_windows(t).is_empty()) {
+                        Some(text) => drop(crate::storage::write_private(&path, text.as_bytes())),
+                        None => drop(std::fs::remove_file(&path)),
+                    }
+                }
+                start = vec![StartTab { url: format!("{}?startup=1", crate::presets_page::URL), container: super::ContainerChoice::None }];
+            }
+            StartupPlan::Preset(id) => preset = store.get(*id).map(|p| p.windows.clone()).unwrap_or_default(),
+            StartupPlan::CommandLine | StartupPlan::NewTab => {}
         }
-        let setup = session.first().map(WindowSetup::from_session).unwrap_or_default();
+        let setup = match (session.first(), preset.first()) {
+            (Some(w), _) => WindowSetup::from_session(w),
+            (None, Some(w)) => WindowSetup { name: w.name.clone(), ..WindowSetup::default() },
+            _ => WindowSetup::default(),
+        };
         let Some(i) = self.spawn(event_loop, setup, start) else {
             event_loop.exit();
             return;
         };
         let rest = if session.is_empty() { Vec::new() } else { session.split_off(1) };
-        self.browsers[i].open_start_tabs(session.first());
+        let mut notice = notice;
+        match plan {
+            StartupPlan::NewTab => self.browsers[i].new_window_tab(),
+            StartupPlan::Preset(id) if !preset.is_empty() => {
+                if !self.browsers[i].restore_window(&preset[0].to_session()) {
+                    self.browsers[i].new_window_tab();
+                }
+                self.open_new_windows(event_loop, &preset[1..]);
+                let missing = store.get(id).map_or(0, |p| p.missing_containers(&|c| crate::containers::get(c).is_some()));
+                if missing > 0 {
+                    notice = Some(preset_notice(&store.get(id).map(|p| p.name.clone()).unwrap_or_default(), missing));
+                }
+            }
+            _ => self.browsers[i].open_start_tabs(session.first()),
+        }
+        if let Some(n) = notice {
+            self.browsers[i].set_notice_long(n);
+        }
+        // The first window is the active one.
+        self.last_active = self.browsers[i].win_key;
         self.browsers[i].start_automation();
         if !rest.is_empty() || !session.is_empty() {
             self.restore_rest(event_loop, rest);
@@ -854,7 +1079,7 @@ impl ApplicationHandler<UserMessage> for App {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, message: UserMessage) {
         if let UserMessage::Automation(req) = message {
-            self.automation(req);
+            self.automation(event_loop, req);
             self.process(event_loop);
             return;
         }
