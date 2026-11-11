@@ -120,6 +120,15 @@ See `docs/AUTOMATION.md`.
   and F1 open the palette). Overlays show a WebKit snapshot of
   the page on Linux. Detached inspector window: not working (WebKit closes
   it). Palette, plugins and the JS console: wired in the integration step.
+- **Window chrome (wave 3, branch `wave3/chrome`)**: own window frame like
+  ArtCraft Launcher and Chrome (tabs and window buttons in the title bar row,
+  drag / double-click / window menu, resize from every edge, *Use system title
+  bar* fallback, hidden in full screen); a theme system with eight themes plus
+  Follow system, used by all the chrome and the internal pages, switched live
+  from the toolbar, palette (`%`) and settings; the authenticator as a QR-code
+  button. Verified on the GNOME session (screenshots, maximize / restore /
+  minimize / close through the debug hook); moving and resizing by hand are in
+  `MANUAL_TESTS.md` §7.
 
 ### M3: Multi-Account Containers (in progress: Linux implemented and verified live)
 

@@ -27,6 +27,7 @@ Prefixes narrow the search:
 | `@`    | open tabs                             |
 | `#`    | bookmarks and history                 |
 | `~`    | containers (`~ example.com` opens the address in the chosen one) |
+| `%`    | themes (*Change theme…* opens this list; the current one is tagged) |
 | `?`    | lists the prefixes                    |
 
 Text that looks like an address (`example.com`, `localhost:3000`) or a search

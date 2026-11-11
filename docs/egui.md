@@ -98,14 +98,42 @@ collapse to zero size and the pane fills the window.
 `egui-phosphor` crate, codepoints in `src/icons.rs`) as the `phosphor` egui
 family and draws the toolbar as an icon row (back/forward/reload-stop/home, a
 rounded address pill with a leading lock/globe and a trailing bookmark star,
-theme and flags buttons, the password key menu at the right edge, and a
+theme menu and flags buttons, the password key menu at the right edge, and a
 sliding loading bar) plus a "New tab" button and a hoverable tab list (globe,
 truncated title, close button on the active or hovered row, accent bar on the
 active row, and a right-click menu to duplicate, close or close other tabs).
 Under the toolbar sit the bookmarks bar (overflow in a `»` menu, right-click
-and middle-click actions) and the "save this login?" bar. Visuals are themed from the same palette as the engine chrome
-(`Colors::for_dark`), and `apply_style` sets the widget spacing/rounding once
-per frame.
+and middle-click actions) and the "save this login?" bar. Colours come from the current theme (`src/theme.rs`: a `Theme` is a set of
+tokens: background, surface, surface-2, border, text, muted text, accent and
+the text on it, danger, warning, success, active/inactive tab, address bar,
+drawer, internal page and card). `Colors::from_theme` maps them for egui,
+`browser.rs`'s `palette()` for the software chrome and `internal::themed` for
+the internal pages' `@token@` CSS. Chrome code names no colour of its own; the
+exceptions are identity colours (containers, account avatars). `apply_style`
+installs the visuals and the widget spacing/rounding once per frame, so a
+theme change shows on the next frame.
+
+## Window frame
+
+Unless *Use system title bar* is on (or the software chrome runs), the window
+is created with `with_decorations(false)` and `src/titlebar.rs` provides the
+frame: `drag_area` (an interaction under the title bar row's widgets: drag →
+`Window::drag_window`, double-click → maximize toggle, right-click → window
+menu), `window_buttons` (minimize, maximize/restore, close, stroked like the
+desktop's) and `window_edges` (resize bands above every egui layer, pointer
+shapes, press → `Window::drag_resize_window`). They return `WindowOp`s that
+`Browser::window_op` applies. The title bar row is the tab strip (tabs on top)
+or the toolbar (sidebar / hidden tabs). The web view is a native X11 child
+window that would swallow the pointer, so `page_rect` insets the page by the
+5-point band on the left, right and bottom (zero when maximized or full
+screen) and empty egui panels fill the band. After a move or resize the
+window manager keeps the button release, so a synthetic release is fed to
+egui. The adaptation of ArtCraft Launcher's widgets is credited in
+`THIRD_PARTY_NOTICES.md`. Debug builds read `BROWSECRAFT_WINDOW_SCRIPT`
+(`"2:maximize,4:restore,6:minimize,8:close"`, also `fullscreen`,
+`system-titlebar`, `custom-titlebar`, `palette`, `themes`, `authenticator`,
+`containers`, `theme-next`) to run these operations without input, which
+`xdotool` cannot send on a GNOME session.
 
 Because the icon font is compiled into the binary, icons render in every
 working directory; there is no loose asset to miss (the previous Font Awesome
