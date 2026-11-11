@@ -1,0 +1,7 @@
+#bc-hello-banner {
+  font: 14px/1.4 system-ui, sans-serif;
+  padding: 8px 14px;
+  background: #5b8def;
+  color: #fff;
+  text-align: center;
+}

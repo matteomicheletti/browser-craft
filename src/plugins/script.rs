@@ -126,4 +126,95 @@ mod tests {
             assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
         }
     }
+
+    #[test]
+    fn shipped_examples_are_valid() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/plugins");
+        let mut n = 0;
+        for e in std::fs::read_dir(dir).unwrap().flatten() {
+            if e.path().is_dir() {
+                crate::plugins::manifest::load_dir(&e.path()).unwrap_or_else(|err| panic!("{}: {err:?}", e.path().display()));
+                n += 1;
+            }
+        }
+        assert!(n >= 3);
+    }
+}
+
+/// Real-WebKit check, run by hand: needs python3-gi with WebKit2 4.1.
+#[cfg(test)]
+mod live {
+    use super::*;
+    use crate::plugins::{bridge, manifest};
+    use std::io::{BufRead, Write};
+    use std::process::{Command, Stdio};
+
+    fn copy_with(src: &str, dest: &std::path::Path, replace: &[(&str, &str)]) {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/plugins").join(src);
+        std::fs::create_dir_all(dest).unwrap();
+        for e in std::fs::read_dir(src).unwrap().flatten() {
+            let mut t = std::fs::read_to_string(e.path()).unwrap();
+            for (a, b) in replace {
+                t = t.replace(a, b);
+            }
+            std::fs::write(dest.join(e.file_name()), t).unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "needs a display-less WebKitGTK 4.1 via python3-gi; run by hand"]
+    fn plugin_script_in_webkit() {
+        let _ = manifest::MANIFEST_FILE;
+        let out = std::env::var("BC_LIVE_OUT").unwrap_or_else(|_| "/tmp".into());
+        let d = tempfile::tempdir().unwrap();
+        let dev = d.path().join("dev");
+        // The examples, pointed at the harness' local server.
+        copy_with("hello-world", &dev.join("hello"), &[("*://example.com/*", "*://127.0.0.1/*"), ("\"*://*.example.com/*\"", "\"*://127.0.0.2/*\"")]);
+        copy_with("word-counter", &dev.join("counter"), &[]);
+        copy_with("site-css-tweak", &dev.join("css"), &[("*://*.wikipedia.org/wiki/*", "*://127.0.0.1/wiki/*"), ("*://*.wikipedia.org/wiki/Special:*", "*://127.0.0.1/wiki/Special:*")]);
+        let mut reg = Registry::open(d.path().join("cfg"));
+        reg.add_dev_folder(&dev).unwrap();
+        let script = d.path().join("page_script.js");
+        std::fs::write(&script, page_script(&reg)).unwrap();
+        let harness = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/plugins_live.py");
+        let targets = ["127.0.0.1:/", "localhost:/", "127.0.0.1:/csp", "127.0.0.1:/wiki/Test", "127.0.0.1:/wiki/csp"];
+        let mut child = Command::new("python3")
+            .env("GDK_BACKEND", "x11").env("WEBKIT_DISABLE_COMPOSITING_MODE", "1").env("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
+            .arg("-I").arg(&harness).arg(&script).arg(&out).args(targets)
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).spawn().unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut lines = std::io::BufReader::new(child.stdout.take().unwrap()).lines();
+        let (mut results, mut bodies) = (Vec::new(), Vec::new());
+        while let Some(Ok(line)) = lines.next() {
+            let Ok(v) = serde_json::from_str::<Value>(&line) else { continue };
+            if let Some(body) = v["msg"].as_str() {
+                bodies.push(body.to_string());
+                let reply = bridge::parse_page_message(body).and_then(|c| bridge::dispatch(&mut reg, c, Some("http://127.0.0.1/")).reply);
+                writeln!(stdin, "{}", json!({ "reply": reply })).unwrap();
+            } else if v.get("result").is_some() {
+                results.push(v["result"].clone());
+                if results.len() == targets.len() {
+                    break;
+                }
+            } else if v.get("error").is_some() {
+                panic!("harness: {v}");
+            }
+        }
+        drop(stdin);
+        let _ = child.wait();
+        println!("{results:#?}\n{bodies:#?}");
+        assert_eq!(results.len(), targets.len());
+        let f = |i: usize, k: &str| results[i]["facts"][k].clone();
+        assert!(f(0, "banner").as_str().unwrap().starts_with("Hello from a BrowseCraft plugin"), "hello ran");
+        assert!(f(0, "badge").as_str().is_some_and(|b| b.ends_with(" words")), "counter ran");
+        assert_eq!(f(0, "leaked"), json!("undefined"), "bc is not a global");
+        assert_eq!(f(1, "banner"), Value::Null, "host mismatch: hello must not run on localhost");
+        assert!(f(1, "badge").is_string(), "counter matches every http host");
+        assert_eq!(f(2, "banner"), Value::Null, "strict CSP (no unsafe-eval) blocks plugin JS: documented limitation");
+        assert!(f(4, "lineHeight").as_str().unwrap().starts_with("27.2"), "CSS still applies under a strict CSP");
+        assert!(f(3, "lineHeight").as_str().unwrap().starts_with("27.2"), "CSS-only plugin applied");
+        assert_eq!(f(3, "banner").is_string(), true);
+        assert!(reg.storage_get("dev.browsecraft.examples.word-counter", "largest").unwrap()["words"].as_u64().unwrap() > 50, "storage via the bridge");
+        assert!(bodies.iter().any(|b| b.contains("\"m\":\"storage.set\"")));
+    }
 }
