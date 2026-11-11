@@ -17,8 +17,12 @@
 
 pub mod import;
 pub mod otp;
+pub mod panel;
 pub mod uri;
 pub mod vault;
+
+#[allow(unused_imports)] // wired in integration
+pub use panel::{AuthEvent, AuthenticatorPanel};
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
