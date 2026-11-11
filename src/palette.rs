@@ -383,9 +383,13 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
         return rows;
     }
 
+    // A typed address comes first. A web search comes first only when no
+    // command matches: "dark site" should run the command on Enter.
+    let mut search_row = None;
     if mode == Mode::All
         && let Some(typed) = classify(q)
     {
+        let is_search = matches!(typed, Typed::Search(_));
         let (label, detail, url) = match typed {
             Typed::Url(u) => (format!("Open {q}"), "Open in a new tab".to_string(), u),
             Typed::Search(u) => (
@@ -401,7 +405,11 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
             label,
         );
         r.detail = detail;
-        rows.push(r);
+        if is_search {
+            search_row = Some(r);
+        } else {
+            rows.push(r);
+        }
     }
 
     if matches!(mode, Mode::All | Mode::Commands) {
@@ -437,10 +445,18 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
                 .collect();
             found.sort_by_key(|f| std::cmp::Reverse(f.0));
             let cap = if mode == Mode::All { 7 } else { BIG_LIMIT };
+            if found.is_empty()
+                && let Some(r) = search_row.take()
+            {
+                rows.push(r);
+            }
             for (_, c, pos) in found.into_iter().take(cap) {
                 rows.push(command_row("Commands", c, s, pos));
             }
         }
+    }
+    if let Some(r) = search_row {
+        rows.push(r);
     }
 
     if matches!(mode, Mode::All | Mode::Tabs) && (mode == Mode::Tabs || !q.is_empty()) {
@@ -555,8 +571,9 @@ fn display_title(title: &str, url: &str) -> String {
 
 #[derive(Default)]
 struct Keys {
-    down: bool,
-    up: bool,
+    /// Presses this frame (fast typists and key repeat can send several).
+    down: usize,
+    up: usize,
     page_down: bool,
     page_up: bool,
     enter: bool,
@@ -675,8 +692,8 @@ impl Palette {
         let keys = ctx.input_mut(|i| {
             let none = Modifiers::NONE;
             Keys {
-                down: i.consume_key(none, Key::ArrowDown),
-                up: i.consume_key(none, Key::ArrowUp),
+                down: i.count_and_consume_key(none, Key::ArrowDown),
+                up: i.count_and_consume_key(none, Key::ArrowUp),
                 page_down: i.consume_key(none, Key::PageDown),
                 page_up: i.consume_key(none, Key::PageUp),
                 enter: i.consume_key(none, Key::Enter),
@@ -796,12 +813,12 @@ impl Palette {
         // Keyboard.
         if n > 0 {
             let mut moved = false;
-            if keys.down {
-                self.selected = (self.selected + 1) % n;
+            if keys.down > 0 {
+                self.selected = (self.selected + keys.down) % n;
                 moved = true;
             }
-            if keys.up {
-                self.selected = (self.selected + n - 1) % n;
+            if keys.up > 0 {
+                self.selected = (self.selected + n - keys.up % n) % n;
                 moved = true;
             }
             if keys.page_down {
@@ -875,7 +892,7 @@ impl Palette {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 14.0;
                     for (k, what) in [
-                        ("\u{2191}\u{2193}", "navigate"),
+                        ("Up/Down", "navigate"),
                         ("Enter", "select"),
                         ("Tab", "next section"),
                         ("Esc", "close"),
@@ -1417,6 +1434,10 @@ mod tests {
         );
         let rows = build_rows("rust tutorial", &sources(), &[]);
         assert!(rows[0].label.starts_with("Search the web"));
+        // A query that names a command runs it on Enter; the search follows.
+        let rows = build_rows("dark site", &sources(), &[]);
+        assert_eq!(rows[0].section, "Commands");
+        assert!(rows.iter().any(|r| r.label.starts_with("Search the web")));
         // Prefix modes never offer it.
         assert!(
             build_rows("> example.com", &sources(), &[])
