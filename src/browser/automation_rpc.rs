@@ -61,6 +61,20 @@ impl Browser {
             active: i == self.active,
             loading,
             container: self.tab_container(i),
+            group: self.groups.group_of(self.tab_id_at(i)).map(|g| p::TabGroupInfo {
+                id: g.id,
+                name: g.name.clone(),
+                color: g.color.name().to_ascii_lowercase(),
+                collapsed: g.collapsed,
+            }),
+            split: self.split.and_then(|s| {
+                let id = self.tab_id_at(i);
+                let side = match s.side_of(id)? {
+                    crate::split::Side::Left => "left",
+                    crate::split::Side::Right => "right",
+                };
+                Some(p::SplitInfo { side: side.to_string(), with: s.other(id)? })
+            }),
         }
     }
 

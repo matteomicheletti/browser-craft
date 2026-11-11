@@ -517,6 +517,31 @@ pub struct TabInfo {
     pub loading: bool,
     #[serde(default)]
     pub container: Option<String>,
+    /// The tab group the tab is in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<TabGroupInfo>,
+    /// The tab is shown in split view: `"left"` or `"right"` pane, with the
+    /// other tab's id. The active tab is the focused pane.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split: Option<SplitInfo>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TabGroupInfo {
+    pub id: u64,
+    #[serde(default)]
+    pub name: String,
+    /// One of grey, blue, red, yellow, green, pink, purple, cyan, orange.
+    #[serde(default)]
+    pub color: String,
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SplitInfo {
+    pub side: String,
+    pub with: TabId,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -780,5 +805,25 @@ mod tests {
         let v = VersionResult::current();
         assert_eq!(v.api_version, API_VERSION);
         assert!(v.methods.iter().any(|m| m == "page.snapshot"));
+    }
+
+    #[test]
+    fn tab_info_group_and_split_are_optional() {
+        let old: TabInfo = serde_json::from_value(json!({
+            "id": 1, "index": 0, "url": "https://a.example/", "title": "A", "active": true, "loading": false
+        }))
+        .unwrap();
+        assert_eq!((&old.group, &old.split), (&None, &None));
+        // Absent fields are not written either.
+        let out = serde_json::to_value(&old).unwrap();
+        assert!(out.get("group").is_none() && out.get("split").is_none());
+        let new: TabInfo = serde_json::from_value(json!({
+            "id": 2, "index": 1, "url": "u", "title": "t", "active": false, "loading": false,
+            "group": {"id": 4, "name": "Work", "color": "blue", "collapsed": true},
+            "split": {"side": "right", "with": 1}
+        }))
+        .unwrap();
+        assert_eq!(new.group.map(|g| (g.name, g.collapsed)), Some(("Work".to_string(), true)));
+        assert_eq!(new.split.map(|s| (s.side, s.with)), Some(("right".to_string(), 1)));
     }
 }
