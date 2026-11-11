@@ -9,6 +9,7 @@
 mod adblock;
 mod address;
 mod authenticator;
+mod automation;
 mod bookmarks;
 mod browser;
 mod capture;
@@ -20,6 +21,8 @@ mod egui_chrome;
 mod flags;
 mod font;
 mod headless;
+#[cfg(target_os = "linux")]
+mod headless_webkit;
 mod history;
 mod html;
 mod icons;
@@ -45,6 +48,14 @@ mod webview_network;
 use winit::event_loop::EventLoop;
 
 fn main() {
+    // Automation sub-commands (`ctl`, `mcp`, `headless`) run instead of the
+    // browser; `--automation` starts it with the control socket on.
+    let mut args: Vec<String> = std::env::args().collect();
+    if let Some(code) = automation::run_cli(&args) {
+        std::process::exit(code);
+    }
+    automation::take_cli_flag(&mut args);
+
     flags::load();
     bookmarks::load();
     passwords::load();
@@ -56,7 +67,6 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let args: Vec<String> = std::env::args().collect();
     if matches!(args.get(1).map(String::as_str), Some("--version" | "-V")) {
         println!("browsecraft {}", env!("CARGO_PKG_VERSION"));
         return;
@@ -85,9 +95,9 @@ fn main() {
         }
         return;
     }
-    let start_url = std::env::args()
-        .nth(1)
-        .map(|arg| address::resolve(&arg))
+    let start_url = args
+        .get(1)
+        .map(|arg| address::resolve(arg))
         .unwrap_or_else(|| browser::HOME_URL.to_string());
 
     #[cfg(target_os = "linux")]

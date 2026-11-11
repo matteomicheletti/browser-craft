@@ -1,0 +1,25 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>automation probe</title>
+<style>body{font:16px sans-serif;margin:24px} #far{margin-top:2000px}</style></head>
+<body>
+<!-- Target page for `browsecraft headless run` and the control API's page.* methods. -->
+<h1>Automation probe</h1>
+<form id="f" action="#" onsubmit="event.preventDefault(); document.getElementById('out').textContent = 'submitted ' + this.q.value + ' ' + this.color.value + ' ' + this.agree.checked;">
+  <label>Query <input id="q" name="q" placeholder="type here"></label>
+  <label>Password <input id="pw" name="pw" type="password" value="hunter2"></label>
+  <select id="color" name="color"><option value="r">Red</option><option value="g">Green</option></select>
+  <label><input id="agree" name="agree" type="checkbox"> I agree</label>
+  <button id="go">Send</button>
+</form>
+<p id="out">idle</p>
+<div id="ed" contenteditable="true">edit me</div>
+<button id="later" onclick="setTimeout(function () { var p = document.createElement('p'); p.id = 'late'; p.textContent = 'arrived'; document.body.appendChild(p); }, 300)">Load later</button>
+<p id="keys"></p>
+<script>
+document.addEventListener('keydown', function (e) { document.getElementById('keys').textContent += e.key + ' '; });
+customElements.define('x-shadow', class extends HTMLElement { constructor() { super(); this.attachShadow({mode: 'open'}).innerHTML = '<button id="inner">Shadow button</button>'; this.shadowRoot.getElementById('inner').onclick = function () { document.getElementById('out').textContent = 'shadow clicked'; }; } });
+console.warn('probe ready');
+</script>
+<x-shadow></x-shadow>
+<p id="far">far below</p>
+</body></html>
