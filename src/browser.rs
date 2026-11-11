@@ -3757,6 +3757,10 @@ impl Browser {
                 }
                 #[cfg(target_os = "linux")]
                 {
+                    // `with_visible(false)` only hides the GTK widget: wry's
+                    // X11 container (a black window over the initial bounds)
+                    // stays mapped and covers engine pages until it is hidden.
+                    let _ = wv.set_visible(false);
                     attach_webview_shortcuts_gtk(&wv, self.proxy.clone(), self.chrome_keys.clone());
                     attach_webview_extras_gtk(&wv, self.proxy.clone(), tab);
                     let key = container.unwrap_or("");
