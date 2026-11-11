@@ -524,6 +524,8 @@ pub struct Browser {
     strip_bottom: f32,
     /// A tab chip being dragged: its tab id.
     strip_drag: Option<u64>,
+    /// The left button went down on a chip: its tab id and where (points).
+    strip_press: Option<(u64, (f32, f32))>,
     /// "Name window…": the text being typed.
     rename: Option<String>,
     fonts: Fonts,
@@ -2171,6 +2173,7 @@ impl Browser {
             strip_chips: Vec::new(),
             strip_bottom: 0.0,
             strip_drag: None,
+            strip_press: None,
             rename: None,
             fonts,
             proxy,
@@ -5950,6 +5953,7 @@ impl Browser {
         let other_windows: Vec<(u64, String)> =
             self.shared.borrow().windows.iter().filter(|(k, _)| *k != self.win_key).cloned().collect();
 
+        self.strip_chips.clear();
         // Tab strip (tabs on top), above the toolbar. With the browser's own
         // frame it is the title bar: the window buttons sit at its right end
         // and its empty part moves the window.
@@ -6776,6 +6780,7 @@ impl Browser {
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse = (position.x as f32, position.y as f32);
                 self.mouse_moved();
+                self.strip_drag_moved();
                 if self.strip_drag.is_some() {
                     self.request_redraw();
                 }
@@ -6789,6 +6794,9 @@ impl Browser {
             }
             WindowEvent::MouseInput { state, button, .. } => match state {
                 ElementState::Pressed => {
+                    if button == MouseButton::Left {
+                        self.strip_press_at_pointer();
+                    }
                     // A click egui took over the page area belongs to a menu
                     // or popup drawn on top of it: not to the page below.
                     if !(consumed && self.page_rect().contains(self.mouse.0, self.mouse.1)) {

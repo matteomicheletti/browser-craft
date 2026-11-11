@@ -1043,6 +1043,29 @@ impl Browser {
         ((self.mouse.0 / ppp, self.mouse.1 / ppp), (w / ppp, h / ppp))
     }
 
+    /// A left press: on a chip of the strip, a drag may start. Found from
+    /// last frame's chips rather than egui's drag, which a slow frame can
+    /// miss (a press and the first move in one frame hit-test at the move).
+    pub(super) fn strip_press_at_pointer(&mut self) {
+        let ((x, y), _) = self.pointer_points();
+        let top = self.strip_bottom - super::TAB_STRIP_HEIGHT;
+        self.strip_press = (y >= top && y <= self.strip_bottom)
+            .then(|| self.strip_chips.iter().find(|(_, l, r)| x >= *l && x <= *r).map(|(i, _, _)| *i))
+            .flatten()
+            .map(|i| (self.tab_id_at(i), (x, y)));
+    }
+
+    /// The pointer moved: a press on a chip becomes a drag past a few points.
+    pub(super) fn strip_drag_moved(&mut self) {
+        let Some((tab, (px, py))) = self.strip_press else { return };
+        let ((x, y), _) = self.pointer_points();
+        if self.strip_drag.is_none() && ((x - px).powi(2) + (y - py).powi(2)).sqrt() > 6.0 {
+            self.strip_drag = Some(tab);
+            self.hover.cancel();
+            self.hide_hover_card();
+        }
+    }
+
     /// Where the dragged chip would land in the strip, while it is over it.
     pub(super) fn strip_drag_marker(&self) -> Option<usize> {
         self.strip_drag?;
@@ -1055,6 +1078,7 @@ impl Browser {
     /// the strip, tear the tab off into a new window further down, or hand
     /// it to the application when released outside the window.
     pub(super) fn end_strip_drag(&mut self) {
+        self.strip_press = None;
         let Some(tab) = self.strip_drag.take() else { return };
         let ((x, y), (w, h)) = self.pointer_points();
         let inside = x >= 0.0 && y >= 0.0 && x < w && y < h;
