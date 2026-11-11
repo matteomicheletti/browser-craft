@@ -138,7 +138,7 @@ either `selector` (CSS, searched through open shadow roots) or `ref` (from
 | `history.search` | `query?`, `limit?` | `{entries: [{title, url, visited?}]}` |
 | `browser.version` | – | `{name, version, api_version, methods}` (answered by the server itself) |
 | `sessions.list` | – | `{sessions: [{name, windows, tabs, created, updated}]}`: the session presets, in the user's order (times in Unix seconds) |
-| `sessions.open` | `name` (case-insensitive), `window?` (`"new"`, the default, or `"current"`) | `{session: {name, windows, tabs, created, updated}, notice?}`: `new` opens each of the preset's windows as a new window, `current` adds its tabs after those of the window last used; tabs load when first shown; `notice` mentions tabs whose container no longer exists. Needs `allow_navigation`, refused while `allowed_hosts` is set |
+| `sessions.open` | `name` (case-insensitive), `window?` (`"new"`, the default, or `"current"`) | `{session: {name, windows, tabs, created, updated}, notice?}`: `new` opens each of the preset's windows as a new window, `current` adds its tabs after those of the window last used; tabs load when first shown; `notice` mentions tabs whose container no longer exists. Needs `allow_navigation`, refused while `allowed_hosts` is set, and for a preset with `file:` tabs unless `allow_file_urls` |
 | `sessions.save` | `name`, `scope?` (`"window"`, the default: the window last used, or `"all"`) | `{session: {…}}`; an existing name is an error (update a preset on `browsecraft://sessions`); tabs in temporary containers are left out. Needs `allow_navigation` |
 
 The exact serde types are in `src/automation/protocol.rs`.

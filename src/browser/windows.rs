@@ -870,6 +870,11 @@ impl App {
             Method::SessionsOpen => {
                 let params: p::SessionsOpenParams = req.params()?;
                 let preset = crate::presets::find(&params.name).ok_or_else(|| RpcError::browser(format!("no preset named {:?} (see sessions.list)", params.name)))?;
+                // As for tabs.open: no local files unless allowed.
+                let allow_files = self.browsers.iter().find(|b| b.feat.automation.is_some()).is_some_and(|b| b.feat.automation_settings.allow_file_urls);
+                if !allow_files && preset.has_file_tabs() {
+                    return Err(RpcError::denied("this preset opens file: URLs, which are disabled (allow_file_urls in automation.toml)"));
+                }
                 let target = match params.window {
                     p::SessionWindow::New => OpenTarget::NewWindow,
                     p::SessionWindow::Current => OpenTarget::Here,

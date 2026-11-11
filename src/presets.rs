@@ -102,6 +102,11 @@ impl Preset {
         }
     }
 
+    /// Whether a tab shows a local file (`file:`).
+    pub fn has_file_tabs(&self) -> bool {
+        self.windows.iter().flat_map(|w| &w.tabs).any(|t| t.url.get(..5).is_some_and(|s| s.eq_ignore_ascii_case("file:")))
+    }
+
     /// How many tabs name a container that `exists` does not know.
     pub fn missing_containers(&self, exists: &dyn Fn(&str) -> bool) -> usize {
         self.windows.iter().flat_map(|w| &w.tabs).filter(|t| t.container.as_deref().is_some_and(|c| !exists(c))).count()
@@ -739,6 +744,15 @@ mod tests {
         assert_eq!(PresetWindow::from_session(&v), w);
         // Only windows with tabs are captured.
         assert_eq!(capture(&[session, json!({"tabs": []})]).len(), 1);
+    }
+
+    #[test]
+    fn presets_know_their_file_tabs() {
+        let mut s = Store::default();
+        let id = s.add("Web", vec![window(&["https://a.test/"])], 1).unwrap();
+        assert!(!s.get(id).unwrap().has_file_tabs());
+        let id = s.add("Local", vec![window(&["https://a.test/"]), window(&["FILE:///home/a/notes.html"])], 1).unwrap();
+        assert!(s.get(id).unwrap().has_file_tabs());
     }
 
     #[test]
