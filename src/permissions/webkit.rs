@@ -33,6 +33,21 @@ thread_local! {
     /// Tabs whose current page the user let use the camera or microphone
     /// (once, without remembering): device names follow that.
     static MEDIA_GRANTED: RefCell<HashSet<u64>> = RefCell::new(HashSet::new());
+    /// Tabs between a load's start and its commit. The view's URI is then
+    /// the address being loaded while the page that asks is still the old
+    /// one: a request is never judged by the next site's decisions.
+    static PROVISIONAL: RefCell<HashSet<u64>> = RefCell::new(HashSet::new());
+}
+
+fn set_provisional(tab: u64, on: bool) {
+    PROVISIONAL.with(|p| {
+        let mut p = p.borrow_mut();
+        if on {
+            p.insert(tab);
+        } else {
+            p.remove(&tab);
+        }
+    });
 }
 
 /// At most this many requests wait per tab; more are denied.
@@ -178,6 +193,11 @@ pub fn attach(view: &WebView, tab: u64, proxy: EventLoopProxy<UserMessage>) {
         let Some(classified) = classify(view, request) else {
             return false;
         };
+        // Asked by the page that is being left: its host is not the URI's.
+        if PROVISIONAL.with(|p| p.borrow().contains(&tab)) {
+            request.deny();
+            return true;
+        }
         let store = super::store();
         match classified {
             Classified::DeviceInfo(host) => {
@@ -218,15 +238,23 @@ pub fn attach(view: &WebView, tab: u64, proxy: EventLoopProxy<UserMessage>) {
     let p = proxy.clone();
     view.connect_load_changed(move |view, event| match event {
         LoadEvent::Started => {
+            set_provisional(tab, true);
             if cancel_tab(tab) {
                 let _ = p.send_event(UserMessage::Tab(tab, TabMessage::PermissionPrompt));
             }
         }
-        LoadEvent::Finished => check_webrtc(view, tab, &p),
+        // Committed: the URI is the new page's. Finished without a commit
+        // (a failed or stopped load): the URI is the old page's again.
+        LoadEvent::Committed => set_provisional(tab, false),
+        LoadEvent::Finished => {
+            set_provisional(tab, false);
+            check_webrtc(view, tab, &p);
+        }
         _ => {}
     });
     let p = proxy;
     view.connect_destroy(move |_| {
+        set_provisional(tab, false);
         if cancel_tab(tab) {
             let _ = p.send_event(UserMessage::Tab(tab, TabMessage::PermissionPrompt));
         }
