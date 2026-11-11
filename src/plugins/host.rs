@@ -37,6 +37,19 @@ pub fn nonce() -> &'static str {
     })
 }
 
+/// The key that clipboard image addresses carry (`/__host/clip/<id>.png?k=`):
+/// only plugin pages get it (in `clipboard.list` answers), so a web page that
+/// guesses an item id still cannot load the picture.
+pub fn clip_key() -> &'static str {
+    static K: OnceLock<String> = OnceLock::new();
+    K.get_or_init(|| {
+        let mut b = [0u8; 12];
+        let _ = getrandom::fill(&mut b);
+        let n = nonce().as_bytes();
+        b.iter().zip(n.iter().cycle()).map(|(x, y)| format!("{:02x}", x ^ y)).collect()
+    })
+}
+
 /// One method of `bc.host`.
 pub struct Method {
     pub wire: &'static str,

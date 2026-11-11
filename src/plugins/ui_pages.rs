@@ -155,7 +155,7 @@ pub fn serve(reg: &Registry, uri: &str, referrer: Option<&str>) -> Served {
             d => match d.strip_prefix("blob/").and_then(|t| super::host::blob_get(&m.id, t)) {
                 Some((mime, bytes)) => Served { status: 200, mime, body: Cow::Owned(bytes.to_vec()), csp },
                 None => match d.strip_prefix("clip/").and_then(|f| f.strip_suffix(".png")).and_then(|id| id.parse::<u64>().ok()) {
-                    Some(id) if m.has(Permission::ClipboardHistory) => match super::clipboard_history::image_bytes(id) {
+                    Some(id) if m.has(Permission::ClipboardHistory) && page.param("k") == Some(super::host::clip_key()) => match super::clipboard_history::image_bytes(id) {
                         Some(bytes) => Served { status: 200, mime: "image/png", body: Cow::Owned(bytes), csp },
                         None => Served::error(404, "no such image"),
                     },
@@ -234,6 +234,14 @@ mod tests {
         (d, r)
     }
 
+    fn tiny_png() -> Vec<u8> {
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(2, 2, image::Rgba([9, 9, 9, 255])))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        png
+    }
+
     #[test]
     fn serves_only_the_plugins_own_files() {
         let (_d, mut r) = reg_with_page();
@@ -258,7 +266,24 @@ mod tests {
         assert_eq!(serve(&r, "bc-plugin://com.t.ui/ui/app.js", Some("https://evil.test/")).status, 403);
         assert_eq!(serve(&r, "bc-plugin://com.t.ui/ui/app.js", Some("bc-plugin://com.t.ui/ui/index.html")).status, 200);
         assert_eq!(serve(&r, "bc-plugin://com.t.ui/__host/theme.css", None).status, 200);
-        assert_eq!(serve(&r, "bc-plugin://com.t.ui/__host/clip/1.png", None).status, 404, "needs clipboard.history");
+        let key = crate::plugins::host::clip_key();
+        assert_eq!(serve(&r, &format!("bc-plugin://com.t.ui/__host/clip/1.png?k={key}"), None).status, 404, "needs clipboard.history");
+        // Clipboard images: only with the permission and the page's key.
+        let toml = r.get("com.t.ui").and_then(|e| e.dir.clone()).unwrap().join("plugin.toml");
+        let text = std::fs::read_to_string(&toml).unwrap().replace("remote_sources", "permissions = [\"clipboard.history\"]\nremote_sources");
+        std::fs::write(&toml, text).unwrap();
+        r.reload();
+        let id = crate::plugins::clipboard_history::with(|s| {
+            let c = crate::plugins::clipboard_history::Capture {
+                image: crate::plugins::clipboard_watch::inspect_png(tiny_png()),
+                ..Default::default()
+            };
+            s.add(c, &crate::plugins::clipboard_history::Limits::default(), 1).unwrap()
+        })
+        .unwrap();
+        assert_eq!(serve(&r, &format!("bc-plugin://com.t.ui/__host/clip/{id}.png?k={key}"), None).status, 200);
+        assert_eq!(serve(&r, &format!("bc-plugin://com.t.ui/__host/clip/{id}.png"), None).status, 404, "no key");
+        assert_eq!(serve(&r, &format!("bc-plugin://com.t.ui/__host/clip/{id}.png?k=guess"), None).status, 404);
         // Turned off: nothing is served.
         r.set_enabled("com.t.ui", false).unwrap();
         assert_eq!(serve(&r, "bc-plugin://com.t.ui/ui/index.html", None).status, 404);

@@ -432,7 +432,7 @@ pub fn summary(i: &Item) -> Value {
         "id": i.id, "kind": i.kind, "created": i.created, "used": i.used, "source": i.source,
         "pinned": i.pinned, "preview": preview, "truncated": i.text.chars().count() > 400,
         "size": i.size, "width": i.width, "height": i.height, "files": i.files.len(),
-        "image": (i.kind == Kind::Image).then(|| format!("/__host/clip/{}.png", i.id)),
+        "image": (i.kind == Kind::Image).then(|| format!("/__host/clip/{}.png?k={}", i.id, super::host::clip_key())),
     })
 }
 
