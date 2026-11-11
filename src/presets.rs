@@ -253,7 +253,7 @@ impl Store {
             p.windows.iter_mut().for_each(PresetWindow::sanitize);
             max = max.max(p.id);
         }
-        store.next_id = store.next_id.max(max + 1);
+        store.next_id = store.next_id.max(max.saturating_add(1));
         if store.startup_preset.is_some_and(|id| store.get(id).is_none()) && !store.read_only {
             store.startup_preset = None;
         }
@@ -305,7 +305,8 @@ impl Store {
             return Err(format!("At most {MAX_PRESETS} presets"));
         }
         let id = self.next_id.max(1);
-        self.next_id = id + 1;
+        // A hand-edited file may hold any id: never wrap to reuse one.
+        self.next_id = id.checked_add(1).ok_or("No preset ids are left")?;
         self.presets.push(Preset { id, name, created: at, updated: at, windows });
         Ok(id)
     }
@@ -744,6 +745,14 @@ mod tests {
         assert_eq!(PresetWindow::from_session(&v), w);
         // Only windows with tabs are captured.
         assert_eq!(capture(&[session, json!({"tabs": []})]).len(), 1);
+    }
+
+    #[test]
+    fn presets_huge_ids_do_not_overflow() {
+        let mut s = Store::parse(&format!(r#"{{"presets":[{{"id":{},"name":"Max","windows":[]}}]}}"#, u64::MAX)).unwrap();
+        assert_eq!(s.next_id, u64::MAX);
+        assert!(s.add("New", vec![window(&["https://a.test/"])], 1).is_err(), "no id is reused");
+        assert_eq!(s.presets.len(), 1);
     }
 
     #[test]
