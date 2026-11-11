@@ -14,6 +14,7 @@ mod bookmarks;
 mod browser;
 mod capture;
 mod commands;
+mod containers;
 mod css;
 mod darkmode;
 mod dom;
@@ -59,6 +60,7 @@ fn main() {
     flags::load();
     bookmarks::load();
     passwords::load();
+    containers::load();
     internal::set_dark(flags::get().theme != flags::Theme::Light);
     let fonts = match font::Fonts::new() {
         Ok(fonts) => fonts,
@@ -95,10 +97,15 @@ fn main() {
         }
         return;
     }
-    let start_url = args
-        .get(1)
-        .map(|arg| address::resolve(arg))
-        .unwrap_or_else(|| browser::HOME_URL.to_string());
+    let start_tabs = match start_tabs(&args[1..]) {
+        Ok(tabs) => tabs,
+        Err(e) => {
+            eprintln!("browsecraft: {e}");
+            std::process::exit(2);
+        }
+    };
+    // Temporary containers of a browser that crashed.
+    containers::sweep_stale_temporary();
 
     #[cfg(target_os = "linux")]
     let gtk_ok = linux_gtk_init();
@@ -117,10 +124,38 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let mut app = browser::Browser::new(event_loop.create_proxy(), fonts, start_url);
+    let mut app = browser::Browser::new(event_loop.create_proxy(), fonts, start_tabs);
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("browsecraft: {e}");
     }
+}
+
+/// The tabs to open from the command line: `[--container NAME |
+/// --temporary-container] [URL]...`. Each address opens in a tab, in the
+/// container named just before it. Empty: restore the session or go home.
+fn start_tabs(args: &[String]) -> Result<Vec<browser::StartTab>, String> {
+    use browser::{ContainerChoice, StartTab};
+    let mut tabs = Vec::new();
+    let mut pending: Option<ContainerChoice> = None;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--container" => {
+                let name = iter.next().ok_or("--container needs a container name")?;
+                let found = containers::find(name).ok_or_else(|| format!("no container named {name:?}"))?;
+                pending = Some(ContainerChoice::Id(found.id));
+            }
+            "--temporary-container" => pending = Some(ContainerChoice::Temporary),
+            url => tabs.push(StartTab {
+                url: address::resolve(url),
+                container: pending.take().unwrap_or(ContainerChoice::None),
+            }),
+        }
+    }
+    if let Some(container) = pending {
+        tabs.push(StartTab { url: browser::HOME_URL.to_string(), container });
+    }
+    Ok(tabs)
 }
 
 /// Initialises GTK for WebKitGTK on its X11 backend. Returns false (and the

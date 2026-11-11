@@ -60,6 +60,14 @@ const SIDEBAR_WIDTH: f32 = 220.0;
 const NOTICE_HEIGHT: f32 = 30.0;
 const BOOKMARKS_BAR_HEIGHT: f32 = 34.0;
 const SAVE_BAR_HEIGHT: f32 = 42.0;
+/// The horizontal tab strip above the toolbar (tabs on top).
+const TAB_STRIP_HEIGHT: f32 = 38.0;
+const FIND_BAR_HEIGHT: f32 = 40.0;
+/// The right-hand drawer (containers and the feature panels).
+const DRAWER_WIDTH: f32 = 340.0;
+/// How often background tabs are checked for suspension.
+const SUSPEND_CHECK_INTERVAL: Duration = Duration::from_secs(5);
+const SESSION_FILE: &str = "session.json";
 const NOTICE_LIFETIME: Duration = Duration::from_secs(3);
 /// Pixels scrolled per mouse-wheel line or arrow-key press, in CSS px.
 const SCROLL_STEP: f32 = 48.0;
@@ -73,6 +81,14 @@ const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl + T", "New tab"),
     ("Ctrl + W", "Close the current tab"),
     ("Ctrl + Tab", "Switch to the next tab"),
+    ("Ctrl + Page Up / Down", "Previous / next tab"),
+    ("Ctrl + 1 \u{2026} 8", "Go to that tab"),
+    ("Ctrl + 9", "Go to the last tab"),
+    ("Ctrl + Shift + T", "Reopen the last closed tab"),
+    ("Ctrl + Shift + N", "New tab in a temporary container"),
+    ("Ctrl + F", "Find in page"),
+    ("Ctrl + P / F1", "Command palette"),
+    ("F12", "Developer tools"),
     ("Ctrl + L", "Focus the address bar"),
     ("Ctrl + S", "Select the address bar to type"),
     ("Ctrl + Left", "Go to the previous page"),
@@ -93,23 +109,25 @@ const SHORTCUTS: &[(&str, &str)] = &[
 pub enum UserMessage {
     /// A background engine load made progress (generation, event).
     Load(u64, LoadEvent),
-    /// The WebView2 page changed its title.
+    /// The shared Servo pane's page changed its title. (The system web
+    /// views report through `Tab`, with their tab's id.)
+    #[cfg_attr(not(all(feature = "servo", target_os = "linux")), allow(dead_code))]
     WebTitle(String),
-    /// The WebView2 page started loading this URL.
+    /// The Servo page started loading this URL.
+    #[cfg_attr(not(all(feature = "servo", target_os = "linux")), allow(dead_code))]
     WebStart(String),
-    /// The WebView2 page finished loading this URL.
+    /// The Servo page finished loading this URL.
+    #[cfg_attr(not(all(feature = "servo", target_os = "linux")), allow(dead_code))]
     WebLoad(String),
     /// The WebView2 pane wants the tab to open `url`: a blocked page's
     /// notice, or (`popup`) a pop-up the user opened. `epoch` is the web view
     /// epoch it was sent in; if the tab or page has changed since, it is
     /// dropped.
+    #[cfg_attr(not(all(feature = "servo", target_os = "linux")), allow(dead_code))]
     WebOpen { epoch: u64, url: String, popup: bool },
     /// The page tried to open another app (`mailto:`, an app's own scheme);
     /// the launch was refused.
     WebExternal(String),
-    /// The page closed itself (`window.close()`), which destroys the web view.
-    #[cfg_attr(not(windows), allow(dead_code))]
-    WebClosed,
     /// WebView2 could not verify the certificate of a request to this URL.
     #[cfg_attr(not(windows), allow(dead_code))]
     WebCertError(String),
@@ -129,12 +147,121 @@ pub enum UserMessage {
     /// (a video's fullscreen button, `requestFullscreen()`).
     #[cfg_attr(not(windows), allow(dead_code))]
     WebFullscreen { epoch: u64, on: bool },
-    /// The page script reported a form or a submitted login. `sender` is the
-    /// URL of the document that sent it, as WebView2 reports it (the page
-    /// cannot choose it).
-    Page { sender: String, message: PageMessage },
     /// Stop the current load.
     Stop,
+    /// A key typed while the page's window had the X11 keyboard but a
+    /// chrome text field has egui's focus (Linux).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    ChromeKey(ChromeKey),
+    /// The user clicked into the page (Linux): the chrome gives up the
+    /// keyboard.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    PageClicked,
+    /// An event from the web view of the tab with this id (each tab has its
+    /// own web view; events of background tabs update their saved state).
+    Tab(u64, TabMessage),
+}
+
+/// A key for egui, forwarded from the page's GTK window.
+#[derive(Clone, Debug)]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub struct ChromeKey {
+    key: Option<egui::Key>,
+    text: Option<String>,
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+}
+
+/// What a tab's own web view reports. The variants without a tab id in
+/// `UserMessage` (`WebTitle`, `WebStart`, ...) are the shared Servo pane's,
+/// which always shows the active tab.
+#[derive(Clone, Debug)]
+pub enum TabMessage {
+    Title(String),
+    Start(String),
+    Load(String),
+    Open { epoch: u64, url: String, popup: bool },
+    #[cfg_attr(not(windows), allow(dead_code))]
+    Closed,
+    Page { sender: String, message: PageMessage },
+    /// A link inside the page leads to a site a rule puts in another
+    /// container: open it there instead.
+    OpenInContainer { url: String, container: String },
+    /// The page's favicon, as RGBA pixels.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Favicon { w: usize, h: usize, rgba: Vec<u8> },
+    /// The web view's children changed (the inspector docked or closed):
+    /// apply its bounds again.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Relayout,
+    /// Find in page: how many matches (0: none).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Found(u32),
+    /// A snapshot of the page, shown while a menu covers it.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    Snapshot { w: usize, h: usize, rgba: Vec<u8> },
+}
+
+/// A tab to open at start-up (command line): the URL and the container.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StartTab {
+    pub url: String,
+    pub container: ContainerChoice,
+}
+
+/// Which container a new tab opens in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ContainerChoice {
+    /// The default profile.
+    None,
+    /// A persistent container by id.
+    Id(String),
+    /// A new temporary container.
+    Temporary,
+}
+
+/// The right-hand drawer panels. Only `Containers` is implemented by the
+/// core; the others are drawn by their modules once integrated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)] // the feature panels are opened once their modules are integrated
+pub enum Drawer {
+    Containers,
+    Authenticator,
+    DarkMode,
+    Plugins,
+    Automation,
+}
+
+#[allow(dead_code)]
+impl Drawer {
+    pub const ALL: [Drawer; 5] = [
+        Drawer::Containers,
+        Drawer::Authenticator,
+        Drawer::DarkMode,
+        Drawer::Plugins,
+        Drawer::Automation,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Drawer::Containers => "Containers",
+            Drawer::Authenticator => "Authenticator",
+            Drawer::DarkMode => "Dark mode",
+            Drawer::Plugins => "Plugins",
+            Drawer::Automation => "Automation",
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            Drawer::Containers => egui_phosphor::regular::STACK,
+            Drawer::Authenticator => egui_phosphor::regular::SHIELD_CHECK,
+            Drawer::DarkMode => egui_phosphor::regular::CIRCLE_HALF,
+            Drawer::Plugins => egui_phosphor::regular::PUZZLE_PIECE,
+            Drawer::Automation => egui_phosphor::regular::ROBOT,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -208,6 +335,12 @@ enum Action {
     NeverSave,
     LockVault,
     PasswordsPage,
+    NewTabIn(ContainerChoice),
+    /// Opens tab `i`'s page in a new tab in a container, closing tab `i`.
+    ReopenIn(usize, ContainerChoice),
+    ToggleDrawer(Drawer),
+    Containers(Vec<crate::containers::ContainersEvent>),
+    Find(egui_chrome::FindEvent),
 }
 
 struct HistoryEntry {
@@ -224,6 +357,45 @@ struct TabState {
     web_page: bool,
     web_url: String,
     title: String,
+    /// Stable id: events from the tab's web view carry it.
+    id: u64,
+    /// The container (`None`: the default profile).
+    container: Option<String>,
+    /// The tab's own web view. `None` for a web tab means it was unloaded
+    /// (suspended) or restored but not shown yet: it loads `web_url` when it
+    /// becomes active.
+    view: Option<WebPane>,
+    loading: bool,
+    web_expect: bool,
+    web_committed: bool,
+    web_leaving: String,
+    web_document: String,
+    page_forms: Option<FormKind>,
+    /// When the tab stopped being the active one.
+    last_active: Option<Instant>,
+}
+
+/// A closed tab, for Ctrl+Shift+T.
+struct ClosedTab {
+    history: Vec<HistoryEntry>,
+    index: usize,
+    title: String,
+    container: Option<String>,
+}
+
+const MAX_CLOSED_TABS: usize = 25;
+
+/// A web engine data store (cookies, storage, cache) shared by the tabs of
+/// one container. A temporary container's folder is deleted with it.
+#[cfg_attr(target_os = "macos", allow(dead_code))] // WKWebView: one store
+struct WebCtx {
+    context: wry::WebContext,
+    /// Where the favicon database goes, until the first web view turns it
+    /// on (WebKitGTK wants it set once, before anything loads).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    favicons: Option<PathBuf>,
+    /// Dropped after `context` (field order), which deletes the folder.
+    _temp: Option<tempfile::TempDir>,
 }
 
 struct Tab {
@@ -275,10 +447,42 @@ pub struct Browser {
     index: usize,
     tab: Option<Tab>,
     loading: bool,
-    start_url: String,
+    /// Tabs to open at start-up; empty: restore the session or go home.
+    start_tabs: Vec<StartTab>,
+    /// The active tab's web view (each tab has its own; the parked ones are
+    /// in `tabs[i].view`). With Servo, the one shared pane.
     webview: Option<WebPane>,
-    /// The web engine's data store (cookies, storage, cache) for the web view.
-    web_context: Option<wry::WebContext>,
+    /// The system web view (wry) works here, so tabs get their own.
+    wry_ok: bool,
+    /// The web engine's data stores, one per container ("" = no container).
+    contexts: HashMap<String, WebCtx>,
+    /// The active tab's id and container (its `TabState` slot is empty
+    /// while it is active).
+    tab_id: u64,
+    container: Option<String>,
+    next_tab_id: u64,
+    closed_tabs: Vec<ClosedTab>,
+    /// When idle tabs were last checked for suspension.
+    last_suspend_check: Instant,
+    /// The session file's last saved contents.
+    saved_session: String,
+    drawer: Option<Drawer>,
+    containers_panel: crate::containers::ContainersPanel,
+    /// The find bar: the text searched for, and the match count.
+    find: Option<FindBar>,
+    favicons: HashMap<u64, egui::TextureHandle>,
+    /// A snapshot of the page was requested and has not arrived yet.
+    snapshot_pending: bool,
+    /// Scripts the page modules add to every new web view.
+    extra_page_scripts: Vec<String>,
+    /// The egui chrome is in use (`egui` is taken out while a frame is
+    /// built, so it cannot tell).
+    gpu_chrome: bool,
+    /// A chrome text field has egui's keyboard focus: the pages' key
+    /// handlers forward keys to it (Linux, see `attach_webview_shortcuts_gtk`).
+    chrome_keys: Rc<std::cell::Cell<bool>>,
+    /// Forwarded keys, fed to egui with the next frame's input.
+    pending_egui_events: Vec<egui::Event>,
     /// The newest frame Servo painted, drawn in the page area (Servo, unlike
     /// WebView2, has no window of its own).
     servo_frame: Option<Image>,
@@ -356,6 +560,14 @@ pub struct Browser {
     fullscreen_restore: bool,
 }
 
+struct FindBar {
+    query: String,
+    /// The text last sent to the page, so typing searches only on change.
+    sent: String,
+    matches: Option<u32>,
+    focus: bool,
+}
+
 // ---------------------------------------------------------------------------
 // Pure helpers (no window needed, so they can be unit-tested)
 // ---------------------------------------------------------------------------
@@ -374,21 +586,71 @@ fn stale_web_event(expecting: bool, leaving: &str, target: &str, url: &str) -> b
     expecting && !leaving.is_empty() && url == leaving && url != target
 }
 
-/// The height, in physical pixels, of the bars between the toolbar and the
-/// page: the bookmarks bar and the save-login bar. Zero on the engine chrome
-/// (`egui_chrome` false), which has neither.
-fn extra_bars_h(scale: f32, egui_chrome: bool, bookmarks_bar: bool, save_bar: bool) -> f32 {
+/// Which egui bars sit above the page besides the toolbar.
+#[derive(Clone, Copy, Default)]
+struct Bars {
+    tab_strip: bool,
+    bookmarks: bool,
+    save: bool,
+    find: bool,
+}
+
+/// The height, in physical pixels, of the bars above the page other than
+/// the toolbar: the tab strip, the bookmarks bar, the save-login bar and the
+/// find bar. Zero on the engine chrome (`egui_chrome` false), which has none.
+fn extra_bars_h(scale: f32, egui_chrome: bool, bars: Bars) -> f32 {
     if !egui_chrome {
         return 0.0;
     }
-    let mut h = 0.0;
-    if bookmarks_bar {
-        h += (BOOKMARKS_BAR_HEIGHT * scale).round();
+    [
+        (bars.tab_strip, TAB_STRIP_HEIGHT),
+        (bars.bookmarks, BOOKMARKS_BAR_HEIGHT),
+        (bars.save, SAVE_BAR_HEIGHT),
+        (bars.find, FIND_BAR_HEIGHT),
+    ]
+    .iter()
+    .filter(|(on, _)| *on)
+    .map(|(_, h)| (h * scale).round())
+    .sum()
+}
+
+/// Which background tabs to unload: those idle for `after` (when set), then
+/// the least recently used ones while more than `cap` web views are live.
+/// `tabs` is, per tab, whether its web view is live, may be unloaded (not
+/// playing audio), and when it was last active. The active tab is never
+/// chosen.
+fn tabs_to_suspend(
+    tabs: &[(bool, bool, Option<Instant>)],
+    active: usize,
+    now: Instant,
+    after: Option<Duration>,
+    cap: usize,
+) -> Vec<usize> {
+    let candidate = |i: usize| i != active && tabs[i].0 && tabs[i].1;
+    let mut out: Vec<usize> = (0..tabs.len())
+        .filter(|&i| candidate(i))
+        .filter(|&i| after.is_some_and(|d| tabs[i].2.is_none_or(|t| now.duration_since(t) >= d)))
+        .collect();
+    let live = tabs.iter().filter(|t| t.0).count() - out.len();
+    if live > cap.max(1) {
+        let mut lru: Vec<usize> = (0..tabs.len()).filter(|&i| candidate(i) && !out.contains(&i)).collect();
+        // Oldest first; never-active tabs (restored, unknown) count as oldest.
+        lru.sort_by_key(|&i| tabs[i].2);
+        out.extend(lru.into_iter().take(live - cap.max(1)));
     }
-    if save_bar {
-        h += (SAVE_BAR_HEIGHT * scale).round();
+    out.sort_unstable();
+    out
+}
+
+/// The tab to show for Ctrl+1..8 (`SelectTab(n)`) and Ctrl+9 (`LastTab`).
+fn tab_for_number(n: usize, last: bool, count: usize) -> Option<usize> {
+    if count == 0 {
+        None
+    } else if last {
+        Some(count - 1)
+    } else {
+        (n < count).then_some(n)
     }
-    h
 }
 
 /// The request a history entry keeps. A form post is kept as a plain visit
@@ -590,6 +852,332 @@ impl WebPane {
     fn is_native(&self) -> bool {
         matches!(self, WebPane::Wry(_))
     }
+
+    /// The page is playing sound (a call, music): such tabs are not
+    /// unloaded in the background. Only WebKitGTK reports it.
+    fn playing_audio(&self) -> bool {
+        match self {
+            #[cfg(target_os = "linux")]
+            WebPane::Wry(wv) => {
+                use webkit2gtk::WebViewExt as _;
+                use wry::WebViewExtUnix as _;
+                wv.webview().is_playing_audio()
+            }
+            _ => false,
+        }
+    }
+
+    /// Find in page: searches `text` (case-insensitive, wrapping), or the
+    /// next / previous match when `again`. WebKitGTK highlights every match
+    /// and reports the count (`TabMessage::Found`); the other engines use
+    /// `window.find`.
+    fn find(&self, text: &str, backwards: bool, again: bool) {
+        match self {
+            #[cfg(target_os = "linux")]
+            WebPane::Wry(wv) => {
+                use webkit2gtk::{FindControllerExt as _, FindOptions, WebViewExt as _};
+                use wry::WebViewExtUnix as _;
+                let Some(find) = wv.webview().find_controller() else {
+                    return;
+                };
+                if text.is_empty() {
+                    find.search_finish();
+                    return;
+                }
+                if again && find.search_text().is_some_and(|t| t.as_str() == text) {
+                    if backwards {
+                        find.search_previous();
+                    } else {
+                        find.search_next();
+                    }
+                    return;
+                }
+                let mut options = FindOptions::CASE_INSENSITIVE | FindOptions::WRAP_AROUND;
+                if backwards {
+                    options |= FindOptions::BACKWARDS;
+                }
+                find.count_matches(text, options.bits(), 1000);
+                find.search(text, options.bits(), 1000);
+            }
+            _ => {
+                let quoted = serde_json::to_string(text).unwrap_or_else(|_| "\"\"".into());
+                let _ = self.evaluate_script(&format!("window.find({quoted},false,{backwards},true)"));
+            }
+        }
+    }
+
+    /// Ends find in page: the highlights go.
+    fn find_finish(&self) {
+        match self {
+            #[cfg(target_os = "linux")]
+            WebPane::Wry(wv) => {
+                use webkit2gtk::{FindControllerExt as _, WebViewExt as _};
+                use wry::WebViewExtUnix as _;
+                if let Some(find) = wv.webview().find_controller() {
+                    find.search_finish();
+                }
+            }
+            _ => {
+                let _ = self.evaluate_script("window.getSelection&&window.getSelection().removeAllRanges()");
+            }
+        }
+    }
+}
+
+/// Opens the web inspector of `wv`. WebKitGTK docks it at the bottom of
+/// the web view (see `attach_webview_extras_gtk` for why it then needs a
+/// new allocation).
+fn open_inspector(wv: &WebView) {
+    wv.open_devtools();
+}
+
+/// WebKitGTK hooks wry does not offer: favicons, find-in-page results and
+/// the docked inspector's layout.
+#[cfg(target_os = "linux")]
+fn attach_webview_extras_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>, tab: u64) {
+    use webkit2gtk::{FindControllerExt as _, WebInspectorExt as _, WebViewExt as _};
+    use wry::WebViewExtUnix as _;
+    let view = wv.webview();
+    let favicon_proxy = proxy.clone();
+    view.connect_favicon_notify(move |view| {
+        let (w, h, rgba) = view
+            .favicon()
+            .and_then(|surface| surface_rgba(&surface, 32))
+            .unwrap_or((0, 0, Vec::new()));
+        let _ = favicon_proxy.send_event(UserMessage::Tab(tab, TabMessage::Favicon { w, h, rgba }));
+    });
+    if let Some(find) = view.find_controller() {
+        // `found-text` reports 1 after a next/previous step; the total
+        // comes from `counted-matches`.
+        let counted = proxy.clone();
+        find.connect_counted_matches(move |_, count| {
+            let _ = counted.send_event(UserMessage::Tab(tab, TabMessage::Found(count)));
+        });
+        let failed = proxy.clone();
+        find.connect_failed_to_find_text(move |_| {
+            let _ = failed.send_event(UserMessage::Tab(tab, TabMessage::Found(0)));
+        });
+    }
+    if let Some(inspector) = view.inspector() {
+        // The inspector docks inside the web view, which wry sizes by hand
+        // (`set_bounds` allocates its GTK window): nothing lays the page and
+        // the inspector out again until the bounds are applied anew, so the
+        // inspector stayed invisible. Ask for that on every change.
+        let relayout = move |proxy: &EventLoopProxy<UserMessage>| {
+            let _ = proxy.send_event(UserMessage::Tab(tab, TabMessage::Relayout));
+        };
+        let p = proxy.clone();
+        inspector.connect_attach(move |_| {
+            relayout(&p);
+            false
+        });
+        let p = proxy.clone();
+        inspector.connect_detach(move |_| {
+            relayout(&p);
+            false
+        });
+        let p = proxy.clone();
+        inspector.connect_closed(move |_| relayout(&p));
+    }
+}
+
+/// Asks WebKit for a picture of the visible page (`TabMessage::Snapshot`).
+#[cfg(target_os = "linux")]
+fn request_snapshot_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>, tab: u64) {
+    use webkit2gtk::{SnapshotOptions, SnapshotRegion, WebViewExt as _};
+    use wry::WebViewExtUnix as _;
+    wv.webview().snapshot(
+        SnapshotRegion::Visible,
+        SnapshotOptions::NONE,
+        None::<&gtk::gio::Cancellable>,
+        move |result| {
+            let (w, h, rgba) = result
+                .ok()
+                .and_then(|surface| surface_rgba(&surface, 8192))
+                .unwrap_or((0, 0, Vec::new()));
+            let _ = proxy.send_event(UserMessage::Tab(tab, TabMessage::Snapshot { w, h, rgba }));
+        },
+    );
+}
+
+/// A cairo image surface as straight (not premultiplied) RGBA, shrunk by
+/// an integer factor to at most `max_side` pixels a side.
+#[cfg(target_os = "linux")]
+fn surface_rgba(surface: &gtk::cairo::Surface, max_side: usize) -> Option<(usize, usize, Vec<u8>)> {
+    use gtk::cairo::{Format, ImageSurface};
+    let image = ImageSurface::try_from(surface.clone()).ok()?;
+    image.flush();
+    let alpha = match image.format() {
+        Format::ARgb32 => true,
+        Format::Rgb24 => false,
+        _ => return None,
+    };
+    let (w, h, stride) = (image.width() as usize, image.height() as usize, image.stride() as usize);
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let step = w.max(h).div_ceil(max_side).max(1);
+    let (ow, oh) = (w / step, h / step);
+    if ow == 0 || oh == 0 {
+        return None;
+    }
+    let mut out = Vec::with_capacity(ow * oh * 4);
+    image
+        .with_data(|data| {
+            for y in 0..oh {
+                for x in 0..ow {
+                    let i = y * step * stride + x * step * 4;
+                    let Some(px) = data.get(i..i + 4) else {
+                        out.extend_from_slice(&[0, 0, 0, 0]);
+                        continue;
+                    };
+                    out.extend_from_slice(&unpremultiply(u32::from_ne_bytes([px[0], px[1], px[2], px[3]]), alpha));
+                }
+            }
+        })
+        .ok()?;
+    Some((ow, oh, out))
+}
+
+/// One cairo pixel (`0xAARRGGBB`, premultiplied) as straight RGBA bytes.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn unpremultiply(px: u32, alpha: bool) -> [u8; 4] {
+    let a = if alpha { (px >> 24) as u8 } else { 255 };
+    let channel = |shift: u32| {
+        let c = (px >> shift) & 0xff;
+        match a {
+            0 => 0,
+            255 => c as u8,
+            a => ((c * 255 + u32::from(a) / 2) / u32::from(a)).min(255) as u8,
+        }
+    };
+    [channel(16), channel(8), channel(0), a]
+}
+
+/// A new data store for `container`'s tabs (see `Browser::web_context`).
+#[cfg(not(target_os = "macos"))]
+fn new_web_context(container: Option<&str>) -> Result<Option<WebCtx>, String> {
+    let (dir, temp) = match container {
+        None => {
+            // Windows keeps WebView2's default profile for "no container".
+            if cfg!(windows) {
+                return Ok(None);
+            }
+            let dir = crate::storage::profile_dir("default")?;
+            if let Err(e) = crate::storage::private_dir(&dir) {
+                eprintln!("browsecraft: cannot create the profile folder ({e}); using a temporary store");
+                return Ok(Some(WebCtx { context: wry::WebContext::new(None), favicons: None, _temp: None }));
+            }
+            (dir, None)
+        }
+        Some(id) if id.starts_with("tmp-") => {
+            let temp = crate::containers::temporary_data_dir()
+                .map_err(|e| format!("could not create a temporary container's folder ({e})"))?;
+            (temp.path().to_path_buf(), Some(temp))
+        }
+        Some(id) => {
+            let dir = crate::containers::data_dir(id)?;
+            crate::storage::private_dir(&dir)
+                .map_err(|e| format!("could not create the container's folder {} ({e})", dir.display()))?;
+            (dir, None)
+        }
+    };
+    let context = wry::WebContext::new(Some(dir.clone()));
+    Ok(Some(WebCtx { context, favicons: Some(dir.join("favicons")), _temp: temp }))
+}
+
+/// WKWebView's data store is not separated per container yet: every tab
+/// uses the default store on macOS.
+#[cfg(target_os = "macos")]
+fn new_web_context(_container: Option<&str>) -> Result<Option<WebCtx>, String> {
+    Ok(None)
+}
+
+/// Updates a background tab's saved state from its web view's events (the
+/// active tab's go through `web_started`, `web_loaded`, ...).
+fn background_web_event(st: &mut TabState, message: TabMessage) {
+    if !st.web_page || st.view.is_none() {
+        return;
+    }
+    match message {
+        TabMessage::Title(title) => {
+            if !st.web_expect || st.web_committed {
+                st.title = clean_title(&title);
+            }
+        }
+        TabMessage::Start(url) => {
+            if url == "about:blank" || stale_web_event(st.web_expect, &st.web_leaving, &st.web_url, &url) {
+                return;
+            }
+            st.web_committed = true;
+            st.web_document = url;
+            st.loading = true;
+        }
+        TabMessage::Load(url) => {
+            if stale_web_event(st.web_expect, &st.web_leaving, &st.web_url, &url) {
+                return;
+            }
+            st.loading = false;
+            if url.is_empty() || url == "about:blank" {
+                return;
+            }
+            st.web_committed = true;
+            if st.web_expect {
+                st.web_expect = false;
+                if url != st.web_url
+                    && let Some(entry) = st.history.get_mut(st.index)
+                {
+                    entry.request = Request::Get(url.clone());
+                }
+            } else if url != st.web_url {
+                if !st.history.is_empty() {
+                    st.history.truncate(st.index + 1);
+                }
+                st.index = push_capped(&mut st.history, HistoryEntry { request: Request::Get(url.clone()), scroll: 0.0 });
+            }
+            st.web_url = url.clone();
+            st.web_document = url.clone();
+            history::record(&url, &st.title);
+        }
+        // Pop-ups, password reports and container hand-overs from a page
+        // the user is not looking at are dropped.
+        _ => {}
+    }
+}
+
+/// The longest address kept in the session file.
+const MAX_SESSION_URL: usize = 8 * 1024;
+const MAX_SESSION_TABS: usize = 500;
+
+struct SessionTab {
+    url: String,
+    title: String,
+    container: Option<String>,
+}
+
+/// Reads a session file defensively: unknown or broken entries are
+/// skipped, and only addresses a tab may open are kept.
+fn parse_session(text: &str) -> (Vec<SessionTab>, usize) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return (Vec::new(), 0);
+    };
+    let active = value.get("active").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let mut tabs = Vec::new();
+    for tab in value.get("tabs").and_then(|v| v.as_array()).into_iter().flatten().take(MAX_SESSION_TABS) {
+        let Some(url) = tab.get("url").and_then(|v| v.as_str()) else { continue };
+        let lower = url.to_ascii_lowercase();
+        let allowed = is_web_url(url)
+            || lower.starts_with("file:")
+            || lower.starts_with("about:home")
+            || lower.starts_with("browsecraft://");
+        if !allowed || url.len() > MAX_SESSION_URL {
+            continue;
+        }
+        let title = clean_title(tab.get("title").and_then(|v| v.as_str()).unwrap_or(""));
+        let container = tab.get("container").and_then(|v| v.as_str()).map(str::to_string);
+        tabs.push(SessionTab { url: url.to_string(), title, container });
+    }
+    (tabs, active)
 }
 
 /// A notice for a refused link to another app, naming its scheme when it is
@@ -794,6 +1382,16 @@ pub enum Shortcut {
     Quit,
     Zoom(Option<bool>),
     DevTools,
+    /// Ctrl+1..8: the tab at this position (0-based).
+    SelectTab(usize),
+    /// Ctrl+9: the last tab.
+    LastTab,
+    ReopenClosedTab,
+    Find,
+    /// Ctrl+Shift+N: a new tab in a new temporary container.
+    NewTemporaryTab,
+    /// Ctrl+P, F1: the command palette.
+    Palette,
 }
 
 /// The browser-wide shortcut for `key` with these modifiers, if any. `typing`
@@ -803,10 +1401,20 @@ fn shortcut_for(key: &Key, ctrl: bool, shift: bool, alt: bool, typing: bool) -> 
     if ctrl && !alt {
         let found = match key {
             Key::Named(NamedKey::Tab) => Some(Shortcut::CycleTab(if shift { -1 } else { 1 })),
+            Key::Named(NamedKey::PageUp) if !shift => Some(Shortcut::CycleTab(-1)),
+            Key::Named(NamedKey::PageDown) if !shift => Some(Shortcut::CycleTab(1)),
             Key::Named(NamedKey::ArrowLeft) if !typing => Some(Shortcut::Go(-1)),
             Key::Named(NamedKey::ArrowRight) if !typing => Some(Shortcut::Go(1)),
             Key::Character(c) => match c.to_ascii_lowercase().as_str() {
+                "t" if shift => Some(Shortcut::ReopenClosedTab),
                 "t" => Some(Shortcut::NewTab),
+                "n" if shift => Some(Shortcut::NewTemporaryTab),
+                "f" if !shift => Some(Shortcut::Find),
+                "p" if !shift => Some(Shortcut::Palette),
+                "9" if !shift => Some(Shortcut::LastTab),
+                d @ ("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8") if !shift => {
+                    d.parse::<usize>().ok().map(|n| Shortcut::SelectTab(n - 1))
+                }
                 "w" => Some(Shortcut::CloseTab),
                 "l" => Some(Shortcut::FocusAddress),
                 "s" if shift => Some(Shortcut::Screenshot),
@@ -840,6 +1448,7 @@ fn shortcut_for(key: &Key, ctrl: bool, shift: bool, alt: bool, typing: bool) -> 
         }
     }
     match key {
+        Key::Named(NamedKey::F1) => Some(Shortcut::Palette),
         Key::Named(NamedKey::F5) => Some(Shortcut::Reload),
         Key::Named(NamedKey::F6) => Some(Shortcut::FocusAddress),
         Key::Named(NamedKey::F11) => Some(Shortcut::Fullscreen),
@@ -851,41 +1460,98 @@ fn shortcut_for(key: &Key, ctrl: bool, shift: bool, alt: bool, typing: bool) -> 
 /// Browser shortcuts typed while WebKitGTK has the keyboard. The GTK web
 /// view is a separate X11 window, so its keys never reach winit; they are
 /// translated here and the page never sees the ones the browser takes.
+/// While a chrome text field (address bar, find bar) has egui's focus
+/// (`chrome_keys`), every key goes to it instead of the page.
 #[cfg(target_os = "linux")]
-fn attach_webview_shortcuts_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>) {
+fn attach_webview_shortcuts_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>, chrome_keys: Rc<std::cell::Cell<bool>>) {
     use gtk::gdk::{ModifierType, keys::constants as k};
     use gtk::glib::Propagation;
     use gtk::prelude::WidgetExt as _;
     use wry::WebViewExtUnix as _;
+    let click_proxy = proxy.clone();
+    wv.webview().connect_button_press_event(move |_, _| {
+        // A click in the page takes the keyboard back from the chrome.
+        let _ = click_proxy.send_event(UserMessage::PageClicked);
+        Propagation::Proceed
+    });
+    // An input method can hand the same key over twice; act on it once.
+    let last = std::cell::Cell::new((0u32, 0u32));
     wv.webview().connect_key_press_event(move |_, event| {
         let state = event.state();
         let ctrl = state.contains(ModifierType::CONTROL_MASK);
         let shift = state.contains(ModifierType::SHIFT_MASK);
         let alt = state.contains(ModifierType::MOD1_MASK);
         let kv = event.keyval();
+        let stamp = (event.time(), *kv);
+        let repeat = last.get() == stamp;
         let key = match kv {
-            k::F5 => Key::Named(NamedKey::F5),
-            k::F6 => Key::Named(NamedKey::F6),
-            k::F11 => Key::Named(NamedKey::F11),
-            k::F12 => Key::Named(NamedKey::F12),
-            k::Tab | k::ISO_Left_Tab => Key::Named(NamedKey::Tab),
-            k::Left => Key::Named(NamedKey::ArrowLeft),
-            k::Right => Key::Named(NamedKey::ArrowRight),
-            k::Home => Key::Named(NamedKey::Home),
+            k::F1 => Some(Key::Named(NamedKey::F1)),
+            k::F5 => Some(Key::Named(NamedKey::F5)),
+            k::F6 => Some(Key::Named(NamedKey::F6)),
+            k::F11 => Some(Key::Named(NamedKey::F11)),
+            k::F12 => Some(Key::Named(NamedKey::F12)),
+            k::Tab | k::ISO_Left_Tab => Some(Key::Named(NamedKey::Tab)),
+            k::Left => Some(Key::Named(NamedKey::ArrowLeft)),
+            k::Right => Some(Key::Named(NamedKey::ArrowRight)),
+            k::Home => Some(Key::Named(NamedKey::Home)),
+            k::Page_Up | k::KP_Page_Up => Some(Key::Named(NamedKey::PageUp)),
+            k::Page_Down | k::KP_Page_Down => Some(Key::Named(NamedKey::PageDown)),
+            // Ctrl+digit: matched by the digit key whatever the layout
+            // makes of it with Shift.
+            k::_1 => Some(Key::Character("1".into())),
+            k::_2 => Some(Key::Character("2".into())),
+            k::_3 => Some(Key::Character("3".into())),
+            k::_4 => Some(Key::Character("4".into())),
+            k::_5 => Some(Key::Character("5".into())),
+            k::_6 => Some(Key::Character("6".into())),
+            k::_7 => Some(Key::Character("7".into())),
+            k::_8 => Some(Key::Character("8".into())),
+            k::_9 => Some(Key::Character("9".into())),
             _ => match kv.to_unicode() {
-                Some(c) if !c.is_control() => Key::Character(c.to_string().into()),
-                _ => return Propagation::Proceed,
+                Some(c) if !c.is_control() => Some(Key::Character(c.to_string().into())),
+                _ => None,
             },
         };
         // `typing`: the page may have a text field focused, so Ctrl+Left
         // and Ctrl+Right stay with it.
-        match shortcut_for(&key, ctrl, shift, alt, true) {
-            Some(shortcut) => {
+        if let Some(shortcut) = key.as_ref().and_then(|key| shortcut_for(key, ctrl, shift, alt, true)) {
+            if !repeat {
+                last.set(stamp);
                 let _ = proxy.send_event(UserMessage::WebKey(shortcut));
-                Propagation::Stop
             }
-            None => Propagation::Proceed,
+            return Propagation::Stop;
         }
+        if chrome_keys.get() {
+            if !repeat {
+                last.set(stamp);
+                let named = |key| Some(key);
+                let egui_key = match kv {
+                    k::Return | k::KP_Enter => named(egui::Key::Enter),
+                    k::Escape => named(egui::Key::Escape),
+                    k::BackSpace => named(egui::Key::Backspace),
+                    k::Delete | k::KP_Delete => named(egui::Key::Delete),
+                    k::Tab | k::ISO_Left_Tab => named(egui::Key::Tab),
+                    k::Left => named(egui::Key::ArrowLeft),
+                    k::Right => named(egui::Key::ArrowRight),
+                    k::Up => named(egui::Key::ArrowUp),
+                    k::Down => named(egui::Key::ArrowDown),
+                    k::Home => named(egui::Key::Home),
+                    k::End => named(egui::Key::End),
+                    _ => kv
+                        .to_lower()
+                        .to_unicode()
+                        .filter(char::is_ascii_alphanumeric)
+                        .and_then(|c| egui::Key::from_name(&c.to_ascii_uppercase().to_string())),
+                };
+                let text = kv
+                    .to_unicode()
+                    .filter(|c| !c.is_control() && !ctrl && !alt)
+                    .map(|c| c.to_string());
+                let _ = proxy.send_event(UserMessage::ChromeKey(ChromeKey { key: egui_key, text, ctrl, shift, alt }));
+            }
+            return Propagation::Stop;
+        }
+        Propagation::Proceed
     });
 }
 
@@ -896,6 +1562,9 @@ fn attach_webview_shortcuts_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>
 fn vk_to_key(vk: u32) -> Option<Key> {
     match vk {
         0x09 => Some(Key::Named(NamedKey::Tab)),        // VK_TAB
+        0x21 => Some(Key::Named(NamedKey::PageUp)),     // VK_PRIOR
+        0x22 => Some(Key::Named(NamedKey::PageDown)),   // VK_NEXT
+        0x70 => Some(Key::Named(NamedKey::F1)),         // VK_F1
         0x24 => Some(Key::Named(NamedKey::Home)),       // VK_HOME
         0x25 => Some(Key::Named(NamedKey::ArrowLeft)),  // VK_LEFT
         0x27 => Some(Key::Named(NamedKey::ArrowRight)), // VK_RIGHT
@@ -904,6 +1573,7 @@ fn vk_to_key(vk: u32) -> Option<Key> {
         0x7A => Some(Key::Named(NamedKey::F11)),        // VK_F11
         0x7B => Some(Key::Named(NamedKey::F12)),        // VK_F12
         0x30 | 0x60 => Some(Key::Character("0".into())), // '0', VK_NUMPAD0
+        0x31..=0x39 => Some(Key::Character(char::from_u32(vk)?.to_string().into())), // '1'..'9'
         0x6B | 0xBB => Some(Key::Character("+".into())), // VK_ADD, VK_OEM_PLUS ('=' / '+')
         0x6D | 0xBD => Some(Key::Character("-".into())), // VK_SUBTRACT, VK_OEM_MINUS ('-' / '_')
         0x41..=0x5A => {
@@ -1007,7 +1677,7 @@ fn attach_webview_fullscreen(wv: &WebView, proxy: EventLoopProxy<UserMessage>, e
 /// - certificate errors (`ServerCertificateErrorDetected`): WebView2 still
 ///   shows its warning page; the host loses the lock for the session.
 #[cfg(windows)]
-fn attach_webview_guards(wv: &WebView, proxy: EventLoopProxy<UserMessage>, epoch: Arc<AtomicU64>) {
+fn attach_webview_guards(wv: &WebView, proxy: EventLoopProxy<UserMessage>, epoch: Arc<AtomicU64>, tab: u64) {
     use webview2_com::Microsoft::Web::WebView2::Win32::{ICoreWebView2_14, ICoreWebView2_18};
     use webview2_com::{
         LaunchingExternalUriSchemeEventHandler, NewWindowRequestedEventHandler,
@@ -1033,7 +1703,7 @@ fn attach_webview_guards(wv: &WebView, proxy: EventLoopProxy<UserMessage>, epoch
             let url = take_pwstr(uri);
             if user.as_bool() && popup_allowed(&url) {
                 let epoch = epoch.load(Ordering::SeqCst);
-                let _ = popups.send_event(UserMessage::WebOpen { epoch, url, popup: true });
+                let _ = popups.send_event(UserMessage::Tab(tab, TabMessage::Open { epoch, url, popup: true }));
             }
         }
         Ok(())
@@ -1072,7 +1742,7 @@ fn attach_webview_guards(wv: &WebView, proxy: EventLoopProxy<UserMessage>, epoch
     }
 
     let handler = WindowCloseRequestedEventHandler::create(Box::new(move |_, _| {
-        let _ = proxy.send_event(UserMessage::WebClosed);
+        let _ = proxy.send_event(UserMessage::Tab(tab, TabMessage::Closed));
         Ok(())
     }));
     let _ = unsafe { webview.add_WindowCloseRequested(&handler, &mut token) };
@@ -1304,7 +1974,7 @@ fn inset(r: Rect, by: f32) -> Rect {
 // ---------------------------------------------------------------------------
 
 impl Browser {
-    pub fn new(proxy: EventLoopProxy<UserMessage>, fonts: Fonts, start_url: String) -> Self {
+    pub fn new(proxy: EventLoopProxy<UserMessage>, fonts: Fonts, start_tabs: Vec<StartTab>) -> Self {
         Browser {
             gfx: None,
             fonts,
@@ -1319,9 +1989,25 @@ impl Browser {
             index: 0,
             tab: None,
             loading: false,
-            start_url,
+            start_tabs,
             webview: None,
-            web_context: None,
+            wry_ok: false,
+            contexts: HashMap::new(),
+            tab_id: 1,
+            container: None,
+            next_tab_id: 2,
+            closed_tabs: Vec::new(),
+            last_suspend_check: Instant::now(),
+            saved_session: String::new(),
+            drawer: None,
+            containers_panel: crate::containers::ContainersPanel::new(),
+            find: None,
+            favicons: HashMap::new(),
+            snapshot_pending: false,
+            extra_page_scripts: Vec::new(),
+            gpu_chrome: false,
+            chrome_keys: Rc::new(std::cell::Cell::new(false)),
+            pending_egui_events: Vec::new(),
             servo_frame: None,
             servo_buttons: Vec::new(),
             web_page: false,
@@ -1404,19 +2090,40 @@ impl Browser {
             + extra_bars_h(
                 scale,
                 self.egui.is_some() && !self.web_fullscreen,
-                flags::get().bookmarks_bar,
-                save_bar && !self.web_fullscreen,
+                Bars {
+                    tab_strip: self.tabs_position() == TabsPosition::Top,
+                    bookmarks: flags::get().bookmarks_bar,
+                    save: save_bar,
+                    find: self.find.is_some(),
+                },
             )
+    }
+
+    /// Where the tabs are: the flag, except that the engine chrome has no
+    /// tab strip and shows the sidebar on the left instead.
+    fn tabs_position(&self) -> TabsPosition {
+        match flags::get().tabs_position {
+            TabsPosition::Top if !self.gpu_chrome => TabsPosition::Left,
+            p => p,
+        }
     }
 
     fn sidebar_w(&self) -> f32 {
         if self.web_fullscreen {
             return 0.0;
         }
-        match flags::get().tabs_position {
-            TabsPosition::Hidden => 0.0,
+        match self.tabs_position() {
+            TabsPosition::Hidden | TabsPosition::Top => 0.0,
             _ => (SIDEBAR_WIDTH * self.scale()).round(),
         }
+    }
+
+    /// The drawer's width (it narrows the page on the right).
+    fn drawer_w(&self) -> f32 {
+        if self.web_fullscreen || !self.gpu_chrome || self.drawer.is_none() {
+            return 0.0;
+        }
+        (DRAWER_WIDTH * self.scale()).round()
     }
 
     fn notice_active(&self) -> bool {
@@ -1448,18 +2155,18 @@ impl Browser {
     fn page_rect(&self) -> Rect {
         let (w, h) = self.window_size();
         let (th, sw) = (self.top_h(), self.sidebar_w());
-        let left = flags::get().tabs_position == TabsPosition::Left;
+        let left = self.tabs_position() == TabsPosition::Left;
         Rect {
             x: if left { sw } else { 0.0 },
             y: th,
-            w: (w - sw).max(1.0),
+            w: (w - sw - self.drawer_w()).max(1.0),
             h: (h - th - self.notice_h()).max(1.0),
         }
     }
 
     fn sidebar_rect(&self) -> Option<Rect> {
-        let pos = flags::get().tabs_position;
-        if pos == TabsPosition::Hidden || self.web_fullscreen {
+        let pos = self.tabs_position();
+        if matches!(pos, TabsPosition::Hidden | TabsPosition::Top) || self.web_fullscreen {
             return None;
         }
         let (w, h) = self.window_size();
@@ -1565,25 +2272,85 @@ impl Browser {
         }
     }
 
+    /// The shared Servo pane is in use: one pane for every tab.
+    fn shared_pane(&self) -> bool {
+        matches!(self.webview, Some(WebPane::Servo(_)))
+    }
+
+    fn alloc_tab_id(&mut self) -> u64 {
+        let id = self.next_tab_id;
+        self.next_tab_id += 1;
+        id
+    }
+
+    /// The container of tab `i`.
+    fn tab_container(&self, i: usize) -> Option<String> {
+        if i == self.active {
+            self.container.clone()
+        } else {
+            self.tabs.get(i).and_then(|t| t.container.clone())
+        }
+    }
+
+    fn tab_id_at(&self, i: usize) -> u64 {
+        if i == self.active {
+            self.tab_id
+        } else {
+            self.tabs.get(i).map_or(0, |t| t.id)
+        }
+    }
+
+    /// Tab `i` is a background web tab whose page was unloaded (suspended or
+    /// restored and never shown).
+    fn tab_unloaded(&self, i: usize) -> bool {
+        i != self.active && self.wry_ok && self.tabs.get(i).is_some_and(|t| t.view.is_none() && (t.web_page || t.tab.is_none()))
+    }
+
     /// Moves the live tab fields into the active tab's pantry slot.
     fn park_active_tab(&mut self) {
-        // Every tab shares the one WebView; a parked web tab reloads its URL
-        // when it becomes active again.
-        self.unload_webview();
-        self.servo_frame = None;
+        self.close_find();
+        let mut view = None;
+        let shared = self.shared_pane();
+        if shared {
+            // Servo's one pane is shared by every tab: a parked web tab
+            // reloads its URL when it becomes active again.
+            self.unload_webview();
+            self.servo_frame = None;
+        } else if let Some(wv) = self.webview.take() {
+            // Each tab keeps its own web view, hidden, with its page alive.
+            wv.set_visible(false);
+            view = Some(wv);
+        }
+        self.web_visible = false;
+        self.web_bounds = None;
+        self.popup_snapshot = None;
+        self.snapshot_pending = false;
         self.web_epoch.fetch_add(1, Ordering::SeqCst);
-        self.web_leaving = self.web_url.clone();
-        self.web_document.clear();
         let title = self.live_title();
-        let state = TabState {
+        let mut state = TabState {
             history: std::mem::take(&mut self.history),
             index: std::mem::take(&mut self.index),
             tab: self.tab.take(),
             web_page: std::mem::take(&mut self.web_page),
             web_url: std::mem::take(&mut self.web_url),
             title,
+            id: self.tab_id,
+            container: self.container.take(),
+            view,
+            loading: self.loading,
+            web_expect: self.web_expect,
+            web_committed: self.web_committed,
+            web_leaving: std::mem::take(&mut self.web_leaving),
+            web_document: std::mem::take(&mut self.web_document),
+            page_forms: self.page_forms.take(),
+            last_active: Some(Instant::now()),
         };
-        // Any load still running belongs to the tab we are leaving.
+        if shared {
+            // Late events of the page being unloaded are stale.
+            self.web_leaving = state.web_url.clone();
+            state.loading = false;
+        }
+        // Any engine load still running belongs to the tab we are leaving.
         self.generation.fetch_add(1, Ordering::SeqCst);
         self.loading = false;
         self.title.clear();
@@ -1595,8 +2362,9 @@ impl Browser {
         }
     }
 
-    /// Makes tab `i` the live tab, reloading whatever it was showing if its
-    /// page was not kept in memory.
+    /// Makes tab `i` the live tab. A web tab whose web view is still alive
+    /// is shown as it was; an unloaded one (or any, with Servo's shared
+    /// pane) loads its address again, and an engine page is rebuilt.
     fn activate_pantry(&mut self, i: usize) {
         self.active = i;
         let state = std::mem::take(&mut self.tabs[i]);
@@ -1610,26 +2378,77 @@ impl Browser {
         } else {
             state.title
         };
-        self.loading = false;
+        self.tab_id = state.id;
+        self.container = state.container;
+        self.page_forms = state.page_forms;
         self.focus = Focus::Page;
+        self.web_visible = false;
+        self.web_bounds = None;
         self.address.set(&self.current_url());
-        if self.web_page {
-            let url = self.web_url.clone();
-            self.web_expect = true;
-            self.web_committed = false;
-            self.loading = true;
+        let shared = self.shared_pane();
+        if !shared {
+            self.webview = state.view;
+        }
+        if self.web_page && !shared && self.webview.is_some() {
+            // The page is still there, as the user left it.
+            self.loading = state.loading;
+            self.web_expect = state.web_expect;
+            self.web_committed = state.web_committed;
+            self.web_leaving = state.web_leaving;
+            self.web_document = state.web_document;
             if let Some(wv) = &self.webview {
-                let _ = wv.load_url(&url);
                 wv.zoom(self.user_zoom as f64);
             }
+        } else if self.web_page {
+            let url = self.web_url.clone();
+            self.reload_web_tab(&url);
         } else if self.tab.is_none()
             && let Some(entry) = self.history.get(self.index)
         {
             let (request, scroll) = (entry.request.clone(), entry.scroll);
             self.start_load(request, false, Some(scroll));
+        } else {
+            self.loading = false;
         }
         self.update_window_title();
+        self.enforce_tab_limits();
         self.request_redraw();
+    }
+
+    /// Loads `url` again in the active web tab (its web view was unloaded,
+    /// or is Servo's shared pane), creating the tab's web view if needed.
+    fn reload_web_tab(&mut self, url: &str) {
+        if !self.ensure_view() {
+            self.web_page = false;
+            self.start_load(Request::Get(url.to_string()), false, None);
+            return;
+        }
+        self.web_expect = true;
+        self.web_committed = false;
+        self.web_document.clear();
+        self.loading = true;
+        if let Some(wv) = &self.webview {
+            let _ = wv.load_url(url);
+            wv.zoom(self.user_zoom as f64);
+        }
+    }
+
+    /// Makes sure the active tab has a web view (in its container's data
+    /// store). Returns whether it has one.
+    fn ensure_view(&mut self) -> bool {
+        if self.webview.is_none()
+            && self.wry_ok
+            && let Some(window) = self.gfx.as_ref().map(|g| g.window.clone())
+        {
+            let container = self.container.clone();
+            self.webview = self.create_webview(&window, self.tab_id, container.as_deref());
+            self.web_visible = false;
+            self.web_bounds = None;
+            if self.webview.is_none() {
+                self.set_notice("Could not create a web view for this tab");
+            }
+        }
+        self.webview.is_some()
     }
 
     fn switch_tab(&mut self, i: usize) {
@@ -1650,13 +2469,32 @@ impl Browser {
     }
 
     fn new_tab(&mut self) {
+        self.new_tab_in(ContainerChoice::None, None);
+    }
+
+    /// Opens a new tab in a container, on `url` or the start page.
+    fn new_tab_in(&mut self, choice: ContainerChoice, url: Option<String>) {
+        let container = match choice {
+            ContainerChoice::None => None,
+            ContainerChoice::Id(id) => crate::containers::get(&id).map(|c| c.id),
+            ContainerChoice::Temporary => Some(crate::containers::create_temporary().id),
+        };
         self.park_active_tab();
-        self.tabs.push(TabState::default());
-        self.active = self.tabs.len() - 1;
-        self.load(Request::Get(NEW_TAB_URL.to_string()), true);
-        // A fresh tab starts with an empty, focused address bar.
-        self.address.set("");
-        self.focus_address();
+        let id = self.alloc_tab_id();
+        self.tabs.push(TabState { id, container, ..TabState::default() });
+        self.activate_pantry(self.tabs.len() - 1);
+        match url {
+            Some(url) => {
+                self.load(Request::Get(url), true);
+                self.focus = Focus::Page;
+            }
+            None => {
+                self.load(Request::Get(NEW_TAB_URL.to_string()), true);
+                // A fresh tab starts with an empty, focused address bar.
+                self.address.set("");
+                self.focus_address();
+            }
+        }
     }
 
     fn close_tab(&mut self, i: usize) {
@@ -1667,18 +2505,467 @@ impl Browser {
             self.quit = true;
             return;
         }
-        if i == self.active {
+        let closed = if i == self.active {
             self.park_active_tab();
-            self.tabs.remove(i);
+            let state = self.tabs.remove(i);
             let next = i.min(self.tabs.len() - 1);
             self.activate_pantry(next);
+            state
         } else {
-            self.tabs.remove(i);
+            let state = self.tabs.remove(i);
             if i < self.active {
                 self.active -= 1;
             }
+            state
+        };
+        self.favicons.remove(&closed.id);
+        self.remember_closed(closed);
+        self.release_unused_contexts();
+        self.request_redraw();
+    }
+
+    /// Keeps a closed tab for Ctrl+Shift+T (dropping its web view). Tabs of
+    /// temporary containers are not kept: their data is gone.
+    fn remember_closed(&mut self, state: TabState) {
+        let temporary = state.container.as_deref().is_some_and(|c| c.starts_with("tmp-"));
+        if temporary || state.history.is_empty() {
+            return;
+        }
+        self.closed_tabs.push(ClosedTab {
+            history: state.history,
+            index: state.index,
+            title: state.title,
+            container: state.container,
+        });
+        let excess = self.closed_tabs.len().saturating_sub(MAX_CLOSED_TABS);
+        self.closed_tabs.drain(..excess);
+    }
+
+    /// Ctrl+Shift+T: reopens the most recently closed tab, with its history,
+    /// in its container.
+    fn reopen_closed_tab(&mut self) {
+        let Some(closed) = self.closed_tabs.pop() else {
+            self.set_notice("No recently closed tabs");
+            return;
+        };
+        let container = closed.container.filter(|c| crate::containers::get(c).is_some());
+        self.park_active_tab();
+        let id = self.alloc_tab_id();
+        self.tabs.push(TabState {
+            id,
+            container,
+            history: closed.history,
+            index: closed.index,
+            title: closed.title,
+            ..TabState::default()
+        });
+        self.activate_pantry(self.tabs.len() - 1);
+    }
+
+    /// Drops the web data stores no tab uses any more. A temporary
+    /// container ends with its last tab: its folder is deleted.
+    fn release_unused_contexts(&mut self) {
+        let mut used: HashSet<String> = self.tabs.iter().filter_map(|t| t.container.clone()).collect();
+        if let Some(c) = &self.container {
+            used.insert(c.clone());
+        }
+        self.contexts.retain(|key, _| key.is_empty() || used.contains(key));
+        for temp in crate::containers::temporary() {
+            if !used.contains(&temp.id) {
+                crate::containers::end_temporary(&temp.id);
+            }
+        }
+    }
+
+    /// Unloads background tabs that have been idle too long, or the least
+    /// recently used ones beyond the cap on live web views (flags).
+    fn enforce_tab_limits(&mut self) {
+        if self.shared_pane() {
+            return;
+        }
+        let f = flags::get();
+        let info: Vec<(bool, bool, Option<Instant>)> = (0..self.tabs.len())
+            .map(|i| {
+                if i == self.active {
+                    (self.webview.is_some(), false, None)
+                } else {
+                    let t = &self.tabs[i];
+                    (t.view.is_some(), !t.view.as_ref().is_some_and(WebPane::playing_audio), t.last_active)
+                }
+            })
+            .collect();
+        let after = (f.suspend_after_min > 0).then(|| Duration::from_secs(u64::from(f.suspend_after_min) * 60));
+        for i in tabs_to_suspend(&info, self.active, Instant::now(), after, f.max_live_tabs as usize) {
+            self.suspend_tab(i);
+        }
+    }
+
+    /// Unloads background tab `i`: its web view (and the page's memory) is
+    /// dropped; its address, title and history stay, and it loads again
+    /// when shown.
+    fn suspend_tab(&mut self, i: usize) {
+        if i == self.active {
+            return;
+        }
+        let Some(state) = self.tabs.get_mut(i) else {
+            return;
+        };
+        if state.view.take().is_none() {
+            return;
+        }
+        state.loading = false;
+        state.web_expect = false;
+        state.web_committed = false;
+        state.web_leaving.clear();
+        state.web_document.clear();
+        state.page_forms = None;
+    }
+
+    /// The active tab shows nothing yet (a new tab's start page).
+    fn tab_is_blank(&self) -> bool {
+        self.history.iter().all(|e| e.request.url() == NEW_TAB_URL)
+    }
+
+    /// Moves the active tab to another container. Its web view belongs to
+    /// the old container's data store, so it is dropped.
+    fn set_tab_container(&mut self, container: Option<String>) {
+        if self.container == container {
+            return;
+        }
+        if !self.shared_pane() {
+            self.webview = None;
+            self.web_visible = false;
+            self.web_bounds = None;
+        }
+        self.container = container;
+        self.release_unused_contexts();
+    }
+
+    /// Opens `url` in container `container`: in the active tab when it is
+    /// still blank, otherwise in a new tab.
+    fn open_in_container(&mut self, url: String, container: String) {
+        if self.tab_is_blank() {
+            self.set_tab_container(Some(container));
+            self.start_load(Request::Get(url), true, None);
+        } else {
+            self.new_tab_in(ContainerChoice::Id(container), Some(url));
+        }
+    }
+
+    /// The command palette (Ctrl+P, F1).
+    // TODO(palette): open the palette widget from src/palette.rs once it is
+    // integrated (`self.palette.open()`), and route its outcome.
+    fn open_palette(&mut self) {
+        self.set_notice("The command palette is coming soon (Ctrl+P / F1)");
+    }
+
+    /// Shows a drawer panel, or hides it when it is already shown.
+    pub fn toggle_drawer(&mut self, drawer: Drawer) {
+        self.drawer = if self.drawer == Some(drawer) { None } else { Some(drawer) };
+        self.web_bounds = None;
+        self.request_redraw();
+    }
+
+    /// Shows a drawer panel on the right of the page.
+    #[allow(dead_code)] // for the palette and the feature modules
+    pub fn open_drawer(&mut self, drawer: Drawer) {
+        self.drawer = Some(drawer);
+        self.web_bounds = None;
+        self.request_redraw();
+    }
+
+    /// Applies what the user did in the Containers drawer.
+    fn containers_event(&mut self, event: crate::containers::ContainersEvent) {
+        use crate::containers::{self, ContainersEvent};
+        match event {
+            ContainersEvent::OpenTab(Some(id)) => self.new_tab_in(ContainerChoice::Id(id), None),
+            ContainersEvent::OpenTab(None) => self.new_tab_in(ContainerChoice::Temporary, None),
+            ContainersEvent::Deleted(id) => {
+                let in_it = |b: &Self, i: usize| b.tab_container(i).as_deref() == Some(id.as_str());
+                if (0..self.tabs.len()).all(|i| in_it(self, i)) {
+                    self.new_tab();
+                }
+                while let Some(i) = (0..self.tabs.len()).rev().find(|&i| in_it(self, i)) {
+                    self.close_tab(i);
+                }
+                self.closed_tabs.retain(|t| t.container.as_deref() != Some(id.as_str()));
+                self.release_unused_contexts();
+                match containers::remove_data(&id) {
+                    Ok(()) => self.set_notice("Container deleted with its cookies and site data"),
+                    Err(e) => self.set_notice(e),
+                }
+            }
+            ContainersEvent::Changed => self.request_redraw(),
+            ContainersEvent::Export(path) => match containers::export_file(&path) {
+                Ok(()) => self.set_notice(format!("Containers exported to {}", path.display())),
+                Err(e) => self.set_notice(e),
+            },
+            ContainersEvent::Import(path) => match containers::import_file(&path) {
+                Ok(n) => self.set_notice(format!("Imported {} containers and {} site rules", n.containers, n.rules)),
+                Err(e) => self.set_notice(e),
+            },
+            ContainersEvent::ExportClipboard => {
+                let json = containers::export_json();
+                match self.clipboard.as_mut().map(|c| c.set_text(json)) {
+                    Some(Ok(())) => self.set_notice("Containers copied as JSON"),
+                    _ => self.set_notice("Could not use the clipboard"),
+                }
+            }
+            ContainersEvent::ImportClipboard => {
+                let text = self.clipboard.as_mut().and_then(|c| c.get_text().ok()).unwrap_or_default();
+                match containers::import_json(&text) {
+                    Ok(n) => self.set_notice(format!("Imported {} containers and {} site rules", n.containers, n.rules)),
+                    Err(e) => self.set_notice(e),
+                }
+            }
+            ContainersEvent::Notice(message) => self.set_notice(message),
+        }
+    }
+
+    /// A key forwarded from the page's window to the focused chrome field.
+    fn chrome_key(&mut self, key: ChromeKey) {
+        let modifiers = egui::Modifiers { alt: key.alt, ctrl: key.ctrl, shift: key.shift, mac_cmd: false, command: key.ctrl };
+        let events = &mut self.pending_egui_events;
+        match key.key {
+            Some(egui::Key::V) if key.ctrl => {
+                if let Some(text) = self.clipboard.as_mut().and_then(|c| c.get_text().ok()) {
+                    events.push(egui::Event::Paste(text));
+                }
+            }
+            Some(egui::Key::C) if key.ctrl => events.push(egui::Event::Copy),
+            Some(egui::Key::X) if key.ctrl => events.push(egui::Event::Cut),
+            Some(k) => {
+                for pressed in [true, false] {
+                    events.push(egui::Event::Key { key: k, physical_key: None, pressed, repeat: false, modifiers });
+                }
+            }
+            None => {}
+        }
+        if let Some(text) = key.text {
+            events.push(egui::Event::Text(text));
         }
         self.request_redraw();
+    }
+
+    // ---- find in page ----
+
+    fn open_find(&mut self) {
+        if !self.web_page || self.webview.is_none() {
+            self.set_notice("Find in page works on web pages");
+            return;
+        }
+        if self.egui.is_none() {
+            self.set_notice("Find in page needs the GPU interface");
+            return;
+        }
+        let bar = self.find.get_or_insert(FindBar {
+            query: String::new(),
+            sent: String::new(),
+            matches: None,
+            focus: true,
+        });
+        bar.focus = true;
+        self.web_bounds = None;
+        // The find field is egui's: take the keyboard from the page.
+        self.take_keyboard();
+        self.request_redraw();
+    }
+
+    fn close_find(&mut self) {
+        if self.find.take().is_some() {
+            if let Some(wv) = &self.webview {
+                wv.find_finish();
+            }
+            self.web_bounds = None;
+            if let Some(wv) = &self.webview {
+                wv.focus_parent();
+            }
+        }
+    }
+
+    /// Searches the find bar's text: on change, or the next / previous
+    /// match (`again`).
+    fn find_in_page(&mut self, backwards: bool, again: bool) {
+        let Some(bar) = self.find.as_mut() else {
+            return;
+        };
+        if !again && bar.query == bar.sent {
+            return;
+        }
+        bar.sent = bar.query.clone();
+        if bar.query.is_empty() {
+            bar.matches = None;
+        }
+        let query = bar.query.clone();
+        if let Some(wv) = &self.webview {
+            wv.find(&query, backwards, again);
+        }
+    }
+
+    // ---- events from the tabs' web views ----
+
+    fn tab_message(&mut self, id: u64, message: TabMessage) {
+        if id == self.tab_id {
+            match message {
+                TabMessage::Title(title) => self.web_titled(title),
+                TabMessage::Start(url) => self.web_started(url),
+                TabMessage::Load(url) => self.web_loaded(url),
+                TabMessage::Open { epoch, url, popup } => self.web_open(epoch, url, popup),
+                TabMessage::Closed => self.web_closed(),
+                TabMessage::Page { sender, message } => self.page_message(sender, message),
+                TabMessage::OpenInContainer { url, container } => self.open_in_container(url, container),
+                TabMessage::Favicon { w, h, rgba } => self.set_favicon(id, w, h, rgba),
+                TabMessage::Found(count) => {
+                    if let Some(bar) = self.find.as_mut() {
+                        bar.matches = Some(count);
+                    }
+                }
+                TabMessage::Snapshot { w, h, rgba } => self.show_snapshot(w, h, rgba),
+                TabMessage::Relayout => {
+                    self.web_bounds = None;
+                    self.sync_webview();
+                }
+            }
+            return;
+        }
+        let Some(i) = self.tabs.iter().position(|t| t.id == id) else {
+            return; // a closed tab
+        };
+        match message {
+            TabMessage::Favicon { w, h, rgba } => self.set_favicon(id, w, h, rgba),
+            TabMessage::Closed => self.suspend_tab(i),
+            other => background_web_event(&mut self.tabs[i], other),
+        }
+    }
+
+    fn set_favicon(&mut self, id: u64, w: usize, h: usize, rgba: Vec<u8>) {
+        if w == 0 || h == 0 || rgba.len() != w * h * 4 {
+            self.favicons.remove(&id);
+            return;
+        }
+        if let Some(egui) = &self.egui {
+            let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+            let texture = egui.ctx().load_texture(format!("favicon-{id}"), image, egui::TextureOptions::LINEAR);
+            self.favicons.insert(id, texture);
+        }
+    }
+
+    /// The page snapshot asked for when a menu opened over the page.
+    fn show_snapshot(&mut self, w: usize, h: usize, rgba: Vec<u8>) {
+        if !self.snapshot_pending {
+            return; // the menu closed meanwhile
+        }
+        self.snapshot_pending = false;
+        if w == 0 || h == 0 || rgba.len() != w * h * 4 || !self.egui_popup_open {
+            return;
+        }
+        if let Some(egui) = &self.egui {
+            let image = egui::ColorImage::from_rgba_unmultiplied([w, h], &rgba);
+            self.popup_snapshot =
+                Some(egui.ctx().load_texture("browsecraft-popup-snapshot", image, egui::TextureOptions::LINEAR));
+        }
+    }
+
+    // ---- session ----
+
+    /// The open tabs as the session file stores them. Temporary containers
+    /// are left out (their data is gone once the browser quits).
+    fn session_json(&self) -> String {
+        let mut tabs = Vec::new();
+        let mut active = 0;
+        for i in 0..self.tabs.len() {
+            let container = self.tab_container(i);
+            if container.as_deref().is_some_and(|c| c.starts_with("tmp-")) {
+                continue;
+            }
+            let url = self.tab_url(i);
+            if url.is_empty() || url.len() > MAX_SESSION_URL {
+                continue;
+            }
+            if i == self.active {
+                active = tabs.len();
+            }
+            tabs.push(serde_json::json!({ "url": url, "title": self.tab_title(i), "container": container }));
+        }
+        serde_json::json!({ "active": active, "tabs": tabs }).to_string()
+    }
+
+    /// Writes the session file when it changed (or deletes it when tabs are
+    /// not to be restored).
+    fn save_session(&mut self) {
+        let Ok(path) = crate::storage::config_file(SESSION_FILE) else {
+            return;
+        };
+        if !flags::get().restore_tabs {
+            if !self.saved_session.is_empty() || path.exists() {
+                let _ = std::fs::remove_file(&path);
+                self.saved_session.clear();
+            }
+            return;
+        }
+        let json = self.session_json();
+        if json != self.saved_session && crate::storage::write_private(&path, json.as_bytes()).is_ok() {
+            self.saved_session = json;
+        }
+    }
+
+    /// Restores the last session's tabs. Only the active one loads now; the
+    /// others load when first shown. Returns false when there was nothing.
+    fn restore_session(&mut self) -> bool {
+        let Ok(path) = crate::storage::config_file(SESSION_FILE) else {
+            return false;
+        };
+        let Ok(text) = crate::storage::read_text_limited(&path, crate::storage::MAX_SETTINGS_FILE) else {
+            return false;
+        };
+        let (tabs, active) = parse_session(&text);
+        if tabs.is_empty() {
+            return false;
+        }
+        self.tabs = tabs
+            .into_iter()
+            .map(|t| {
+                let id = self.alloc_tab_id();
+                TabState {
+                    id,
+                    container: t.container.filter(|c| crate::containers::get(c).is_some()),
+                    history: vec![HistoryEntry { request: Request::Get(t.url), scroll: 0.0 }],
+                    title: t.title,
+                    ..TabState::default()
+                }
+            })
+            .collect();
+        self.saved_session = text;
+        let active = active.min(self.tabs.len() - 1);
+        self.activate_pantry(active);
+        true
+    }
+
+    /// Opens the tabs asked for at start-up, the restored session, or the
+    /// home page.
+    fn open_start_tabs(&mut self) {
+        let start = std::mem::take(&mut self.start_tabs);
+        if start.is_empty() && flags::get().restore_tabs && self.restore_session() {
+            return;
+        }
+        let start = if start.is_empty() {
+            vec![StartTab { url: HOME_URL.to_string(), container: ContainerChoice::None }]
+        } else {
+            start
+        };
+        for (n, tab) in start.into_iter().enumerate() {
+            if n == 0 {
+                let container = match tab.container {
+                    ContainerChoice::None => None,
+                    ContainerChoice::Id(id) => crate::containers::get(&id).map(|c| c.id),
+                    ContainerChoice::Temporary => Some(crate::containers::create_temporary().id),
+                };
+                self.set_tab_container(container);
+                self.load(Request::Get(tab.url), true);
+            } else {
+                self.new_tab_in(tab.container, Some(tab.url));
+            }
+        }
     }
 
     // ---- navigation ----
@@ -1687,10 +2974,19 @@ impl Browser {
         self.focus = Focus::Address;
         self.address.select_all();
         self.egui_focus_address = true;
+        self.take_keyboard();
+        self.request_redraw();
+    }
+
+    /// Gives the keyboard back to the browser window from the page. On
+    /// Linux the X11 child window of the page can keep getting the keys (X
+    /// sends them to the window under the pointer); its key handler then
+    /// forwards them to the chrome's text field (`chrome_keys`).
+    fn take_keyboard(&self) {
         if let Some(wv) = &self.webview {
             wv.focus_parent();
         }
-        self.request_redraw();
+        self.chrome_keys.set(true);
     }
 
     /// Opens what the user typed in the address bar.
@@ -1710,7 +3006,16 @@ impl Browser {
     }
 
     /// Loads `request` as a new history entry (when `push`) in the active tab.
+    /// A site that a rule puts in another container opens there instead.
     fn load(&mut self, request: Request, push: bool) {
+        if push
+            && let Request::Get(url) = &request
+            && let Some(target) = crate::containers::rule_for_url(url)
+            && self.container.as_deref() != Some(target.as_str())
+        {
+            self.open_in_container(url.clone(), target);
+            return;
+        }
         self.start_load(request, push, None);
     }
 
@@ -1757,10 +3062,10 @@ impl Browser {
         let generation = self.generation.fetch_add(1, Ordering::SeqCst) + 1;
         self.loading = true;
 
-        let use_webview = self.webview.is_some()
+        let use_webview = (self.webview.is_some() || self.wry_ok)
             && matches!(request, Request::Get(_))
             && request_in_webview(&target);
-        if use_webview {
+        if use_webview && self.ensure_view() {
             self.tab = None;
             self.web_page = true;
             if !self.web_url.is_empty() {
@@ -2193,7 +3498,8 @@ impl Browser {
         self.web_visible = false;
         self.web_bounds = None;
         self.web_document.clear();
-        self.create_webview(&window);
+        let container = self.container.clone();
+        self.webview = self.create_webview(&window, self.tab_id, container.as_deref());
         if self.web_page {
             self.web_expect = true;
             self.web_committed = false;
@@ -2225,21 +3531,40 @@ impl Browser {
             .is_some_and(|wv| wv.url().is_ok_and(|u| u == "about:blank"))
     }
 
-    fn create_webview(&mut self, window: &Window) {
+    /// The data store for `container`'s tabs (`None`: the default profile),
+    /// created on first use. `None` when the platform's default store is
+    /// used instead (Windows' default profile, macOS).
+    fn web_context(&mut self, container: Option<&str>) -> Result<Option<&mut wry::WebContext>, String> {
+        let key = container.unwrap_or("").to_string();
+        if !self.contexts.contains_key(&key) {
+            match new_web_context(container)? {
+                Some(ctx) => {
+                    self.contexts.insert(key.clone(), ctx);
+                }
+                None => return Ok(None),
+            }
+        }
+        Ok(self.contexts.get_mut(&key).map(|c| &mut c.context))
+    }
+
+    /// Creates the web view of tab `tab`, in `container`'s data store,
+    /// hidden. Its events carry the tab id.
+    fn create_webview(&mut self, window: &Window, tab: u64, container: Option<&str>) -> Option<WebPane> {
         if std::env::var_os("BROWSECRAFT_NO_WEBKIT").is_some() && cfg!(target_os = "linux") {
-            return;
+            return None;
         }
         // The embedded web view is a WebView2 child window on Windows, a
         // WKWebView on macOS and WebKitGTK on Linux (when GTK started).
         #[cfg(target_os = "linux")]
         if !gtk::is_initialized_main_thread() {
-            return;
+            return None;
         }
         if !(cfg!(windows) || cfg!(target_os = "macos") || cfg!(target_os = "linux")) {
-            return;
+            return None;
         }
         let nav_proxy = self.proxy.clone();
         let nav_epoch = self.web_epoch.clone();
+        let nav_container = container.map(str::to_string);
         #[cfg(not(windows))]
         let (popup_proxy, popup_epoch) = (self.proxy.clone(), self.web_epoch.clone());
         let title_proxy = self.proxy.clone();
@@ -2250,28 +3575,53 @@ impl Browser {
             position: WryPosition::Physical(WryPhysicalPosition::new(0, 0)),
             size: WrySize::Physical(WryPhysicalSize::new(size.width.max(1), size.height.max(1))),
         };
-        let mut web_context = linux_web_context();
-        let builder = match web_context.as_mut() {
+        let mut scripts = vec![
+            adblock::instance().page_script_with_network(!cfg!(windows)),
+            passwords::PAGE_SCRIPT.to_string(),
+        ];
+        scripts.extend(self.extra_page_scripts.iter().cloned());
+        let context = match self.web_context(container) {
+            Ok(context) => context,
+            Err(e) => {
+                eprintln!("browsecraft: {e}");
+                return None;
+            }
+        };
+        let mut builder = match context {
             Some(context) => WebViewBuilder::new_with_web_context(context),
             None => WebViewBuilder::new(),
         };
+        for script in scripts {
+            builder = builder.with_initialization_script(script);
+        }
         let builder = builder
             .with_devtools(true)
             .with_visible(false)
             .with_bounds(bounds)
-            .with_initialization_script(adblock::instance().page_script_with_network(!cfg!(windows)))
-            .with_initialization_script(passwords::PAGE_SCRIPT)
             .with_ipc_handler(move |request| {
                 // Reports from the password script. The page is untrusted:
                 // messages are parsed defensively and only ever lead to an
                 // offer the user can decline.
                 if let Some(message) = passwords::parse_page_message(request.body()) {
                     let sender = request.uri().to_string();
-                    let _ = ipc_proxy.send_event(UserMessage::Page { sender, message });
+                    let _ = ipc_proxy.send_event(UserMessage::Tab(tab, TabMessage::Page { sender, message }));
                 }
             })
             .with_navigation_handler(move |url| match web_navigation(&url) {
-                WebNavigation::Allow => true,
+                WebNavigation::Allow => {
+                    // "Always open in": a site a rule puts in another
+                    // container leaves this tab's data store.
+                    if let Some(target) = crate::containers::rule_for_url(&url)
+                        && nav_container.as_deref() != Some(target.as_str())
+                    {
+                        let _ = nav_proxy.send_event(UserMessage::Tab(
+                            tab,
+                            TabMessage::OpenInContainer { url, container: target },
+                        ));
+                        return false;
+                    }
+                    true
+                }
                 WebNavigation::Refuse => false,
                 WebNavigation::External(url) => {
                     let _ = nav_proxy.send_event(UserMessage::WebExternal(url));
@@ -2279,19 +3629,19 @@ impl Browser {
                 }
                 WebNavigation::Open(url) => {
                     let epoch = nav_epoch.load(Ordering::SeqCst);
-                    let _ = nav_proxy.send_event(UserMessage::WebOpen { epoch, url, popup: false });
+                    let _ = nav_proxy.send_event(UserMessage::Tab(tab, TabMessage::Open { epoch, url, popup: false }));
                     false
                 }
             })
             .with_document_title_changed_handler(move |title| {
-                let _ = title_proxy.send_event(UserMessage::WebTitle(title));
+                let _ = title_proxy.send_event(UserMessage::Tab(tab, TabMessage::Title(title)));
             })
             .with_on_page_load_handler(move |event, url| {
                 let message = match event {
-                    PageLoadEvent::Started => UserMessage::WebStart(url),
-                    PageLoadEvent::Finished => UserMessage::WebLoad(url),
+                    PageLoadEvent::Started => TabMessage::Start(url),
+                    PageLoadEvent::Finished => TabMessage::Load(url),
                 };
-                let _ = load_proxy.send_event(message);
+                let _ = load_proxy.send_event(UserMessage::Tab(tab, message));
             });
         // On Windows, `attach_webview_guards` handles pop-ups natively, where
         // WebView2 says whether the user opened them.
@@ -2301,7 +3651,7 @@ impl Browser {
             // web pages: never to internal, file or view-source URLs.
             if popup_allowed(&url) {
                 let epoch = popup_epoch.load(Ordering::SeqCst);
-                let _ = popup_proxy.send_event(UserMessage::WebOpen { epoch, url, popup: true });
+                let _ = popup_proxy.send_event(UserMessage::Tab(tab, TabMessage::Open { epoch, url, popup: true }));
             }
             wry::NewWindowResponse::Deny
         });
@@ -2320,26 +3670,39 @@ impl Browser {
                 {
                     if let Err(error) = crate::webview_network::install(&wv) {
                         eprintln!("browsecraft: could not install native network filtering ({error}); using the engine");
-                        return;
+                        return None;
                     }
                     attach_webview_shortcuts(&wv, self.proxy.clone());
                     attach_webview_fullscreen(&wv, self.proxy.clone(), self.web_epoch.clone());
-                    attach_webview_guards(&wv, self.proxy.clone(), self.web_epoch.clone());
+                    attach_webview_guards(&wv, self.proxy.clone(), self.web_epoch.clone(), tab);
                 }
                 #[cfg(target_os = "linux")]
-                attach_webview_shortcuts_gtk(&wv, self.proxy.clone());
+                {
+                    attach_webview_shortcuts_gtk(&wv, self.proxy.clone(), self.chrome_keys.clone());
+                    attach_webview_extras_gtk(&wv, self.proxy.clone(), tab);
+                    let key = container.unwrap_or("");
+                    if let Some(dir) = self.contexts.get_mut(key).and_then(|c| c.favicons.take()) {
+                        use webkit2gtk::{WebContextExt as _, WebViewExt as _};
+                        use wry::WebViewExtUnix as _;
+                        if let Some(context) = wv.webview().context() {
+                            context.set_favicon_database_directory(Some(&dir.to_string_lossy()));
+                        }
+                    }
+                }
                 // Development: open the inspector (with its console) at once.
                 if std::env::var_os("BROWSECRAFT_DEVTOOLS").is_some() {
-                    wv.open_devtools();
+                    open_inspector(&wv);
                 }
                 // Chromium lets a script close a window whose history has a
                 // single entry, and wry then destroys the web view. Starting on
                 // about:blank means a page is never that single entry.
                 let _ = wv.load_url("about:blank");
-                self.webview = Some(WebPane::Wry(wv));
-                self.web_context = web_context;
+                Some(WebPane::Wry(wv))
             }
-            Err(e) => eprintln!("browsecraft: WebView2 is unavailable ({e}); using the engine for every page"),
+            Err(e) => {
+                eprintln!("browsecraft: the system web view is unavailable ({e}); using the engine for every page");
+                None
+            }
         }
     }
 
@@ -2347,15 +3710,44 @@ impl Browser {
     /// page in the web view.
     fn open_devtools(&mut self) {
         match &self.webview {
-            Some(WebPane::Wry(wv)) if self.web_page => wv.open_devtools(),
+            Some(WebPane::Wry(wv)) if self.web_page => open_inspector(wv),
             _ => self.set_notice("Developer tools are available on web pages"),
         }
     }
 
+    /// Every web view: the active tab's and the background tabs'.
+    fn all_views(&self) -> impl Iterator<Item = &WebPane> {
+        self.webview.iter().chain(self.tabs.iter().filter_map(|t| t.view.as_ref()))
+    }
+
+    /// Runs `script` in the page of every tab's web view (live settings such
+    /// as dark mode or plugins). Unloaded tabs get it from their init
+    /// scripts when they load again.
+    #[allow(dead_code)] // for the integration of the page modules
+    fn evaluate_in_all_tabs(&self, script: &str) {
+        for view in self.all_views() {
+            let _ = view.evaluate_script(script);
+        }
+    }
+
+    /// Adds a script every web view created from now on runs at document
+    /// start (after the ad-block and password scripts).
+    #[allow(dead_code)] // for the integration of the page modules
+    pub fn add_page_script(&mut self, script: String) {
+        self.extra_page_scripts.push(script);
+    }
+
     /// Captures the web view's area into a texture shown while a menu is
-    /// open. Without a capture (not Windows, or it failed) the area is blank
-    /// for as long as the menu is open.
+    /// open. On Linux WebKit renders the snapshot asynchronously
+    /// (`TabMessage::Snapshot`); elsewhere the screen is captured. Without a
+    /// capture the area is blank for as long as the menu is open.
     fn snapshot_page(&mut self) {
+        #[cfg(target_os = "linux")]
+        if let Some(WebPane::Wry(wv)) = &self.webview {
+            request_snapshot_gtk(wv, self.proxy.clone(), self.tab_id);
+            self.snapshot_pending = true;
+            return;
+        }
         let r = self.webview_rect();
         let (x, y, w, h) = (r.x.round() as i32, r.y.round() as i32, r.w.round() as u32, r.h.round() as u32);
         let max_side = self.egui.as_ref().map_or(0, |e| e.max_texture_side()) as u32;
@@ -2426,12 +3818,13 @@ impl Browser {
         // native web view would paint over any menu and is hidden instead.
         let native = self.webview.as_ref().is_some_and(WebPane::is_native);
         let menu_over_page = self.egui_popup_open && self.web_page && !self.cheatsheet && native;
-        if menu_over_page && self.web_visible && self.popup_snapshot.is_none() {
+        if menu_over_page && self.web_visible && self.popup_snapshot.is_none() && !self.snapshot_pending {
             // The menu just opened: grab the page while it is still showing.
             self.snapshot_page();
         }
         if !menu_over_page {
             self.popup_snapshot = None;
+            self.snapshot_pending = false;
         }
         let visible = self.web_page && !self.cheatsheet && !(self.egui_popup_open && native);
         let r = self.webview_rect();
@@ -2485,13 +3878,15 @@ impl Browser {
             pane.set_dark(dark);
         }
         #[cfg(windows)]
-        if let Some(WebPane::Wry(wv)) = &self.webview {
-            use wry::WebViewExtWindows;
-            let _ = wv.set_theme(match setting {
-                flags::Theme::Auto => wry::Theme::Auto,
-                flags::Theme::Light => wry::Theme::Light,
-                flags::Theme::Dark => wry::Theme::Dark,
-            });
+        for view in self.all_views() {
+            if let WebPane::Wry(wv) = view {
+                use wry::WebViewExtWindows;
+                let _ = wv.set_theme(match setting {
+                    flags::Theme::Auto => wry::Theme::Auto,
+                    flags::Theme::Light => wry::Theme::Light,
+                    flags::Theme::Dark => wry::Theme::Dark,
+                });
+            }
         }
     }
 }
@@ -3010,6 +4405,20 @@ impl Browser {
             Shortcut::Quit => self.quit = true,
             Shortcut::Zoom(change) => self.zoom(change),
             Shortcut::DevTools => self.open_devtools(),
+            Shortcut::SelectTab(n) => {
+                if let Some(i) = tab_for_number(n, false, self.tabs.len()) {
+                    self.switch_tab(i);
+                }
+            }
+            Shortcut::LastTab => {
+                if let Some(i) = tab_for_number(0, true, self.tabs.len()) {
+                    self.switch_tab(i);
+                }
+            }
+            Shortcut::ReopenClosedTab => self.reopen_closed_tab(),
+            Shortcut::Find => self.open_find(),
+            Shortcut::NewTemporaryTab => self.new_tab_in(ContainerChoice::Temporary, None),
+            Shortcut::Palette => self.open_palette(),
         }
         self.request_redraw();
     }
@@ -3639,7 +5048,7 @@ impl Browser {
         };
         let s = self.scale();
         canvas.fill_rect(sr, pal.sidebar_bg);
-        let edge_x = if flags::get().tabs_position == TabsPosition::Left {
+        let edge_x = if self.tabs_position() == TabsPosition::Left {
             sr.x + sr.w - 1.0
         } else {
             sr.x
@@ -4038,8 +5447,12 @@ impl Browser {
         }
         let tex = self.page_tex.as_ref().map(|t| (t.id(), t.size()));
         egui_chrome::apply_style(egui.ctx(), self.dark());
-        let raw = egui.take_raw_input(&window);
+        let mut raw = egui.take_raw_input(&window);
+        raw.events.append(&mut self.pending_egui_events);
         egui.frame(&window, raw, |ui| self.build_egui_chrome(ui, tex));
+        // While a chrome text field has the focus, keys typed with the
+        // pointer over the page go to it.
+        self.chrome_keys.set(egui.ctx().egui_wants_keyboard_input());
         self.egui = Some(egui);
     }
 
@@ -4071,6 +5484,49 @@ impl Browser {
         let doc_url = self.web_document.clone();
         let page_host = vault::host_key(&doc_url);
 
+        // Tabs: what the strip or the sidebar shows.
+        let containers_list = crate::containers::all();
+        let tab_meta: Vec<(String, Option<crate::containers::Container>, Option<egui::TextureId>, bool)> = (0..self.tabs.len())
+            .map(|i| {
+                let container = self.tab_container(i).and_then(|id| crate::containers::get(&id));
+                let favicon = self.favicons.get(&self.tab_id_at(i)).map(|t| t.id());
+                (self.tab_title(i), container, favicon, self.tab_unloaded(i))
+            })
+            .collect();
+        let tab_infos: Vec<egui_chrome::TabInfo> = tab_meta
+            .iter()
+            .enumerate()
+            .map(|(i, (title, container, favicon, unloaded))| egui_chrome::TabInfo {
+                title,
+                active: i == self.active,
+                container: container.as_ref(),
+                favicon: *favicon,
+                unloaded: *unloaded,
+            })
+            .collect();
+        let active_container = tab_meta.get(self.active).and_then(|m| m.1.clone());
+        let position = self.tabs_position();
+        let mut tab_events: Vec<(usize, egui_chrome::TabRow)> = Vec::new();
+
+        // Tab strip (tabs on top), above the toolbar.
+        if position == TabsPosition::Top && !fullscreen {
+            egui::Panel::top("tabstrip")
+                .exact_size(TAB_STRIP_HEIGHT)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(egui::Frame::NONE.fill(c.sidebar_bg))
+                .show(ui, |ui| {
+                    let strip = egui_chrome::tab_strip(ui, &c, &tab_infos, &containers_list);
+                    tab_events.extend(strip.tabs);
+                    if let Some(pick) = strip.new_tab {
+                        actions.push(Action::NewTabIn(pick));
+                    }
+                    if strip.manage_containers {
+                        actions.push(Action::ToggleDrawer(Drawer::Containers));
+                    }
+                });
+        }
+
         // Toolbar.
         if !fullscreen {
             egui::Panel::top("toolbar")
@@ -4093,6 +5549,11 @@ impl Browser {
                         }
                         if egui_chrome::icon_button(ui, true, ICON_HOME, "Home", 16.0).clicked() {
                             actions.push(Action::Home);
+                        }
+                        if let Some(ctr) = &active_container
+                            && egui_chrome::container_badge(ui, ctr)
+                        {
+                            actions.push(Action::ToggleDrawer(Drawer::Containers));
                         }
                         // The buttons on the right are placed from the right edge, then
                         // the address bar takes whatever room is left. Nothing can be
@@ -4136,6 +5597,9 @@ impl Browser {
                             });
                             if egui_chrome::icon_button(ui, true, ICON_GEAR, "Settings", 16.0).clicked() {
                                 actions.push(Action::Flags);
+                            }
+                            if egui_chrome::icon_button(ui, true, Drawer::Containers.icon(), "Containers", 16.0).clicked() {
+                                actions.push(Action::ToggleDrawer(Drawer::Containers));
                             }
                             if egui_chrome::icon_button(ui, true, theme_icon, "Toggle light / dark", 16.0).clicked() {
                                 actions.push(Action::Theme);
@@ -4230,11 +5694,27 @@ impl Browser {
                 });
         }
 
+        // Find bar.
+        if let Some(bar) = self.find.as_mut()
+            && !fullscreen
+        {
+            let focus = std::mem::take(&mut bar.focus);
+            egui::Panel::top("find")
+                .exact_size(FIND_BAR_HEIGHT)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(egui::Frame::NONE.fill(c.bar_bg))
+                .show(ui, |ui| {
+                    for event in egui_chrome::find_bar(ui, &c, &mut bar.query, bar.matches, focus) {
+                        actions.push(Action::Find(event));
+                    }
+                    let r = ui.max_rect();
+                    ui.painter().hline(r.x_range(), r.max.y - 0.5, egui::Stroke::new(1.0, c.line));
+                });
+        }
+
         // Tab sidebar.
-        let position = flags::get().tabs_position;
-        if position != TabsPosition::Hidden && !fullscreen {
-            let titles: Vec<String> = (0..self.tabs.len()).map(|i| self.tab_title(i)).collect();
-            let active = self.active;
+        if matches!(position, TabsPosition::Left | TabsPosition::Right) && !fullscreen {
             let panel = if position == TabsPosition::Left {
                 egui::Panel::left("tabs")
             } else {
@@ -4258,17 +5738,8 @@ impl Browser {
                         }
                         ui.add_space(8.0);
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                            for (i, title) in titles.iter().enumerate() {
-                                let row = egui_chrome::tab_row(ui, &c, title, i == active);
-                                if row.close {
-                                    actions.push(Action::CloseTab(i));
-                                } else if row.duplicate {
-                                    actions.push(Action::DuplicateTab(i));
-                                } else if row.close_others {
-                                    actions.push(Action::CloseOtherTabs(i));
-                                } else if row.clicked {
-                                    actions.push(Action::SwitchTab(i));
-                                }
+                            for (i, info) in tab_infos.iter().enumerate() {
+                                tab_events.push((i, egui_chrome::tab_row(ui, &c, info, &containers_list)));
                             }
                         });
                     });
@@ -4288,6 +5759,68 @@ impl Browser {
                     ui.horizontal_centered(|ui| {
                         ui.add_space(12.0);
                         ui.label(egui::RichText::new(message).size(13.0).color(c.text));
+                    });
+                });
+        }
+
+        for (i, row) in tab_events {
+            if row.close {
+                actions.push(Action::CloseTab(i));
+            } else if row.duplicate {
+                actions.push(Action::DuplicateTab(i));
+            } else if row.close_others {
+                actions.push(Action::CloseOtherTabs(i));
+            } else if let Some(pick) = row.new_in {
+                actions.push(Action::NewTabIn(pick));
+            } else if let Some(pick) = row.reopen_in {
+                actions.push(Action::ReopenIn(i, pick));
+            } else if row.clicked {
+                actions.push(Action::SwitchTab(i));
+            }
+        }
+
+        // The drawer, on the right of the page (it narrows the page; the
+        // web view is never covered).
+        if let Some(drawer) = self.drawer
+            && !fullscreen
+        {
+            self.containers_panel.current_host = Url::parse(&page_url)
+                .ok()
+                .filter(|u| matches!(u.scheme(), "http" | "https"))
+                .and_then(|u| u.host_str().map(str::to_string))
+                .unwrap_or_default();
+            let panel = &mut self.containers_panel;
+            egui::Panel::right("drawer")
+                .exact_size(DRAWER_WIDTH)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(
+                    egui::Frame::NONE
+                        .fill(c.sidebar_bg)
+                        .inner_margin(egui::Margin::symmetric(14, 10))
+                        .stroke(egui::Stroke::new(1.0, c.line)),
+                )
+                .show(ui, |ui| {
+                    if egui_chrome::drawer_header(ui, &c, drawer.icon(), drawer.title()) {
+                        actions.push(Action::ToggleDrawer(drawer));
+                    }
+                    ui.separator();
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match drawer {
+                        Drawer::Containers => {
+                            let events = panel.ui(ui, &c);
+                            if !events.is_empty() {
+                                actions.push(Action::Containers(events));
+                            }
+                        }
+                        // TODO(integration): draw each module's panel here
+                        // (`XPanel::ui(ui, &c)`) and apply its events.
+                        other => {
+                            ui.add_space(12.0);
+                            ui.label(
+                                egui::RichText::new(format!("{} is not available in this build yet.", other.title()))
+                                    .color(c.muted),
+                            );
+                        }
                     });
                 });
         }
@@ -4382,6 +5915,28 @@ impl Browser {
                     self.set_notice("Vault locked");
                 }
                 Action::PasswordsPage => self.load(Request::Get("browsecraft://passwords".into()), true),
+                Action::NewTabIn(pick) => self.new_tab_in(pick, None),
+                Action::ReopenIn(i, pick) => {
+                    let url = self.tab_url(i);
+                    let id = self.tab_id_at(i);
+                    let url = (!url.is_empty() && url != NEW_TAB_URL).then_some(url);
+                    self.new_tab_in(pick, url);
+                    if let Some(old) = (0..self.tabs.len()).find(|&j| self.tab_id_at(j) == id) {
+                        self.close_tab(old);
+                    }
+                }
+                Action::ToggleDrawer(drawer) => self.toggle_drawer(drawer),
+                Action::Containers(events) => {
+                    for event in events {
+                        self.containers_event(event);
+                    }
+                }
+                Action::Find(event) => match event {
+                    egui_chrome::FindEvent::Changed => self.find_in_page(false, false),
+                    egui_chrome::FindEvent::Next => self.find_in_page(false, true),
+                    egui_chrome::FindEvent::Previous => self.find_in_page(true, true),
+                    egui_chrome::FindEvent::Close => self.close_find(),
+                },
             }
         }
         if changed {
@@ -4401,7 +5956,6 @@ impl Browser {
             UserMessage::WebTitle(title) => self.web_titled(title),
             UserMessage::WebOpen { epoch, url, popup } => self.web_open(epoch, url, popup),
             UserMessage::WebExternal(url) => self.set_notice(external_notice(&url)),
-            UserMessage::WebClosed => self.web_closed(),
             UserMessage::ServoWake => {
                 if let Some(WebPane::Servo(pane)) = &self.webview {
                     pane.spin();
@@ -4433,8 +5987,21 @@ impl Browser {
                     self.set_web_fullscreen(on);
                 }
             }
-            UserMessage::Page { sender, message } => self.page_message(sender, message),
             UserMessage::Stop => self.stop(),
+            UserMessage::Tab(id, message) => self.tab_message(id, message),
+            UserMessage::ChromeKey(key) => self.chrome_key(key),
+            UserMessage::PageClicked => {
+                self.chrome_keys.set(false);
+                if let Some(egui) = &self.egui {
+                    egui.ctx().memory_mut(|m| {
+                        if let Some(id) = m.focused() {
+                            m.surrender_focus(id);
+                        }
+                    });
+                }
+                self.egui_address_focused = false;
+                self.focus = Focus::Page;
+            }
         }
         self.request_redraw();
     }
@@ -4475,7 +6042,10 @@ impl ApplicationHandler<UserMessage> for Browser {
                 return;
             }
         };
-        self.create_webview(&window);
+        // The first tab's web view also tells whether the system web view
+        // works here; every tab then gets its own.
+        self.webview = self.create_webview(&window, self.tab_id, None);
+        self.wry_ok = self.webview.is_some();
         if self.webview.is_none() {
             // No system web view (Linux): Servo, if this build has it.
             let size = window.inner_size();
@@ -4493,6 +6063,7 @@ impl ApplicationHandler<UserMessage> for Browser {
         let (mut surface, mut context) = (None, None);
         if egui_chrome::resolve(egui.is_some()) == egui_chrome::Choice::Egui {
             self.egui = egui;
+            self.gpu_chrome = true;
         } else if let Ok(ctx) = Context::new(window.clone()) {
             surface = Surface::new(&ctx, window.clone()).ok();
             context = Some(ctx);
@@ -4503,8 +6074,7 @@ impl ApplicationHandler<UserMessage> for Browser {
             _context: context,
         });
         self.apply_theme(self.dark());
-        let start = self.start_url.clone();
-        self.load(Request::Get(start), true);
+        self.open_start_tabs();
         window.request_redraw();
     }
 
@@ -4537,7 +6107,7 @@ impl ApplicationHandler<UserMessage> for Browser {
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
             _ if self.servo_input(&event, consumed) => self.request_redraw(),
             WindowEvent::KeyboardInput { event, .. } => {
-                if !consumed || self.is_shortcut(&event) {
+                        if !consumed || self.is_shortcut(&event) {
                     self.key(&event);
                 }
                 self.request_redraw();
@@ -4578,6 +6148,10 @@ impl ApplicationHandler<UserMessage> for Browser {
         }
     }
 
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        self.save_session();
+    }
+
     fn user_event(&mut self, event_loop: &ActiveEventLoop, message: UserMessage) {
         self.handle_message(message);
         if self.quit {
@@ -4596,7 +6170,7 @@ impl ApplicationHandler<UserMessage> for Browser {
         // WebKitGTK talks to its web processes through the GLib main
         // context, which winit does not poll: service it here.
         #[cfg(target_os = "linux")]
-        if self.webview.is_some() {
+        if self.wry_ok || self.webview.is_some() {
             while gtk::events_pending() {
                 gtk::main_iteration_do(false);
             }
@@ -4616,6 +6190,12 @@ impl ApplicationHandler<UserMessage> for Browser {
             self.request_redraw();
             sooner(now + Duration::from_millis(50));
         }
+        if now.duration_since(self.last_suspend_check) >= SUSPEND_CHECK_INTERVAL {
+            self.last_suspend_check = now;
+            self.enforce_tab_limits();
+            self.save_session();
+        }
+        sooner(self.last_suspend_check + SUSPEND_CHECK_INTERVAL);
         event_loop.set_control_flow(match wake {
             Some(t) => ControlFlow::WaitUntil(t),
             None => ControlFlow::Wait,
@@ -4623,27 +6203,9 @@ impl ApplicationHandler<UserMessage> for Browser {
     }
 }
 
-/// The persistent WebKitGTK data store for the default profile, with the
-/// web process sandbox (bubblewrap) turned on. `None` elsewhere, where wry
-/// uses the platform's default store.
 /// The reverse-DNS application id (desktop file name and window class).
 #[cfg(target_os = "linux")]
 pub const APP_ID: &str = "io.github.matteomicheletti.browsecraft";
-
-#[cfg(target_os = "linux")]
-fn linux_web_context() -> Option<wry::WebContext> {
-    let dir = crate::storage::profile_dir("default").ok()?;
-    if let Err(e) = crate::storage::private_dir(&dir) {
-        eprintln!("browsecraft: cannot create the profile folder ({e}); using a temporary store");
-        return Some(wry::WebContext::new(None));
-    }
-    Some(wry::WebContext::new(Some(dir)))
-}
-
-#[cfg(not(target_os = "linux"))]
-fn linux_web_context() -> Option<wry::WebContext> {
-    None
-}
 
 #[cfg(test)]
 mod tests {
@@ -4675,18 +6237,110 @@ mod tests {
         assert_eq!(shortcut_for(&ch("B"), true, true, false, false), Some(Shortcut::BookmarksBar));
         assert_eq!(shortcut_for(&ch("b"), true, false, false, false), None);
         assert_eq!(shortcut_for(&ch("O"), true, true, false, false), Some(Shortcut::BookmarksPage));
+
+        // Chrome's tab and page shortcuts.
+        assert_eq!(shortcut_for(&ch("1"), true, false, false, false), Some(Shortcut::SelectTab(0)));
+        assert_eq!(shortcut_for(&ch("8"), true, false, false, true), Some(Shortcut::SelectTab(7)));
+        assert_eq!(shortcut_for(&ch("9"), true, false, false, false), Some(Shortcut::LastTab));
+        assert_eq!(shortcut_for(&ch("1"), false, false, false, false), None);
+        let (pgup, pgdn) = (Key::Named(NamedKey::PageUp), Key::Named(NamedKey::PageDown));
+        assert_eq!(shortcut_for(&pgup, true, false, false, false), Some(Shortcut::CycleTab(-1)));
+        assert_eq!(shortcut_for(&pgdn, true, false, false, true), Some(Shortcut::CycleTab(1)));
+        assert_eq!(shortcut_for(&pgdn, false, false, false, false), None, "plain PageDown scrolls");
+        assert_eq!(shortcut_for(&ch("T"), true, true, false, false), Some(Shortcut::ReopenClosedTab));
+        assert_eq!(shortcut_for(&ch("t"), true, false, false, false), Some(Shortcut::NewTab));
+        assert_eq!(shortcut_for(&ch("f"), true, false, false, true), Some(Shortcut::Find));
+        assert_eq!(shortcut_for(&ch("N"), true, true, false, false), Some(Shortcut::NewTemporaryTab));
+        assert_eq!(shortcut_for(&ch("n"), true, false, false, false), None);
+        assert_eq!(shortcut_for(&ch("p"), true, false, false, false), Some(Shortcut::Palette));
+        assert_eq!(shortcut_for(&Key::Named(NamedKey::F1), false, false, false, true), Some(Shortcut::Palette));
+    }
+
+    #[test]
+    fn tab_numbers_pick_the_right_tab() {
+        assert_eq!(tab_for_number(0, false, 3), Some(0));
+        assert_eq!(tab_for_number(2, false, 3), Some(2));
+        assert_eq!(tab_for_number(5, false, 3), None, "Ctrl+6 with three tabs does nothing");
+        assert_eq!(tab_for_number(0, true, 3), Some(2), "Ctrl+9 is the last tab");
+        assert_eq!(tab_for_number(0, true, 0), None);
+    }
+
+    #[test]
+    fn idle_and_excess_tabs_are_unloaded() {
+        let now = Instant::now();
+        let ago = |s: u64| Some(now - Duration::from_secs(s));
+        let min = Duration::from_secs(60);
+        // (live, may unload, last active)
+        let tabs = [
+            (true, true, ago(600)),  // idle 10 min
+            (true, true, ago(10)),   // recent
+            (true, false, ago(900)), // idle but playing audio
+            (false, true, ago(999)), // already unloaded
+            (true, true, None),      // the active one
+        ];
+        assert_eq!(tabs_to_suspend(&tabs, 4, now, Some(5 * min), 16), vec![0]);
+        assert_eq!(tabs_to_suspend(&tabs, 4, now, None, 16), Vec::<usize>::new(), "never");
+        // Over the cap: least recently used first, never the active tab or
+        // one playing audio.
+        assert_eq!(tabs_to_suspend(&tabs, 4, now, None, 2), vec![0, 1]);
+        assert_eq!(tabs_to_suspend(&tabs, 4, now, None, 3), vec![0]);
+        assert_eq!(tabs_to_suspend(&tabs, 4, now, Some(5 * min), 2), vec![0, 1]);
+        assert_eq!(tabs_to_suspend(&tabs, 4, now, None, 0), vec![0, 1], "a cap of 0 still keeps the active tab");
+        // A tab never shown (restored) counts as the oldest.
+        let restored = [(true, true, None), (true, true, ago(5)), (true, true, None)];
+        assert_eq!(tabs_to_suspend(&restored, 1, now, None, 2), vec![0]);
+    }
+
+    #[test]
+    fn sessions_are_read_defensively() {
+        let text = r#"{"active":1,"tabs":[
+            {"url":"https://a.example/","title":"A\u0007 page","container":"work1"},
+            {"url":"about:home","title":"New Tab","container":null},
+            {"url":"javascript:alert(1)","title":"x"},
+            {"url":"browsecraft://flags"},
+            {"title":"no url"},
+            {"url":"file:///tmp/x.html","title":"File"}]}"#;
+        let (tabs, active) = parse_session(text);
+        let urls: Vec<&str> = tabs.iter().map(|t| t.url.as_str()).collect();
+        assert_eq!(urls, ["https://a.example/", "about:home", "browsecraft://flags", "file:///tmp/x.html"]);
+        assert_eq!(tabs[0].title, "A page");
+        assert_eq!(tabs[0].container.as_deref(), Some("work1"));
+        assert_eq!(tabs[1].container, None);
+        assert_eq!(active, 1);
+        assert!(parse_session("garbage").0.is_empty());
+        let long = format!(r#"{{"tabs":[{{"url":"https://a.example/{}"}}]}}"#, "x".repeat(MAX_SESSION_URL));
+        assert!(parse_session(&long).0.is_empty());
+    }
+
+    #[test]
+    fn snapshot_pixels_are_unpremultiplied() {
+        assert_eq!(unpremultiply(0xff10_2030, true), [0x10, 0x20, 0x30, 0xff]);
+        assert_eq!(unpremultiply(0x8040_2000, true), [0x80, 0x40, 0x00, 0x80]);
+        assert_eq!(unpremultiply(0x0011_2233, true), [0, 0, 0, 0]);
+        assert_eq!(unpremultiply(0x0011_2233, false), [0x11, 0x22, 0x33, 0xff], "RGB24 ignores the top byte");
+    }
+
+    #[test]
+    fn drawers_have_titles_and_icons() {
+        let titles: HashSet<&str> = Drawer::ALL.iter().map(|d| d.title()).collect();
+        assert_eq!(titles.len(), Drawer::ALL.len());
+        assert!(Drawer::ALL.iter().all(|d| !d.icon().is_empty()));
     }
 
     #[test]
     fn bars_between_toolbar_and_page_are_counted() {
         // The page area (layout, painting and click mapping) must start where
         // egui's central panel starts, below every bar.
-        assert_eq!(extra_bars_h(1.0, true, true, false), 34.0);
-        assert_eq!(extra_bars_h(1.0, true, true, true), 76.0);
-        assert_eq!(extra_bars_h(1.0, true, false, true), 42.0);
-        assert_eq!(extra_bars_h(1.5, true, true, false), 51.0);
-        assert_eq!(extra_bars_h(1.0, true, false, false), 0.0);
-        assert_eq!(extra_bars_h(2.0, false, true, true), 0.0, "the engine chrome has neither bar");
+        let bars = |bookmarks, save| Bars { bookmarks, save, ..Bars::default() };
+        assert_eq!(extra_bars_h(1.0, true, bars(true, false)), 34.0);
+        assert_eq!(extra_bars_h(1.0, true, bars(true, true)), 76.0);
+        assert_eq!(extra_bars_h(1.0, true, bars(false, true)), 42.0);
+        assert_eq!(extra_bars_h(1.5, true, bars(true, false)), 51.0);
+        assert_eq!(extra_bars_h(1.0, true, bars(false, false)), 0.0);
+        assert_eq!(extra_bars_h(2.0, false, bars(true, true)), 0.0, "the engine chrome has neither bar");
+        let all = Bars { tab_strip: true, bookmarks: true, save: true, find: true };
+        assert_eq!(extra_bars_h(1.0, true, all), 38.0 + 34.0 + 42.0 + 40.0);
+        assert_eq!(extra_bars_h(1.25, true, Bars { tab_strip: true, ..Bars::default() }), 48.0);
     }
 
     #[test]
@@ -4729,6 +6383,15 @@ mod tests {
         assert_eq!(web_shortcut_for(0xBB, true, false, false), Some(Shortcut::Zoom(Some(true))));
         assert_eq!(web_shortcut_for(0xBD, true, false, false), Some(Shortcut::Zoom(Some(false))));
         assert_eq!(web_shortcut_for(0x30, true, false, false), Some(Shortcut::Zoom(None)));
+        assert_eq!(web_shortcut_for(0x31, true, false, false), Some(Shortcut::SelectTab(0)));
+        assert_eq!(web_shortcut_for(0x39, true, false, false), Some(Shortcut::LastTab));
+        assert_eq!(web_shortcut_for(0x21, true, false, false), Some(Shortcut::CycleTab(-1)));
+        assert_eq!(web_shortcut_for(0x22, true, false, false), Some(Shortcut::CycleTab(1)));
+        assert_eq!(web_shortcut_for(0x54, true, true, false), Some(Shortcut::ReopenClosedTab));
+        assert_eq!(web_shortcut_for(0x46, true, false, false), Some(Shortcut::Find));
+        assert_eq!(web_shortcut_for(0x4E, true, true, false), Some(Shortcut::NewTemporaryTab));
+        assert_eq!(web_shortcut_for(0x50, true, false, false), Some(Shortcut::Palette));
+        assert_eq!(web_shortcut_for(0x70, false, false, false), Some(Shortcut::Palette));
         assert_eq!(web_shortcut_for(0x43, true, false, false), None); // Ctrl+C stays with WebView2
         assert_eq!(web_shortcut_for(0x0D, true, false, false), None); // Ctrl+Enter
     }
@@ -4870,7 +6533,8 @@ mod tests {
     fn every_shortcut_is_listed_once() {
         for needed in [
             "Shift + K", "Ctrl + H", "Ctrl + Shift + S", "Ctrl + Left", "Ctrl + Right", "Ctrl + S",
-            "Ctrl + D", "Ctrl + Shift + B", "Ctrl + Shift + O", "F11",
+            "Ctrl + D", "Ctrl + Shift + B", "Ctrl + Shift + O", "F11", "Ctrl + Shift + T", "Ctrl + F",
+            "Ctrl + 9", "Ctrl + P / F1", "Ctrl + Shift + N",
         ] {
             assert_eq!(SHORTCUTS.iter().filter(|(k, _)| *k == needed).count(), 1, "{needed}");
         }
