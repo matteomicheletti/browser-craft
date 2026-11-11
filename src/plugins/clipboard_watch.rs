@@ -147,7 +147,7 @@ fn read(cb: &gtk::Clipboard, targets: &[String], on_capture: Rc<dyn Fn(Capture)>
                 let bytes = data.data();
                 // Firefox and others offer UTF-16 HTML.
                 let html = if bytes.starts_with(&[0xff, 0xfe]) {
-                    let units: Vec<u16> = bytes[2..].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+                    let units: Vec<u16> = bytes[2..].as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)).collect();
                     String::from_utf16_lossy(&units)
                 } else {
                     String::from_utf8_lossy(&bytes).into_owned()
