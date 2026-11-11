@@ -89,7 +89,7 @@ the tab strip is the title bar: the window buttons (minimize, maximize or
 restore, close) sit at its right end, and the empty part of the strip (there is
 always a free stretch after the `+`) moves the window when you drag it.
 Double-click it to maximize or restore the window; right-click it for a small
-window menu (Minimize, Maximize / Restore, Close). With the tabs in a sidebar
+window menu (New window, Name window…, Minimize, Maximize / Restore, Close). With the tabs in a sidebar
 or hidden, the toolbar is the title bar instead, with the window buttons after
 the password key. Resize the window from any edge or corner: a thin border
 (5 pixels) round the page is the grip, and the pointer changes shape over it.
@@ -136,8 +136,11 @@ it, middle-click or click its ✕ to close it, `+` opens a new tab, and the `⌄
 next to it opens a new tab in a container (or a new temporary container).
 Right-clicking a tab offers *Duplicate tab*, *New tab in container*, *Reopen in
 container* (the page moves to another container), *Close tab* and *Close other
-tabs*. New tabs open `about:home` with the address bar focused. Closing the last
-tab quits BrowseCraft. On `browsecraft://flags` the tabs can instead be a
+tabs*, plus *Move to new window* and *Move to window ▸* (see
+[Windows](#windows)). Drag a tab along the strip to reorder it (a blue line shows
+where it lands). New tabs open `about:home` with the address bar focused.
+Closing the last tab closes its window, and closing the last window quits
+BrowseCraft. On `browsecraft://flags` the tabs can instead be a
 vertical sidebar on the left or right (with the container colour as the bar at
 the start of each row), or hidden. The software interface (`chrome=engine`)
 always uses the sidebar.
@@ -157,6 +160,43 @@ open them. Tabs of temporary containers are not remembered. Turn this off with
 `session.json` in the [per-user settings folder](../README.md#settings), is then
 deleted). `Ctrl+Shift+T` reopens the last closed tabs (up to 25), with their
 history and container.
+
+### Tab hover cards
+
+Rest the pointer on a tab (in the strip or the sidebar) and, after half a
+second, a card shows its title, its site, its container and group, whether it
+is unloaded or in the split view, and a picture of the page (Chrome's and
+Edge's hover cards). Moving to another tab swaps the card at once; leaving the
+tabs hides it, and coming back within a moment shows the next one without the
+wait. A click or a drag on the tab hides it. The tab you are on shows no
+picture (it is on screen). The picture is taken when you leave a tab and a
+moment after a page loads; an unloaded tab keeps its last picture. On
+`browsecraft://flags` (*Layout*) you can turn the cards off, turn their
+pictures off, and set the delay (none, 0.25, 0.5, 0.8 or 1.2 seconds).
+
+The card floats over the web page: it is its own small window, stacked above
+the page, so the page does not need to be hidden while it shows (Linux).
+
+### All tabs (overview)
+
+`Ctrl+Shift+\` (Safari's `Cmd+Shift+\`), the grid button at the end of the tab
+strip, or *Show all tabs* in the palette shows every tab of every window as a
+grid of page pictures, like Safari's tab overview. The window you are in comes
+first, then the other windows, each under its name (or *Window 2*, …); inside
+a window, a group's tabs are together under the group's name and colour, and
+the split view's two tabs sit side by side in one outline. Unloaded tabs are
+dimmed; a tab without a picture yet shows its icon and site.
+
+- Type to filter by title or address (every word must match).
+- Click a tab, or select it with the arrow keys and press `Enter`, to go to
+  it; a tab of another window brings that window to the front.
+- The ✕ on a tile (hover or select it), a middle click, or `Ctrl+W` on the
+  selected tile closes the tab.
+- The *New tab* tile opens a tab in this window.
+- `Esc` clears the search, then leaves; *Done* leaves.
+
+The web pages are hidden while the overview shows; any other browser shortcut
+leaves it and runs.
 
 ### Tab groups
 
@@ -197,6 +237,35 @@ on screen is never unloaded to save memory. A tab showing a BrowseCraft page
 (`about:home`, `browsecraft://…`) in the other pane is shown as a placeholder:
 click it to focus that tab. Split view needs the GPU interface. The pair and the
 divider position are remembered with the session.
+
+## Windows
+
+BrowseCraft can have several windows. `Ctrl+N`, *New window* in the palette or
+in the title bar's right-click menu opens one with a new tab. Each window has
+its own tabs, groups, split view, drawer and palette; the containers (and their
+logins), bookmarks, history, settings and the automation server are shared.
+
+**Moving tabs between windows.** Right-click a tab: *Move to new window* puts
+it in a window of its own, *Move to window ▸* lists the other windows. Or drag
+it: along the strip to reorder, down out of the strip (or out of the window)
+to tear it off into a new window where you let go, or onto another window to
+move it there (onto that window's tab strip it lands where you drop it,
+anywhere else at the end). A moved tab keeps its page as it was (scroll
+position, forms, a playing video, a logged-in session): nothing reloads. It
+leaves its tab group and the split view. When a window's last tab leaves, the
+window closes.
+
+**Naming windows.** Windows are unnamed (*Window 1*, *Window 2*, … by
+position). Right-click the title bar and choose *Name window…* (or *Name
+window…* in the palette) to give one a name such as *Work* or *Research*; it
+shows quietly before the window buttons, in the window's title, in *Move to
+window*, in the overview and in the automation API. *Remove name* goes back to
+the default.
+
+**Closing.** Closing a window (its ✕, `Ctrl+W` on its last tab) closes its
+tabs; they go on the closed-tab list, so `Ctrl+Shift+T` in any window reopens
+them one by one. Closing the last window, or `Ctrl+Q`, quits. The session
+remembers every window: its tabs, groups, split view, name, place and size.
 
 ## Containers
 
@@ -374,7 +443,7 @@ On a page with a login form the key menu lists the logins saved for that site: c
 
 ## Settings (`browsecraft://flags`)
 
-`browsecraft://flags` is an engine-rendered settings page with switches and segmented controls. It sets the theme (one of eight, or Follow system; Late Night by default), whether the desktop's own title bar is used, where the tabs are (top, left, right or hidden; top by default), when background tabs are unloaded and how many stay in memory, whether tabs are reopened at start-up, whether the bookmarks bar shows, and the interface renderer (auto, GPU or software). Changes are stored in the [per-user settings folder](../README.md#settings) and apply immediately after a successful save; save errors are shown on the page or in the status notice. Follow system picks Light or Late Night from the desktop's setting; Auto uses the GPU path when one is available. The renderer choice is made at startup, so restart to apply a change to it.
+`browsecraft://flags` is an engine-rendered settings page with switches and segmented controls. It sets the theme (one of eight, or Follow system; Late Night by default), whether the desktop's own title bar is used, where the tabs are (top, left, right or hidden; top by default), when background tabs are unloaded and how many stay in memory, whether tabs are reopened at start-up, whether the bookmarks bar shows, the tab hover cards (on or off, with or without the page picture, and their delay), and the interface renderer (auto, GPU or software). Changes are stored in the [per-user settings folder](../README.md#settings) and apply immediately after a successful save; save errors are shown on the page or in the status notice. Follow system picks Light or Late Night from the desktop's setting; Auto uses the GPU path when one is available. The renderer choice is made at startup, so restart to apply a change to it.
 
 ## Ad blocking
 
@@ -392,6 +461,8 @@ blocked pop-up shows a short notice under the page.
 | ------------------------------------- | ------------------------- |
 | `Ctrl+L` / `F6` / `Ctrl+S`            | Focus address bar and select its text |
 | `Ctrl+T`                              | New tab                   |
+| `Ctrl+N`                              | New window                |
+| `Ctrl+Shift+\`                        | Show all tabs (overview of every window) |
 | `Ctrl+W`                              | Close tab                 |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab`, `Ctrl+PageDown` / `Ctrl+PageUp` | Next / previous tab |
 | `Ctrl+1` … `Ctrl+8`                   | Go to that tab            |
@@ -424,7 +495,7 @@ blocked pop-up shows a short notice under the page.
 | `Shift+K` (page focused)              | Show / hide the shortcut cheatsheet (`Esc`, `Enter`, `Space` or `K` closes it) |
 | `Space` / `Shift+Space`, `Page Up/Down`, arrows, `Home`/`End` | Scroll |
 | `Shift`+wheel                         | Scroll sideways           |
-| `Ctrl+Q`                              | Quit                      |
+| `Ctrl+Q`                              | Quit (every window)       |
 
 `Ctrl+Shift+S` grabs the page from the screen (Windows, and Linux under X11). The palette's *Screenshot of the whole page* renders the whole document with WebKit instead (Linux), whatever covers the window.
 

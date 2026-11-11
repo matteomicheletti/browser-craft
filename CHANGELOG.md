@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Several windows (`src/browser/windows.rs`): `Ctrl+N`, the palette and the title bar menu open a new window; tabs move between windows from their menu (*Move to new window*, *Move to window ▸*) or by dragging (reorder in the strip, tear off into a new window, drop onto another window). A moved tab keeps its live page (its WebKit view is reparented into the other window). Windows can be named (*Name window…*), shown in the title bar, menus, overview and automation API. The session remembers every window with its tabs, groups, split view, name, place and size; `Ctrl+Shift+T` reopens tabs of closed windows.
+- Tab overview (`src/browser/overview.rs`): `Ctrl+Shift+\`, a strip button or *Show all tabs* shows every tab of every window as a grid of page pictures, by window and group, with search, keyboard navigation, close and new tab.
+- Tab hover cards (`src/browser/hover.rs`): title, site, container, group and a picture of the page after a 0.5 s rest on a tab (strip and sidebar), drawn in a small window stacked above the web page; on/off, pictures and delay on `browsecraft://flags`.
+- Page pictures (`src/thumbnails.rs`): WebKit snapshots scaled to 480 px, kept in memory within a byte cap and saved as small JPEGs for the session.
+- Automation: `tabs.list` gives each tab's `window` and a `windows` list; `tabs.open` takes `window`.
+
 - Tab groups (`src/tab_groups.rs`, `src/browser/groups_split.rs`): from a tab's right-click menu, named and coloured (Chrome's nine colours, theme-aware), collapsible, shown as chips with an underline in the strip and as header rows in the sidebar; rename, recolour, new tab in group, ungroup, close group; remembered with the session; palette commands, `&` picker and groups in `@`.
 - Split view (`src/split.rs`): two tabs side by side, each in its own web view, with a draggable divider, a focused pane that the toolbar, find, zoom and dev tools act on (a click in a page focuses it), swap and close; the pair is outlined in the strip, never unloaded while shown, alone in page fullscreen, with snapshots of both panes under menus and the palette; remembered with the session; palette commands and `|` picker.
 - `tabs.list` reports each tab's group and split pane (optional fields).

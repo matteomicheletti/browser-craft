@@ -159,3 +159,34 @@ same code as the buttons; moving and resizing need a real pointer press.
 | 7.10 | Toolbar theme menu, palette *Change theme…* (`%`), settings swatches: pick each theme | Chrome, open drawer, palette and internal pages change at once; the choice survives a restart | OK 2026-11-11 (hook + screenshots of all eight) |
 | 7.11 | *Follow system*, switch GNOME Settings → Appearance light/dark, focus the window again | Light / Late Night follow | |
 
+
+## 8. Windows, tab overview and hover cards (wave 4)
+
+"hook" rows were checked on the GNOME session with `BROWSECRAFT_WINDOW_SCRIPT`
+and screenshots; "nested" rows with real `xdotool` input on a nested
+`Xwayland :7` without a window manager (GPU captures are black there, so the
+outcome was read from the window list, the session file and the debug log).
+What needs a person: the feel of the drag and of the hover card, and drags
+between windows that a window manager places, on one or two monitors.
+
+| # | Action | Expected | Result |
+| --- | --- | --- | --- |
+| 8.1 | `Ctrl+N`; title bar right-click → *New window* | A second window with a new tab, address bar focused | OK 2026-11-11 (hook `new-window`) |
+| 8.2 | Right-click a tab → *Move to new window* | The tab opens in a new window **without reloading** (a page with a running counter keeps counting, its load time unchanged); the old window keeps the rest | OK 2026-11-11 (hook, `state.html` counter) |
+| 8.3 | Right-click a tab → *Move to window ▸ Window 2* | The tab moves to the end of window 2 and is shown there; moving the last tab of a window closes that window | OK 2026-11-11 (hook) |
+| 8.4 | Drag a tab along the strip | A blue line shows where it lands; on release the order changes; a click without moving still switches tab | OK 2026-11-11 (nested) |
+| 8.5 | Drag a tab down into the page and release | A new window opens about where you let go, with the tab | OK 2026-11-11 (nested) |
+| 8.6 | Drag a tab out of the window onto the desktop | A new window at the drop point | OK 2026-11-11 (nested; GNOME may shift it to keep it on screen) |
+| 8.7 | Two windows side by side: drag a tab from one onto the other's tab strip, between two tabs | It lands there, in the other window, page kept | OK 2026-11-11 (nested, no window manager) |
+| 8.8 | Same as 8.7 on GNOME, then with the windows on two monitors and with fractional scaling | As 8.7 (window positions come from X11; check they match what you see) | |
+| 8.9 | Title bar right-click → *Name window…*, type "Research", Enter; reopen it → *Remove name* | The name shows before the window buttons, in the window title, in *Move to window* and in the overview; removed, it is "Window 1" again | OK 2026-11-11 (hook `name:`, dialog screenshot) |
+| 8.10 | Two named windows, quit (`Ctrl+Q`), start again | Both windows come back with their tabs, names, places and sizes; unloaded tabs show their saved pictures in the overview | OK 2026-11-11 (hook, screenshots) |
+| 8.11 | Close window 2 with its ✕, then `Ctrl+Shift+T` in window 1 | Window 2's tabs reopen one by one in window 1 | |
+| 8.12 | `Ctrl+Shift+\` (also the grid button after `+`) | All tabs of every window as pictures, this window first, groups and the split pair together; the pages are hidden | OK 2026-11-11 (hook, screenshots) |
+| 8.13 | In the overview type part of a title; arrows; `Enter` | Only matching tabs; the selection moves; Enter goes to the tab | |
+| 8.14 | Overview: click a tab of the other window | That window comes to the front showing the tab (GNOME may only flash it in the dock if it refuses focus stealing) | |
+| 8.15 | Overview: hover a tile → ✕; middle-click a tile; select one and `Ctrl+W` | Each closes that tab; the grid updates | |
+| 8.16 | Rest the pointer on a background tab for half a second; move along the tabs; leave the strip | The card appears under the tab, over the live page, without the page blinking; it follows at once from tab to tab; it goes away on leaving | OK 2026-11-11 (hook `hover:`, card window above the page in the screenshot); feel to be checked by hand |
+| 8.17 | Tabs in the left sidebar, hover a row | The card appears to the right of the sidebar | OK 2026-11-11 (hook) |
+| 8.18 | `browsecraft://flags`: hover cards off; pictures off; delay 0.25 s / 1.2 s | No card; card without picture; the delay changes | |
+| 8.19 | `browsecraft ctl tabs.list` with two windows; `tabs.open` with `"window": 2` | Each tab has `window: {id, name}`, a `windows` list; the tab opens in window 2; an unknown window id is an error | OK 2026-11-11 |

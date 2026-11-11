@@ -106,15 +106,17 @@ $ printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"browser.version"}' \
 
 ### Methods
 
-`tab` is always optional and means the active tab when omitted. Timeouts
+Tab ids are unique across all browser windows: a request naming a `tab` goes
+to whatever window has it. `tab` is always optional and means the active tab
+of the window last used when omitted. Timeouts
 are in milliseconds (default 10 000, at most 120 000). Element targets are
 either `selector` (CSS, searched through open shadow roots) or `ref` (from
 `page.snapshot`, such as `e12`), never both.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `tabs.list` | – | `{tabs: [{id, index, url, title, active, loading, container, group?, split?}]}`; `group` = `{id, name, color, collapsed}` for a tab in a tab group, `split` = `{side: "left"\|"right", with: <tab id>}` for a tab in split view (the active tab is the focused pane) |
-| `tabs.open` | `url`, `container?`, `background?` | the new tab (`TabInfo`) |
+| `tabs.list` | – | `{tabs: [{id, index, url, title, active, loading, container, group?, split?, window}], windows: [{id, name?, label, tabs, active}]}`; `group` = `{id, name, color, collapsed}` for a tab in a tab group, `split` = `{side: "left"\|"right", with: <tab id>}` for a tab in split view (the active tab is the focused pane); `window` = `{id, name?}`, the browser window the tab is in (`index` and `active` count within that window); `windows` lists every window (`label` is its name or "Window N", `active` the window last used) |
+| `tabs.open` | `url`, `container?`, `background?`, `window?` | the new tab (`TabInfo`); `window` (a `windows[].id`) picks the window, the one last used by default; an unknown id is an error |
 | `tabs.activate` | `tab` (required) | `TabInfo` |
 | `tabs.close` | `tab?` | `{ok}` |
 | `page.navigate` | `url`, `tab?`, `wait?` (default true), `timeout_ms?` | `{tab, url, title, loading}` |

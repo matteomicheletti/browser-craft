@@ -130,6 +130,20 @@ See `docs/AUTOMATION.md`.
   minimize / close through the debug hook); moving and resizing by hand are in
   `MANUAL_TESTS.md` §7.
 
+- **Windows, tab overview and hover cards (wave 4, branch `wave4/windows`)**:
+  several windows in one process (`browser::App`, `src/browser/windows.rs`)
+  sharing the containers' data stores, tab ids, closed tabs and page pictures;
+  tabs moved between windows from the tab menu or by dragging, keeping their
+  live page (wry's X11 container reparented); named windows; every window in
+  the session. Safari-style overview of all tabs (`Ctrl+Shift+\`) with page
+  pictures, search, groups and split pairs. Chrome-style hover cards drawn in
+  an X11 child window above the web view (no flicker). Verified on the GNOME
+  session through the debug hook (screenshots) and with real input on a nested
+  X server; open: drags between windows on GNOME with several monitors and
+  fractional scaling, hover feel (`MANUAL_TESTS.md` §8). Not done: dragging a
+  tab in the sidebar, reopening a closed window as a whole, moving a whole
+  group or both split panes at once.
+
 ### M3: Multi-Account Containers (in progress: Linux implemented and verified live)
 
 - One web view per live tab; per-container `WebContext` (own data

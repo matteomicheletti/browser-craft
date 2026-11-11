@@ -133,7 +133,45 @@ egui. The adaptation of ArtCraft Launcher's widgets is credited in
 (`"2:maximize,4:restore,6:minimize,8:close"`, also `fullscreen`,
 `system-titlebar`, `custom-titlebar`, `palette`, `themes`, `authenticator`,
 `containers`, `theme-next`) to run these operations without input, which
-`xdotool` cannot send on a GNOME session.
+`xdotool` cannot send on a GNOME session. Window steps (wave 4): `new-window`,
+`close-window`, `focus`, `move-tab:<tab index>:<window number|new>`,
+`drop-tab:<tab index>:<screen x>:<screen y>` (a strip drag released there),
+`name:<text>`, `rename-dialog`, `overview`, `overview-close`,
+`overview-query:<text>`, `overview-select:<tab index>`, `hover:<tab index>`,
+`hover-off`, `thumbs`, `open:<url>`, `switch:<i>`, `split:<i>`, `group:<i>`,
+`tabs-top|left|right`. A step acts on the first window unless it ends in
+`@N` (window N), e.g. `"5:name:Work@2"`.
+
+## Several windows
+
+`browser::App` (`src/browser/windows.rs`) is the winit `ApplicationHandler`;
+each window is a `Browser` with its own egui context and wgpu painter. Events
+are routed by window id, by tab id (web view messages), or by the window key
+in the top bits of engine load generations and automation job ids. Shared
+state (`windows::Shared`): the containers' `WebContext`s, tab ids, the
+closed-tab stack, page pictures, favicons, the window list. A moved tab's web
+view is reparented with `XReparentWindow` (`src/browser/x11.rs`): wry's
+container is an X11 child of the window, so the page keeps running.
+
+## Tab hover cards: a window above the web view
+
+The page is a native X11 window that paints over egui, and hiding it while
+a card shows would flicker. The card (`src/browser/hover.rs`) is therefore
+its own X11 child window of the browser window, created with winit's
+`with_parent_window`, drawn on the CPU with softbuffer and the engine's text
+and image painter, and raised above the web view containers with
+`XRaiseWindow` each time it shows (GTK raises a web view's window when it is
+shown). The X server stacks sibling windows itself, so the card sits over
+the live page and nothing underneath is hidden or redrawn. Checked on GNOME
+(XWayland). The same kind of window can carry menus over the page later
+(instead of the page snapshot).
+
+## Tab overview
+
+`src/browser/overview.rs` draws a full-window egui layer; while it is open
+`sync_webview` and the split peer hide the web views, so no snapshot is
+needed. Page pictures come from `src/thumbnails.rs` (WebKit snapshots taken
+when a tab is hidden and 1.5 s after a load, scaled with cairo).
 
 Because the icon font is compiled into the binary, icons render in every
 working directory; there is no loose asset to miss (the previous Font Awesome
