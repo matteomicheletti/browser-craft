@@ -7,7 +7,7 @@ GPU yet (see "Known limitations").
 
 ## Goal
 
-Draw the browser chrome (toolbar, address bar, tab sidebar) with egui instead
+Draw the browser chrome (toolbar, address bar, tab strip, Library sidebar) with egui instead
 of the software `Canvas`. When a GPU is available, egui renders through
 **wgpu**; when there is no usable adapter, keep today's engine/softbuffer
 chrome. The engine keeps producing the page raster; on the GPU path it is
@@ -64,8 +64,8 @@ the egui path owns the window.
 3. `egui_winit::State::take_egui_input`, build the UI with
    `egui::Panel::top("toolbar")`, `egui::Panel::top("bookmarks")` (when the
    bookmarks bar is on), `egui::Panel::top("save_login")` (while a login can
-   be saved), `egui::Panel::left("tabs")` (or `right`,
-   none when `tabs-position = hidden`), `egui::Panel::bottom("notice")` while
+   be saved), `egui::Panel::left("library")` (the bookmarks and history sidebar,
+   while open), `egui::Panel::bottom("notice")` while
    a notice is shown, and `egui::CentralPanel`, and run it via
    `Context::run_ui` (egui 0.36 panels take the root `Ui`, not the `Context`).
    Button clicks are collected as `Action`s and applied after the panels are
@@ -139,7 +139,7 @@ egui. The adaptation of ArtCraft Launcher's widgets is credited in
 `name:<text>`, `rename-dialog`, `overview`, `overview-close`,
 `overview-query:<text>`, `overview-select:<tab index>`, `hover:<tab index>`,
 `hover-off`, `thumbs`, `open:<url>`, `switch:<i>`, `split:<i>`, `group:<i>`,
-`tabs-top|left|right`, `cmd:<palette command key>` (e.g. `cmd:reopen-tab`), `go:<window number>:<tab index>` (the overview's click on another window's tab). A step acts on the first window unless it ends in
+`library-bookmarks|history|close`, `cmd:<palette command key>` (e.g. `cmd:reopen-tab`), `go:<window number>:<tab index>` (the overview's click on another window's tab). A step acts on the first window unless it ends in
 `@N` (window N), e.g. `"5:name:Work@2"`.
 
 ## Several windows

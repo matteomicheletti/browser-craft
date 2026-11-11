@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - User-Agent (`src/useragent/`): a realistic default (`Version/26.0` instead of WebKitGTK's `Version/60.5`, which broke Outlook on the web), Microsoft 365 hosts get Safari on macOS, per-site overrides from the palette (*User agent for this site…*, `^`) and `browsecraft://flags`, switched per navigation before the first request; headless `--user-agent`.
-- `Ctrl+B` shows or hides the tab sidebar (page-first: Bold in page editors wins); palette *Show or hide the tab sidebar*.
+- Library sidebar (`src/browser/library.rs`): `Ctrl+B` / `Cmd+B` (page-first: Bold in page editors wins) shows bookmarks with their folder tree (expand/collapse, open, new tab on middle- or Ctrl+click, open in container, new folder, delete with confirmation for folders, search with folder paths) and history grouped by day (200 at a time, *Load more*, search, remove) on the left of the page; resizable, width, section and open state saved in flags; palette *Toggle sidebar*, *Show bookmarks sidebar*, *Show history sidebar*; window-script steps `library-bookmarks|history|close`.
 - `BROWSECRAFT_WINDOW_SCRIPT` step `page-click` (the keyboard leaves the chrome).
 - Import from other browsers (`src/import`, `docs/IMPORT.md`): bookmarks and history from Firefox, LibreWolf, Waterfox, Chrome, Chromium, Brave, Edge, Vivaldi and Opera (native, Flatpak, Snap), bookmarks from and to `bookmarks.html`; `browsecraft://import` with counts, range, destination, dry run, progress and undo; palette commands; new-tab hint; drag-and-drop of an HTML file; `browsecraft import` CLI with JSON output. Source profiles are only read, from a temporary copy.
 - Persistent history (`history.sqlite`, rusqlite with bundled SQLite): visits by day, search, paging, removal, clear ranges, retention settings, frecency ranking for the palette and `history.search`; temporary containers are not recorded.
@@ -91,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Tabs are always in the strip on top (Chrome layout): the vertical tab sidebar (Left/Right/Hidden on `browsecraft://flags`, palette *Move tabs to top or side*, the `tabs-*` window-script steps) is gone; old `tabs-position` / `sidebar-side` settings load as tabs on top.
 - Modern look: a refreshed dark and light palette for the toolbar, tabs and address bar (rounded, with a focus ring), and a shared stylesheet for every internal page (new tab, settings, history, bookmarks, passwords, error pages). Internal pages follow the theme and reload when it changes.
 - The theme now defaults to dark.
 - The settings page is redesigned with toggle switches and segmented controls; changing a setting no longer adds a Back step each time.

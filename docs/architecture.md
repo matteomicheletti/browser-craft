@@ -242,15 +242,17 @@ index, engine page as an optional `Tab`, whether it shows a web page, webview
 URL, title). Exactly one tab is active; its fields are the live `Browser`
 fields. `park_active_tab` / `activate_pantry` swap between the two, so
 switching tabs never reloads engine pages. WebView2 tabs re-issue `load_url`
-on activation (there is one shared web view). Ctrl+T/W/Tab and the sidebar
+on activation (there is one shared web view). Ctrl+T/W/Tab and the tab strip
 open, close and cycle tabs; closing the last tab quits. New tabs open
-`about:home`; the Home button opens `HOME_URL` (Startpage). The sidebar sits
-on the left or right, or is hidden (`tabs-position`), and insets the page and
+`about:home`; the Home button opens `HOME_URL` (Startpage). Tabs are always in
+the strip on top (the engine chrome, which has none, lists them on the left).
+The Library sidebar (`src/browser/library.rs`, Ctrl+B: bookmarks folders and
+paged history) is a resizable egui panel on the left that insets the page and
 webview rectangles.
 
 ## Flags and `browsecraft://`
 
-`flags.rs` holds user settings (`tabs-position`, `theme`, `chrome`,
+`flags.rs` holds user settings (`library`, `library-section`, `library-width`, `theme`, `chrome`,
 `bookmarks-bar`) in a `RwLock`, persisted as `key=value` lines in the per-user
 configuration directory. `storage::write_private` creates that directory
 owner-only, refuses a symlinked directory, and has an exclusive temporary file

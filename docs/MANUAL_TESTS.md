@@ -213,8 +213,8 @@ For each row try the built-in choice (Safari on macOS) first, then Chrome and Ed
 | UA.3 | https://teams.microsoft.com (chat, a call preview) | No "unsupported browser" page | |
 | UA.4 | Open a Word / Excel document from office.com or SharePoint | Document opens and edits | |
 | UA.5 | Settings → Site user agents: remove an override | Row disappears; the site gets its automatic string on the next load | |
-| SB.1 | Tabs left, click in a page, Ctrl+B twice | Sidebar hides, then comes back on the left; the same with tabs right | |
-| SB.2 | Tabs on top, Ctrl+B | Notice only | |
+| SB.1 | Click in a page (not an editor), Ctrl+B twice; then in an editor | Library sidebar opens on the left (page narrows), then closes; in the editor Ctrl+B makes text bold | |
+| SB.2 | Library: expand a nested folder, middle-click a bookmark, right-click a folder → Delete folder…, History → Load more, right-click → Remove from history, drag the edge, restart | New tab opens; folder deleted after confirming; more days load; row gone; width, section and open state come back | |
 ## 9. Import, history and bookmark folders (wave 5)
 
 | # | Steps | Expected | Result |

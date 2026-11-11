@@ -84,14 +84,12 @@ A bar along the bottom of the toolbar shows that a page is loading. On engine pa
 
 ## Window and title bar
 
-BrowseCraft draws its own window frame, as Chrome does. With the tabs on top,
-the tab strip is the title bar: the window buttons (minimize, maximize or
+BrowseCraft draws its own window frame, as Chrome does. The tabs are always in
+a strip on top, and the tab strip is the title bar: the window buttons (minimize, maximize or
 restore, close) sit at its right end, and the empty part of the strip (there is
 always a free stretch after the `+`) moves the window when you drag it.
 Double-click it to maximize or restore the window; right-click it for a small
-window menu (New window, Name window…, Minimize, Maximize / Restore, Close). With the tabs in a sidebar
-or hidden, the toolbar is the title bar instead, with the window buttons after
-the password key. Resize the window from any edge or corner: a thin border
+window menu (New window, Name window…, Minimize, Maximize / Restore, Close). Resize the window from any edge or corner: a thin border
 (5 pixels) round the page is the grip, and the pointer changes shape over it.
 A maximized window has no border. In full screen (`F11`, or a page's video in
 full screen) the window buttons and the border go away.
@@ -140,10 +138,32 @@ tabs*, plus *Move to new window* and *Move to window ▸* (see
 [Windows](#windows)). Drag a tab along the strip to reorder it (a blue line shows
 where it lands). New tabs open `about:home` with the address bar focused.
 Closing the last tab closes its window, and closing the last window quits
-BrowseCraft. On `browsecraft://flags` the tabs can instead be a
-vertical sidebar on the left or right (with the container colour as the bar at
-the start of each row), or hidden. The software interface (`chrome=engine`)
-always uses the sidebar.
+BrowseCraft. The tabs are always in the strip on top (older `tabs-position`
+settings are ignored); only the software interface (`chrome=engine`), which has
+no strip, lists them on the left.
+
+### Bookmarks and history sidebar
+
+`Ctrl+B` (`Cmd+B` on macOS) shows or hides the Library sidebar on the left of
+the page; the page narrows to make room. In a page `Ctrl+B` goes to the page
+first, so Bold still works in editors. The header switches between
+**Bookmarks** and **History**, and the search field filters the section shown
+(`Esc` clears it).
+
+- **Bookmarks:** the *Bookmarks bar* and *Other bookmarks* folders with their
+  subfolders; click a folder's row to open or close it (remembered while the
+  window is open). Click a bookmark to open it in the current tab, middle-click
+  or `Ctrl`+click for a new tab. Right-click: *Open in new tab*, *Open in
+  container ▸*, *New folder*, *Delete* (a folder asks first). A search lists
+  matching bookmarks with their folder path.
+- **History:** visits newest first, grouped by day (Today, Yesterday, then
+  dates), 200 at a time with *Load more*. Click, middle-click and right-click
+  (*Open in new tab*, *Open in container ▸*, *Remove from history*) as above.
+
+Drag the sidebar's right edge to resize it (200–600 points). Its width, the
+section and whether it is open are remembered. Palette: *Toggle sidebar*,
+*Show bookmarks sidebar*, *Show history sidebar*. `Ctrl+H` still opens the
+`browsecraft://history` page and `Ctrl+Shift+O` the bookmarks manager.
 
 Each tab keeps its own web page alive, so switching tabs does not reload it and
 its state (scroll position, forms, media) stays as you left it. To save memory,
@@ -163,7 +183,7 @@ history and container.
 
 ### Tab hover cards
 
-Rest the pointer on a tab (in the strip or the sidebar) and, after half a
+Rest the pointer on a tab in the strip and, after half a
 second, a card shows its title, its site, its container and group, whether it
 is unloaded or in the split view, and a picture of the page (Chrome's and
 Edge's hover cards). Moving to another tab swaps the card at once; leaving the
@@ -205,10 +225,9 @@ Edge. Right-click a tab and choose *Add tab to new group*: the group's chip
 appears before the tab with an editor where you type its name and pick one of
 nine colours. *Add tab to group ▸* moves a tab into an existing group (it moves
 next to the group's other tabs) and *Remove from group* takes it out. In the
-strip a group is a coloured chip followed by its tabs, underlined in its colour;
-in the vertical sidebar it is a header row with its tabs indented under it.
+strip a group is a coloured chip followed by its tabs, underlined in its colour.
 
-Click a group's chip (or header row) to collapse it to the chip alone, showing
+Click a group's chip to collapse it to the chip alone, showing
 how many tabs it hides, and again to expand it. Collapsing the group of the tab
 you are on moves you to the nearest tab outside it (a new tab when there is
 none). Collapsing does not load or unload anything: unloaded tabs stay unloaded.
@@ -499,7 +518,7 @@ blocked pop-up shows a short notice under the page.
 | `Ctrl+U`                              | View page source          |
 | `Ctrl+H`                              | Open the history page (`browsecraft://history`) |
 | `Ctrl+D`                              | Bookmark the page, or remove its bookmark |
-| `Ctrl+B`                              | Show / hide the tab sidebar (remembers its side; with tabs on top it only says so). In a page it is page-first: Bold in an editor, a focused text field or iframe keeps it |
+| `Ctrl+B`                              | Show / hide the bookmarks and history sidebar. In a page it is page-first: Bold in an editor, a focused text field or iframe keeps it |
 | `Ctrl+Shift+B`                        | Show / hide the bookmarks bar |
 | `Ctrl+Shift+O`                        | Open the bookmarks page (`browsecraft://bookmarks`) |
 | `F11`                                 | Make the window fullscreen, or leave fullscreen |

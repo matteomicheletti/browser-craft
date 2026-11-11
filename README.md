@@ -211,7 +211,6 @@ Open `browsecraft://flags` to change:
 
 - **Theme:** one of eight themes (Late Night, the default, Slate Gray, Olive, Frost, Rosé, Forest, Light, Sand) or *Follow system*
 - **Use system title bar:** the desktop's own window frame instead of BrowseCraft's
-- **Tab sidebar:** left, right or hidden
 - **Bookmarks bar:** shown or hidden (`Ctrl+Shift+B`)
 - **Interface renderer:** auto, GPU (egui) or software (engine). This one takes effect after a restart.
 
