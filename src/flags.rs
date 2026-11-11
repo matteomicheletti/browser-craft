@@ -14,6 +14,8 @@ const FILE_NAME: &str = "flags.txt";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabsPosition {
+    /// A horizontal tab strip above the address bar (Chrome, Firefox).
+    Top,
     Left,
     Right,
     Hidden,
@@ -41,7 +43,20 @@ pub struct Flags {
     pub chrome: Chrome,
     /// The bookmarks bar under the address bar.
     pub bookmarks_bar: bool,
+    /// Minutes a background tab keeps its web view before it is unloaded
+    /// (its address is kept and it reloads when shown). 0 = never.
+    pub suspend_after_min: u32,
+    /// The most web views kept alive at once; the least recently used
+    /// background tabs are unloaded beyond it.
+    pub max_live_tabs: u32,
+    /// Reopen the previous session's tabs at start-up (each loads only when
+    /// first shown).
+    pub restore_tabs: bool,
 }
+
+/// The choices offered for `suspend_after_min` and `max_live_tabs`.
+pub const SUSPEND_CHOICES: [u32; 5] = [0, 5, 15, 30, 60];
+pub const LIVE_TAB_CHOICES: [u32; 4] = [4, 8, 16, 32];
 
 impl Default for Flags {
     fn default() -> Self {
@@ -50,10 +65,13 @@ impl Default for Flags {
 }
 
 const DEFAULT_FLAGS: Flags = Flags {
-    tabs_position: TabsPosition::Left,
+    tabs_position: TabsPosition::Top,
     theme: Theme::Dark,
     chrome: Chrome::Auto,
     bookmarks_bar: true,
+    suspend_after_min: 30,
+    max_live_tabs: 16,
+    restore_tabs: true,
 };
 
 static FLAGS: RwLock<Flags> = RwLock::new(DEFAULT_FLAGS);
@@ -76,6 +94,7 @@ fn load_from_mut(flags: &mut Flags) {
             continue;
         };
         match (key.trim(), value.trim()) {
+            ("tabs-position", "top") => flags.tabs_position = TabsPosition::Top,
             ("tabs-position", "left") => flags.tabs_position = TabsPosition::Left,
             ("tabs-position", "right") => flags.tabs_position = TabsPosition::Right,
             ("tabs-position", "hidden") => flags.tabs_position = TabsPosition::Hidden,
@@ -87,6 +106,22 @@ fn load_from_mut(flags: &mut Flags) {
             ("chrome", "engine") => flags.chrome = Chrome::Engine,
             ("bookmarks-bar", "on") => flags.bookmarks_bar = true,
             ("bookmarks-bar", "off") => flags.bookmarks_bar = false,
+            ("suspend-after", v) => {
+                if let Ok(n) = v.parse::<u32>()
+                    && n <= 24 * 60
+                {
+                    flags.suspend_after_min = n;
+                }
+            }
+            ("max-live-tabs", v) => {
+                if let Ok(n) = v.parse::<u32>()
+                    && (1..=256).contains(&n)
+                {
+                    flags.max_live_tabs = n;
+                }
+            }
+            ("restore-tabs", "on") => flags.restore_tabs = true,
+            ("restore-tabs", "off") => flags.restore_tabs = false,
             _ => {}
         }
     }
@@ -95,6 +130,7 @@ fn load_from_mut(flags: &mut Flags) {
 fn save_to(path: &Path, flags: &Flags) -> std::io::Result<()> {
     let mut text = String::new();
     match flags.tabs_position {
+        TabsPosition::Top => text += "tabs-position=top\n",
         TabsPosition::Left => text += "tabs-position=left\n",
         TabsPosition::Right => text += "tabs-position=right\n",
         TabsPosition::Hidden => text += "tabs-position=hidden\n",
@@ -114,6 +150,9 @@ fn save_to(path: &Path, flags: &Flags) -> std::io::Result<()> {
     } else {
         "bookmarks-bar=off\n"
     };
+    text += &format!("suspend-after={}\n", flags.suspend_after_min);
+    text += &format!("max-live-tabs={}\n", flags.max_live_tabs);
+    text += if flags.restore_tabs { "restore-tabs=on\n" } else { "restore-tabs=off\n" };
     crate::storage::write_private(path, text.as_bytes())
 }
 
@@ -182,6 +221,10 @@ fn apply_query(pairs: impl Iterator<Item = (String, String)>) -> bool {
     let mut changed = false;
     for (key, value) in pairs {
         match (key.as_str(), value.as_str()) {
+            ("tabs-position", "top") => {
+                changed |= flags.tabs_position != TabsPosition::Top;
+                flags.tabs_position = TabsPosition::Top;
+            }
             ("tabs-position", "left") => {
                 changed |= flags.tabs_position != TabsPosition::Left;
                 flags.tabs_position = TabsPosition::Left;
@@ -225,6 +268,26 @@ fn apply_query(pairs: impl Iterator<Item = (String, String)>) -> bool {
             ("bookmarks-bar", "off") => {
                 changed |= flags.bookmarks_bar;
                 flags.bookmarks_bar = false;
+            }
+            ("suspend-after", v) => {
+                if let Some(n) = v.parse::<u32>().ok().filter(|n| SUSPEND_CHOICES.contains(n)) {
+                    changed |= flags.suspend_after_min != n;
+                    flags.suspend_after_min = n;
+                }
+            }
+            ("max-live-tabs", v) => {
+                if let Some(n) = v.parse::<u32>().ok().filter(|n| LIVE_TAB_CHOICES.contains(n)) {
+                    changed |= flags.max_live_tabs != n;
+                    flags.max_live_tabs = n;
+                }
+            }
+            ("restore-tabs", "on") => {
+                changed |= !flags.restore_tabs;
+                flags.restore_tabs = true;
+            }
+            ("restore-tabs", "off") => {
+                changed |= flags.restore_tabs;
+                flags.restore_tabs = false;
             }
             _ => {}
         }
@@ -273,9 +336,10 @@ pub fn page_html() -> String {
     );
     let layout = internal::segmented_row(
         true,
-        "Tab sidebar",
-        "Where your open tabs are listed.",
+        "Tabs",
+        "Where your open tabs are listed: a strip above the address bar, or a sidebar.",
         &[
+            side("Top", "top", flags.tabs_position == TabsPosition::Top),
             side("Left", "left", flags.tabs_position == TabsPosition::Left),
             side("Right", "right", flags.tabs_position == TabsPosition::Right),
             side("Hidden", "hidden", flags.tabs_position == TabsPosition::Hidden),
@@ -298,10 +362,42 @@ pub fn page_html() -> String {
             render("Software", "engine", flags.chrome == Chrome::Engine),
         ],
     );
+    let suspend_labels = ["Never", "5 min", "15 min", "30 min", "1 hour"];
+    let suspend: Vec<(&'static str, String, bool)> = SUSPEND_CHOICES
+        .iter()
+        .zip(suspend_labels)
+        .map(|(n, label)| (label, to("suspend-after", &n.to_string()), flags.suspend_after_min == *n))
+        .collect();
+    let suspend = internal::segmented_row(
+        true,
+        "Unload background tabs after",
+        "Frees the memory of tabs you have not looked at for a while. They reload when you switch to them.",
+        &suspend,
+    );
+    let live_labels = ["4", "8", "16", "32"];
+    let live: Vec<(&'static str, String, bool)> = LIVE_TAB_CHOICES
+        .iter()
+        .zip(live_labels)
+        .map(|(n, label)| (label, to("max-live-tabs", &n.to_string()), flags.max_live_tabs == *n))
+        .collect();
+    let live = internal::segmented_row(
+        false,
+        "Tabs kept in memory",
+        "Beyond this, the least recently used background tabs are unloaded.",
+        &live,
+    );
+    let restore = internal::switch_row(
+        false,
+        "Reopen tabs at start-up",
+        "Restores the last session's tabs (not temporary containers). Each loads when you first open it.",
+        flags.restore_tabs,
+        &to("restore-tabs", if flags.restore_tabs { "off" } else { "on" }),
+    );
     let body = format!(
         "<h1>Settings</h1><p class=\"sub\">Changes apply immediately.</p>{error}\
          <div class=\"card\"><h2>Appearance</h2>{appearance}</div>\
          <div class=\"card\"><h2>Layout</h2>{layout}{bar}</div>\
+         <div class=\"card\"><h2>Tabs and memory</h2>{suspend}{live}{restore}</div>\
          <div class=\"card\"><h2>Advanced</h2>{renderer}</div>\
          <div class=\"card\"><h2>Shortcuts to your data</h2>\
          <div class=\"row first\"><div class=\"grow\"><div class=\"t\">Bookmarks</div><div class=\"d\">Pages you saved.</div></div>\
@@ -392,7 +488,7 @@ mod tests {
         let before = get();
         set(Flags::default()).unwrap();
         assert!(!apply_query(vec![("bogus".into(), "1".into())].into_iter()));
-        assert_eq!(get().tabs_position, TabsPosition::Left);
+        assert_eq!(get().tabs_position, TabsPosition::Top);
         set(before).unwrap();
     }
 
@@ -405,11 +501,13 @@ mod tests {
             theme: Theme::Light,
             chrome: Chrome::Egui,
             bookmarks_bar: false,
+            restore_tabs: false,
+            ..Flags::default()
         }).unwrap();
         let html = page_html();
         assert!(html.contains("tabs-position=right\">Right"), "unselected links have no class");
         assert!(html.contains("class=\"on\" href=\"browsecraft://flags?token="));
-        assert_eq!(html.matches("class=\"on\"").count(), 3, "one selected option per control");
+        assert_eq!(html.matches("class=\"on\"").count(), 5, "one selected option per control");
         // The bookmarks-bar switch is off and offers to turn it on.
         assert!(html.contains("bookmarks-bar=on"));
         assert!(!html.contains("class=\"sw on\""));
@@ -427,6 +525,7 @@ mod tests {
             theme: Theme::Light,
             chrome: Chrome::Egui,
             bookmarks_bar: false,
+            ..Flags::default()
         }).unwrap();
         let mut flags = Flags::default();
         load_from_mut(&mut flags);
@@ -434,6 +533,28 @@ mod tests {
         assert_eq!(flags.theme, Theme::Light);
         assert_eq!(flags.chrome, Chrome::Egui);
         assert!(!flags.bookmarks_bar);
+        set(before).unwrap();
+    }
+
+    #[test]
+    fn tab_and_memory_flags_round_trip_and_validate() {
+        let _guard = SERIAL.lock().unwrap();
+        let before = get();
+        set(Flags::default()).unwrap();
+        assert_eq!(get().tabs_position, TabsPosition::Top, "tabs on top by default");
+        let pairs = vec![
+            ("tabs-position".into(), "left".into()),
+            ("suspend-after".into(), "5".into()),
+            ("max-live-tabs".into(), "4".into()),
+            ("restore-tabs".into(), "off".into()),
+        ];
+        assert!(apply_query(pairs.into_iter()));
+        // Values the page never offers are ignored.
+        assert!(!apply_query(vec![("suspend-after".into(), "7".into()), ("max-live-tabs".into(), "0".into())].into_iter()));
+        let mut flags = Flags::default();
+        load_from_mut(&mut flags);
+        assert_eq!(flags.tabs_position, TabsPosition::Left);
+        assert_eq!((flags.suspend_after_min, flags.max_live_tabs, flags.restore_tabs), (5, 4, false));
         set(before).unwrap();
     }
 
