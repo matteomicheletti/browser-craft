@@ -49,6 +49,11 @@ sha2 = "0.11.1"
 rqrr = { version = "0.11.0", default-features = false }
 aes-gcm = { version = "0.11.1", default-features = false, features = ["aes", "alloc"] }
 scrypt = { version = "0.12.0", default-features = false }
+# Persistent history (history.sqlite) and reading the places.sqlite /
+# History databases of Firefox and Chromium when importing. `bundled`
+# compiles SQLite into the binary (no system libsqlite3 at run time, the same
+# SQLite on every platform); already in the lock graph through servo-storage.
+rusqlite = { version = "0.38", features = ["bundled"] }
 
 # Release builds abort on panic, so production code may not unwrap or
 # expect; the few proven invariants say why in an `allow` attribute. Tests
