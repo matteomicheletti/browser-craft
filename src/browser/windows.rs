@@ -982,6 +982,12 @@ impl ApplicationHandler<UserMessage> for App {
         if !self.browsers.is_empty() {
             return;
         }
+        // Cmd+A, Cmd+C, Cmd+V... reach web views through the Edit menu.
+        #[cfg(target_os = "macos")]
+        {
+            crate::macos_menu::install();
+            crate::macos_menu::install_key_monitor(self.proxy.clone());
+        }
         // What to open: command-line addresses, `--preset`, or the
         // "On startup" setting (`crate::presets::startup_plan`).
         use crate::presets::StartupPlan;

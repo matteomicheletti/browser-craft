@@ -241,7 +241,8 @@ height = 560              # (150..4000, default 520)
 [[commands]]
 id = "open"
 title = "Clipboard manager: paste from history"   # palette label
-shortcut = "Ctrl+V"         # optional; Cmd on macOS. Ctrl/Alt needed (F-keys may stand alone)
+shortcut = "Ctrl+V"         # optional; Cmd on macOS. Ctrl, Super or Alt needed (F-keys may stand alone);
+                             # Super is the Windows/Super key, Cmd on macOS
 page = "manager"            # the page it opens
 when = "open_on_ctrl_v"     # optional: a bool option that must be on
 palette = true              # default; a command needs a palette entry or a shortcut

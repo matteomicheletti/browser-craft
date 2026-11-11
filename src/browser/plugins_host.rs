@@ -178,7 +178,7 @@ fn kept_on_plugin_pages(ctrl: bool, shift: bool, key: &str) -> bool {
 
 /// Decides for a key typed in a web view showing `uri`. `key` is the key's
 /// name as `shortcuts::KeyCombo` spells it.
-pub(super) fn key_decision(uri: &str, ctrl: bool, shift: bool, alt: bool, key: &str) -> GtkKey {
+pub(super) fn key_decision(uri: &str, ctrl: bool, meta: bool, shift: bool, alt: bool, key: &str) -> GtkKey {
     if uri.starts_with(ui_pages::SCHEME) {
         let function = key.starts_with('f') && key.len() > 1;
         if (ctrl || alt) && !function && !kept_on_plugin_pages(ctrl, shift, key) {
@@ -186,7 +186,7 @@ pub(super) fn key_decision(uri: &str, ctrl: bool, shift: bool, alt: bool, key: &
         }
         return GtkKey::Browser;
     }
-    match shortcuts::lookup(ctrl, shift, alt, key) {
+    match shortcuts::lookup(ctrl, meta, shift, alt, key) {
         Some((p, c)) => GtkKey::Command(p, c),
         None => GtkKey::Browser,
     }
@@ -201,9 +201,11 @@ pub(super) fn gtk_key(view: &webkit2gtk::WebView, event: &gtk::gdk::EventKey) ->
     let ctrl = state.contains(ModifierType::CONTROL_MASK);
     let shift = state.contains(ModifierType::SHIFT_MASK);
     let alt = state.contains(ModifierType::MOD1_MASK);
+    // X11 reports Super as Mod4 (SUPER_MASK only after virtual mapping).
+    let meta = state.intersects(ModifierType::SUPER_MASK | ModifierType::MOD4_MASK);
     let Some(key) = gtk_key_name(event.keyval()) else { return GtkKey::Browser };
     let uri = view.uri().map(|u| u.to_string()).unwrap_or_default();
-    key_decision(&uri, ctrl, shift, alt, &key)
+    key_decision(&uri, ctrl, meta, shift, alt, &key)
 }
 
 /// A GDK key as `KeyCombo` names it: lower-case character or key name.
@@ -721,7 +723,12 @@ impl Browser {
                             use wry::WebViewExtUnix as _;
                             wv.webview().execute_editing_command(if plain { "PasteAsPlainText" } else { "Paste" });
                         }
-                        #[cfg(not(target_os = "linux"))]
+                        #[cfg(target_os = "macos")]
+                        {
+                            let _ = tab;
+                            crate::macos_menu::paste(plain);
+                        }
+                        #[cfg(windows)]
                         let _ = (tab, plain);
                     }
                     Target::Address => {
@@ -1021,8 +1028,9 @@ impl Browser {
         }
         let m = self.modifiers;
         let ctrl = m.control_key() || (cfg!(target_os = "macos") && m.super_key());
+        let meta = !cfg!(target_os = "macos") && m.super_key();
         let Some(key) = winit_key_name(&event.key_without_modifiers()) else { return false };
-        let Some((plugin, command)) = shortcuts::lookup(ctrl, m.shift_key(), m.alt_key(), &key) else { return false };
+        let Some((plugin, command)) = shortcuts::lookup(ctrl, meta, m.shift_key(), m.alt_key(), &key) else { return false };
         if self.feat.palette.is_open() {
             return false;
         }
@@ -1129,7 +1137,7 @@ impl Browser {
             "key" => match shortcuts::KeyCombo::parse(arg) {
                 Ok(k) => {
                     let uri = self.current_url();
-                    match key_decision(&uri, k.ctrl, k.shift, k.alt, &k.key) {
+                    match key_decision(&uri, k.ctrl, k.meta, k.shift, k.alt, &k.key) {
                         GtkKey::Command(p, c) => {
                             let (tab, address) = (self.tab_id, self.egui_address_focused);
                             self.plugin_host_message(HostMessage::Command { plugin: p, command: c, tab, address });
@@ -1197,7 +1205,7 @@ mod tests {
             for shift in [false, true] {
                 let key = Key::Character(ch.to_string().into());
                 if super::super::shortcut_for(&key, true, shift, false, false).is_some() {
-                    let combo = shortcuts::KeyCombo { ctrl: true, shift, alt: false, key: ch.to_string() };
+                    let combo = shortcuts::KeyCombo { ctrl: true, meta: false, shift, alt: false, key: ch.to_string() };
                     if shortcuts::builtin_use(&combo).is_none() {
                         missing.push(format!("Ctrl+{}{ch}", if shift { "Shift+" } else { "" }));
                     }
@@ -1215,17 +1223,17 @@ mod tests {
             command: "open".into(),
             overrides: Some("paste"),
         }]);
-        assert_eq!(key_decision("https://a.test/", true, false, false, "v"), GtkKey::Command("local.t.clip".into(), "open".into()));
-        assert_eq!(key_decision("https://a.test/", true, true, false, "v"), GtkKey::Browser);
+        assert_eq!(key_decision("https://a.test/", true, false, false, false, "v"), GtkKey::Command("local.t.clip".into(), "open".into()));
+        assert_eq!(key_decision("https://a.test/", true, false, true, false, "v"), GtkKey::Browser);
         // Plugin pages keep their editing keys and never trigger plugin commands.
         let page = "bc-plugin://local.t.shot/editor.html";
-        assert_eq!(key_decision(page, true, false, false, "v"), GtkKey::PageOwns);
-        assert_eq!(key_decision(page, true, false, false, "s"), GtkKey::PageOwns);
-        assert_eq!(key_decision(page, true, true, false, "z"), GtkKey::PageOwns);
-        assert_eq!(key_decision(page, true, false, false, "w"), GtkKey::Browser, "closing the tab still works");
-        assert_eq!(key_decision(page, false, false, false, "f11"), GtkKey::Browser);
+        assert_eq!(key_decision(page, true, false, false, false, "v"), GtkKey::PageOwns);
+        assert_eq!(key_decision(page, true, false, false, false, "s"), GtkKey::PageOwns);
+        assert_eq!(key_decision(page, true, false, true, false, "z"), GtkKey::PageOwns);
+        assert_eq!(key_decision(page, true, false, false, false, "w"), GtkKey::Browser, "closing the tab still works");
+        assert_eq!(key_decision(page, false, false, false, false, "f11"), GtkKey::Browser);
         shortcuts::install(Vec::new());
-        assert_eq!(key_decision("https://a.test/", true, false, false, "v"), GtkKey::Browser, "plugin off: Ctrl+V pastes");
+        assert_eq!(key_decision("https://a.test/", true, false, false, false, "v"), GtkKey::Browser, "plugin off: Ctrl+V pastes");
     }
 
     #[test]

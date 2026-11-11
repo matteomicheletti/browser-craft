@@ -16,6 +16,9 @@ use std::sync::{PoisonError, RwLock};
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyCombo {
     pub ctrl: bool,
+    /// The Super (Windows, Meta) key on Linux and Windows. On macOS Super
+    /// is Cmd, the platform key, so `parse` sets `ctrl` instead.
+    pub meta: bool,
     pub shift: bool,
     pub alt: bool,
     pub key: String,
@@ -28,7 +31,7 @@ const NAMED: &[&str] = &[
 
 impl KeyCombo {
     /// `"Ctrl+Shift+S"`, `"Cmd+V"` (Cmd is Ctrl here and the platform key on
-    /// macOS), `"Alt+F2"`. Modifiers in any order, case-insensitive.
+    /// macOS), `"Super+V"` (Cmd on macOS), `"Alt+F2"`. Modifiers in any order, case-insensitive.
     pub fn parse(s: &str) -> Result<Self, String> {
         let bad = |why: &str| format!("shortcut \"{s}\": {why}");
         if s.len() > 40 {
@@ -41,13 +44,15 @@ impl KeyCombo {
             Some((k, m)) => (k.to_ascii_lowercase(), m),
             None => return Err(bad("empty")),
         };
-        let mut c = KeyCombo { ctrl: false, shift: false, alt: false, key: String::new() };
+        let mut c = KeyCombo { ctrl: false, meta: false, shift: false, alt: false, key: String::new() };
         for m in mods {
             let flag = match m.to_ascii_lowercase().as_str() {
                 "ctrl" | "control" | "cmd" | "command" | "mod" | "primary" => &mut c.ctrl,
+                "super" | "meta" | "win" if cfg!(target_os = "macos") => &mut c.ctrl,
+                "super" | "meta" | "win" => &mut c.meta,
                 "shift" => &mut c.shift,
                 "alt" | "option" => &mut c.alt,
-                _ => return Err(bad("modifiers are Ctrl (or Cmd), Shift and Alt")),
+                _ => return Err(bad("modifiers are Ctrl (or Cmd), Super, Shift and Alt")),
             };
             if *flag {
                 return Err(bad("a modifier is repeated"));
@@ -67,9 +72,9 @@ impl KeyCombo {
             return Err(bad("unknown key"));
         }
         let function = key.starts_with('f') && key.len() > 1;
-        if !(c.ctrl || c.alt || function) {
+        if !(c.ctrl || c.meta || c.alt || function) {
             // A plain letter would take typing away from every page.
-            return Err(bad("needs Ctrl or Alt (function keys may stand alone)"));
+            return Err(bad("needs Ctrl, Super or Alt (function keys may stand alone)"));
         }
         c.key = key;
         Ok(c)
@@ -80,6 +85,9 @@ impl KeyCombo {
         let mut out = String::new();
         if self.ctrl {
             out.push_str(if cfg!(target_os = "macos") { "Cmd+" } else { "Ctrl+" });
+        }
+        if self.meta {
+            out.push_str("Super+");
         }
         if self.alt {
             out.push_str("Alt+");
@@ -102,8 +110,8 @@ impl KeyCombo {
 
     /// Matches a key press. `key` is what the key handlers produce: the
     /// character without Shift applied where they can (`"v"`), or a name.
-    pub fn matches(&self, ctrl: bool, shift: bool, alt: bool, key: &str) -> bool {
-        self.ctrl == ctrl && self.shift == shift && self.alt == alt && self.key.eq_ignore_ascii_case(key)
+    pub fn matches(&self, ctrl: bool, meta: bool, shift: bool, alt: bool, key: &str) -> bool {
+        self.ctrl == ctrl && self.meta == meta && self.shift == shift && self.alt == alt && self.key.eq_ignore_ascii_case(key)
     }
 }
 
@@ -239,16 +247,21 @@ static TABLE: RwLock<Vec<Active>> = RwLock::new(Vec::new());
 
 /// Replaces the live table (the browser calls this when plugins change).
 pub fn install(table: Vec<Active>) {
+    #[cfg(target_os = "macos")]
+    {
+        let taken = |shift: bool| table.iter().any(|a| a.combo.matches(true, false, shift, false, "v"));
+        crate::macos_menu::plugin_paste_keys(taken(false), taken(true));
+    }
     *TABLE.write().unwrap_or_else(PoisonError::into_inner) = table;
 }
 
 /// The plugin command bound to this key press, if any: `(plugin, command)`.
-pub fn lookup(ctrl: bool, shift: bool, alt: bool, key: &str) -> Option<(String, String)> {
+pub fn lookup(ctrl: bool, meta: bool, shift: bool, alt: bool, key: &str) -> Option<(String, String)> {
     TABLE
         .read()
         .unwrap_or_else(PoisonError::into_inner)
         .iter()
-        .find(|a| a.combo.matches(ctrl, shift, alt, key))
+        .find(|a| a.combo.matches(ctrl, meta, shift, alt, key))
         .map(|a| (a.plugin.clone(), a.command.clone()))
 }
 
@@ -270,11 +283,18 @@ mod tests {
         assert_eq!(KeyCombo::parse("Ctrl++").unwrap().key, "+");
         assert_eq!(KeyCombo::parse("Alt+Esc").unwrap().key, "escape");
         assert!(KeyCombo::parse("F2").is_ok(), "function keys may stand alone");
+        let s = KeyCombo::parse("Super+V").unwrap();
+        if cfg!(target_os = "macos") {
+            assert_eq!(s, KeyCombo::parse("Cmd+V").unwrap(), "Super is Cmd on macOS");
+        } else {
+            assert!(s.meta && !s.ctrl && s != KeyCombo::parse("Ctrl+V").unwrap(), "Super is its own key elsewhere");
+            assert_eq!(s.label(), "Super+V");
+        }
         for bad in ["V", "Shift+V", "Ctrl+Ctrl+V", "Hyper+V", "Ctrl+", "Ctrl+Foo", "", "Ctrl+é"] {
             assert!(KeyCombo::parse(bad).is_err(), "{bad}");
         }
-        assert!(c.matches(true, true, false, "S"));
-        assert!(!c.matches(true, false, false, "s"));
+        assert!(c.matches(true, false, true, false, "S"));
+        assert!(!c.matches(true, false, false, false, "s"));
         if !cfg!(target_os = "macos") {
             assert_eq!(c.label(), "Ctrl+Shift+S");
             assert_eq!(KeyCombo::parse("ctrl+pagedown").unwrap().label(), "Ctrl+PageDown");

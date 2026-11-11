@@ -30,6 +30,8 @@ mod icons;
 mod import;
 mod internal;
 mod layout;
+#[cfg(target_os = "macos")]
+mod macos_menu;
 mod loader;
 mod net;
 mod paint;

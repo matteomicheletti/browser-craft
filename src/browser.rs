@@ -197,6 +197,10 @@ pub enum UserMessage {
     PluginHost(plugins_host::HostMessage),
     /// An import started from browsecraft://import made progress or ended.
     Import(crate::import::Event),
+    /// A plugin shortcut typed while a page had the keyboard (macOS, from
+    /// `macos_menu`'s key monitor): `(plugin, command)`.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    PagePluginKey(String, String),
 }
 
 /// A key for egui, forwarded from the page's GTK window.
@@ -1636,6 +1640,27 @@ pub enum Shortcut {
 /// The browser-wide shortcut for `key` with these modifiers, if any. `typing`
 /// is true while a text field has the keyboard, which keeps `Ctrl+Left` and
 /// `Ctrl+Right` for moving by word.
+/// macOS: what a Cmd key typed in a page means to the browser (the key
+/// monitor in `macos_menu`, which sees it before WKWebView): a plugin's
+/// shortcut, a browser shortcut, or nothing (the page and the Edit menu get
+/// it). `key` is named as `shortcuts::KeyCombo` names keys.
+#[cfg(target_os = "macos")]
+pub fn mac_page_key(key: &str, shift: bool, alt: bool) -> Option<UserMessage> {
+    if let Some((plugin, command)) = crate::plugins::shortcuts::lookup(true, false, shift, alt, key) {
+        return Some(UserMessage::PagePluginKey(plugin, command));
+    }
+    let key = match key {
+        "tab" => Key::Named(NamedKey::Tab),
+        "pageup" => Key::Named(NamedKey::PageUp),
+        "pagedown" => Key::Named(NamedKey::PageDown),
+        "left" => Key::Named(NamedKey::ArrowLeft),
+        "right" => Key::Named(NamedKey::ArrowRight),
+        "delete" => Key::Named(NamedKey::Delete),
+        c => Key::Character(c.into()),
+    };
+    shortcut_for(&key, true, shift, alt, true).map(UserMessage::WebKey)
+}
+
 fn shortcut_for(key: &Key, ctrl: bool, shift: bool, alt: bool, typing: bool) -> Option<Shortcut> {
     if ctrl && !alt {
         let found = match key {
@@ -1821,6 +1846,25 @@ fn attach_webview_shortcuts_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>
         }
         Propagation::Proceed
     });
+}
+
+/// The selection's colours whatever GTK thinks of the window. The page's
+/// GTK window is embedded in the browser's, so GTK keeps it in its backdrop
+/// state and WebKit paints selections (Ctrl+A, a drag) in the theme's
+/// inactive colours, often the page's own background: text was selected
+/// with nothing to see. A user style sheet: a page's own `::selection` (and
+/// dark mode's) still wins.
+#[cfg(target_os = "linux")]
+const SELECTION_CSS: &str = "::selection { background-color: #3584e4; color: #ffffff; }";
+
+#[cfg(target_os = "linux")]
+fn attach_selection_style_gtk(wv: &WebView) {
+    use webkit2gtk::{UserContentInjectedFrames, UserContentManagerExt as _, UserStyleLevel, UserStyleSheet, WebViewExt as _};
+    use wry::WebViewExtUnix as _;
+    if let Some(content) = wv.webview().user_content_manager() {
+        let sheet = UserStyleSheet::new(SELECTION_CSS, UserContentInjectedFrames::AllFrames, UserStyleLevel::User, &[], &[]);
+        content.add_style_sheet(&sheet);
+    }
 }
 
 /// Whether the focused element of a page takes text: Ctrl+B there is Bold
@@ -4338,6 +4382,7 @@ impl Browser {
                     attach_webview_shortcuts_gtk(&wv, self.proxy.clone(), self.chrome_keys.clone(), tab);
                     attach_webview_sidebar_key_gtk(&wv, self.proxy.clone());
                     attach_webview_extras_gtk(&wv, self.proxy.clone(), tab);
+                    attach_selection_style_gtk(&wv);
                     {
                         use wry::WebViewExtUnix as _;
                         crate::useragent::webkit::attach(&wv.webview(), navigation);
@@ -6997,6 +7042,10 @@ impl Browser {
                 }
             }
             UserMessage::WebKey(shortcut) => self.web_key(shortcut),
+            UserMessage::PagePluginKey(plugin, command) => {
+                let target = if self.web_page { plugins_host::Target::Page(self.tab_id) } else { plugins_host::Target::Nothing };
+                self.run_plugin_command(&plugin, &command, target);
+            }
             UserMessage::WebFullscreen { epoch, on } => {
                 // Leaving fullscreen always applies; entering it only for the
                 // page still shown.

@@ -761,6 +761,7 @@ dependencies = [
  "aes-gcm",
  "arboard",
  "base64 0.22.1",
+ "block2 0.6.2",
  "chacha20poly1305",
  "egui",
  "egui-phosphor",
@@ -775,6 +776,9 @@ dependencies = [
  "javascriptcore-rs",
  "keepass",
  "libc",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
  "pollster",
  "psl",
  "qrcode",
@@ -5331,6 +5335,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d49e936b501e5c5bf01fda3a9452ff86dc3ea98ad5f283e1455153142d97518c"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
  "objc2 0.6.5",
  "objc2-core-foundation",
  "objc2-core-graphics",
