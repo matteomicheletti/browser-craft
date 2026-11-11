@@ -60,6 +60,10 @@ rustls = { version = "0.23", optional = true, default-features = false, features
 # wry renders web pages with WebKitGTK on Linux; GTK must be initialised and
 # its main context pumped from the winit loop (see docs/ARCHITECTURE_DECISION.md).
 gtk = "0.18"
+# Already in the tree through wry (same version and feature): the WebKitGTK
+# API wry does not wrap (find in page, page snapshots, the inspector window,
+# favicons).
+webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38"

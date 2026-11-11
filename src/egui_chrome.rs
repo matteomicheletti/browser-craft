@@ -14,6 +14,8 @@ use std::sync::Arc;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
+use crate::browser::ContainerChoice;
+use crate::containers::Container;
 use crate::flags::{self, Chrome};
 
 /// The GPU-rendered chrome. Holds the egui context, the winit bridge and the
@@ -375,7 +377,18 @@ pub fn select_all(ctx: &egui::Context, id: egui::Id, chars: usize) {
     }
 }
 
-/// Outcome of drawing one tab row.
+/// What a tab shows in the strip or the sidebar.
+pub struct TabInfo<'a> {
+    pub title: &'a str,
+    pub active: bool,
+    pub container: Option<&'a Container>,
+    pub favicon: Option<egui::TextureId>,
+    /// Unloaded to save memory: drawn dimmed, it reloads when shown.
+    pub unloaded: bool,
+}
+
+/// Outcome of drawing one tab (strip chip or sidebar row).
+#[derive(Default)]
 pub struct TabRow {
     pub clicked: bool,
     pub close: bool,
@@ -383,28 +396,108 @@ pub struct TabRow {
     pub duplicate: bool,
     /// The user picked "Close other tabs" from the context menu.
     pub close_others: bool,
+    /// "New tab in container" from the context menu.
+    pub new_in: Option<ContainerChoice>,
+    /// "Reopen in container": this tab's page in another container.
+    pub reopen_in: Option<ContainerChoice>,
 }
 
-/// One row in the tab sidebar: a globe, the (truncated) title and a close
-/// button that appears on the active/hovered row. The whole row is clickable.
-pub fn tab_row(ui: &mut egui::Ui, c: &Colors, title: &str, active: bool) -> TabRow {
-    let (rect, row) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+/// The menu of containers: no container, each container, a new temporary
+/// one. Returns the pick.
+pub fn container_menu(ui: &mut egui::Ui, c: &Colors, containers: &[Container], none_label: &str) -> Option<ContainerChoice> {
+    let mut pick = None;
+    if menu_item(ui, c, ICON_GLOBE, none_label).clicked() {
+        pick = Some(ContainerChoice::None);
+    }
+    for ctr in containers {
+        let text = egui::RichText::new(format!("{}  {}", ctr.glyph(), ctr.name)).size(13.0).color(ctr.color32());
+        if ui.add(egui::Button::new(text).frame(false).min_size(egui::vec2(180.0, 26.0))).clicked() {
+            pick = Some(ContainerChoice::Id(ctr.id.clone()));
+        }
+    }
+    let temp = egui::RichText::new(format!("{}  New temporary container", egui_phosphor::regular::TIMER))
+        .size(13.0)
+        .color(c.text);
+    if ui
+        .add(egui::Button::new(temp).frame(false).min_size(egui::vec2(180.0, 26.0)))
+        .on_hover_text("Its cookies and site data are deleted when its last tab closes (Ctrl+Shift+N)")
+        .clicked()
+    {
+        pick = Some(ContainerChoice::Temporary);
+    }
+    if pick.is_some() {
+        ui.close();
+    }
+    pick
+}
+
+/// The right-click menu of a tab.
+fn tab_menu(ui: &mut egui::Ui, c: &Colors, containers: &[Container], out: &mut TabRow) {
+    if menu_item(ui, c, crate::icons::COPY, "Duplicate tab").clicked() {
+        out.duplicate = true;
+        ui.close();
+    }
+    ui.menu_button(
+        egui::RichText::new(format!("{}  New tab in container", egui_phosphor::regular::STACK)).size(13.0).color(c.text),
+        |ui| {
+            out.new_in = container_menu(ui, c, containers, "No container");
+        },
+    );
+    ui.menu_button(
+        egui::RichText::new(format!("{}  Reopen in container", egui_phosphor::regular::ARROW_SQUARE_OUT)).size(13.0).color(c.text),
+        |ui| {
+            out.reopen_in = container_menu(ui, c, containers, "No container");
+        },
+    );
+    ui.separator();
+    if menu_item(ui, c, crate::icons::CLOSE, "Close tab").clicked() {
+        out.close = true;
+        ui.close();
+    }
+    if menu_item(ui, c, crate::icons::TRASH, "Close other tabs").clicked() {
+        out.close_others = true;
+        ui.close();
+    }
+}
+
+/// The page icon of a tab: its favicon, or a globe.
+fn tab_icon(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo) {
+    match tab.favicon {
+        Some(texture) => {
+            let image = egui::Image::new((texture, egui::vec2(16.0, 16.0)));
+            ui.add(if tab.unloaded { image.tint(egui::Color32::from_white_alpha(140)) } else { image });
+        }
+        None => {
+            let color = match tab.container {
+                Some(ctr) => ctr.color32(),
+                None if tab.active => c.accent,
+                None => c.muted,
+            };
+            ui.label(icon(ICON_GLOBE, 13.0).color(color));
+        }
+    }
+}
+
+/// One row in the tab sidebar: the page icon, the (truncated) title and a
+/// close button that appears on the active/hovered row; a container's tabs
+/// get its colour as the left bar. The whole row is clickable.
+pub fn tab_row(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Container]) -> TabRow {
+    let (rect, row) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
     let hovered = row.hovered();
     let painter = ui.painter();
-    if active {
+    if tab.active {
         painter.rect_filled(rect, egui::CornerRadius::same(7), c.hover);
-        let bar = egui::Rect::from_min_size(
-            egui::pos2(rect.min.x, rect.min.y + 6.0),
-            egui::vec2(3.0, rect.height() - 12.0),
-        );
-        painter.rect_filled(bar, egui::CornerRadius::same(2), c.accent);
     } else if hovered {
-        painter.rect_filled(
-            rect,
-            egui::CornerRadius::same(7),
-            c.hover.gamma_multiply(0.6),
-        );
+        painter.rect_filled(rect, egui::CornerRadius::same(7), c.hover.gamma_multiply(0.6));
+    }
+    let bar_color = match tab.container {
+        Some(ctr) => Some(ctr.color32()),
+        None if tab.active => Some(c.accent),
+        None => None,
+    };
+    if let Some(color) = bar_color {
+        let bar = egui::Rect::from_min_size(egui::pos2(rect.min.x, rect.min.y + 6.0), egui::vec2(3.0, rect.height() - 12.0));
+        painter.rect_filled(bar, egui::CornerRadius::same(2), color);
     }
 
     let inner = rect.shrink2(egui::vec2(10.0, 0.0));
@@ -414,18 +507,23 @@ pub fn tab_row(ui: &mut egui::Ui, c: &Colors, title: &str, active: bool) -> TabR
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
     );
     child.spacing_mut().item_spacing.x = 7.0;
-    let icon_color = if active { c.accent } else { c.muted };
-    child.label(icon(ICON_GLOBE, 12.0).color(icon_color));
+    tab_icon(&mut child, c, tab);
 
-    let show_close = active || hovered;
+    let show_close = tab.active || hovered;
     let label_w = (child.available_width() - if show_close { 26.0 } else { 0.0 }).max(10.0);
-    let label = egui::Label::new(egui::RichText::new(title).size(13.0).color(c.text))
+    let color = if tab.unloaded { c.muted } else { c.text };
+    let label = egui::Label::new(egui::RichText::new(tab.title).size(13.0).color(color))
         .truncate()
         .selectable(false)
         .sense(egui::Sense::click());
-    let label_resp = child.add_sized([label_w, 20.0], label);
+    let label_resp = child
+        .allocate_ui_with_layout(egui::vec2(label_w, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_min_width(label_w);
+            ui.add(label)
+        })
+        .inner;
 
-    let mut close = false;
+    let mut out = TabRow::default();
     if show_close {
         child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let resp = ui.add(
@@ -434,31 +532,247 @@ pub fn tab_row(ui: &mut egui::Ui, c: &Colors, title: &str, active: bool) -> TabR
                     .min_size(egui::vec2(20.0, 20.0)),
             );
             if resp.on_hover_text("Close tab").clicked() {
-                close = true;
+                out.close = true;
             }
         });
     }
-    let (mut duplicate, mut close_others) = (false, false);
-    row.context_menu(|ui| {
-        if menu_item(ui, c, crate::icons::COPY, "Duplicate tab").clicked() {
-            duplicate = true;
-            ui.close();
-        }
-        if menu_item(ui, c, crate::icons::CLOSE, "Close tab").clicked() {
-            close = true;
-            ui.close();
-        }
-        if menu_item(ui, c, crate::icons::TRASH, "Close other tabs").clicked() {
-            close_others = true;
-            ui.close();
-        }
-    });
-    TabRow {
-        clicked: row.clicked() || label_resp.clicked(),
-        close,
-        duplicate,
-        close_others,
+    row.context_menu(|ui| tab_menu(ui, c, containers, &mut out));
+    out.clicked = row.clicked() || label_resp.clicked();
+    out.close |= row.middle_clicked();
+    out
+}
+
+/// What the user did in the tab strip.
+#[derive(Default)]
+pub struct TabStrip {
+    /// Per tab (by index), what happened to it.
+    pub tabs: Vec<(usize, TabRow)>,
+    /// "+" (no container) or a pick from the container menu.
+    pub new_tab: Option<ContainerChoice>,
+    /// "Manage containers" in the container menu.
+    pub manage_containers: bool,
+}
+
+/// The width of each tab in a strip `available` points wide: as wide as
+/// Chrome's (up to 220), shrinking as tabs are added, never below 48 (the
+/// strip then scrolls).
+pub fn tab_width(available: f32, count: usize) -> f32 {
+    if count == 0 {
+        return 220.0;
     }
+    (available / count as f32 - 2.0).clamp(48.0, 220.0)
+}
+
+/// The horizontal tab strip (tabs on top): a chip per tab with its icon,
+/// title, close button and container colour; then "+" and the container
+/// picker.
+pub fn tab_strip(ui: &mut egui::Ui, c: &Colors, tabs: &[TabInfo], containers: &[Container]) -> TabStrip {
+    let mut out = TabStrip::default();
+    ui.horizontal_centered(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        ui.add_space(6.0);
+        let buttons_w = 76.0;
+        let available = (ui.available_width() - buttons_w).max(48.0);
+        let width = tab_width(available, tabs.len());
+        egui::ScrollArea::horizontal()
+            .max_width(available)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for (i, tab) in tabs.iter().enumerate() {
+                        let row = tab_chip(ui, c, tab, width, containers);
+                        if tab.active && !ui.is_rect_visible(ui.min_rect()) {
+                            ui.scroll_to_cursor(None);
+                        }
+                        out.tabs.push((i, row));
+                    }
+                });
+            });
+        let plus = egui::Button::new(icon(ICON_PLUS, 14.0).color(c.text))
+            .frame(false)
+            .min_size(egui::vec2(28.0, 28.0))
+            .corner_radius(egui::CornerRadius::same(8));
+        if ui.add(plus).on_hover_text("New tab (Ctrl+T)").clicked() {
+            out.new_tab = Some(ContainerChoice::None);
+        }
+        let picker = egui::Button::new(icon(egui_phosphor::regular::CARET_DOWN, 12.0).color(c.muted))
+            .frame(false)
+            .min_size(egui::vec2(22.0, 28.0))
+            .corner_radius(egui::CornerRadius::same(8));
+        let picker = ui.add(picker).on_hover_text("New tab in a container");
+        egui::Popup::menu(&picker).width(220.0).show(|ui| {
+            if let Some(pick) = container_menu(ui, c, containers, "New tab") {
+                out.new_tab = Some(pick);
+            }
+            ui.separator();
+            if menu_item(ui, c, egui_phosphor::regular::STACK, "Manage containers").clicked() {
+                out.manage_containers = true;
+                ui.close();
+            }
+        });
+    });
+    out
+}
+
+/// One tab in the strip.
+fn tab_chip(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, width: f32, containers: &[Container]) -> TabRow {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
+    let hovered = resp.hovered();
+    let painter = ui.painter();
+    let corners = egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 };
+    if tab.active {
+        painter.rect_filled(rect, corners, c.bar_bg);
+    } else if hovered {
+        painter.rect_filled(rect.shrink2(egui::vec2(0.0, 2.0)), egui::CornerRadius::same(7), c.hover);
+    } else {
+        // A thin divider between inactive tabs, as in Chrome.
+        let x = rect.max.x + 1.0;
+        painter.vline(x, (rect.min.y + 8.0)..=(rect.max.y - 8.0), egui::Stroke::new(1.0, c.line));
+    }
+    if let Some(ctr) = tab.container {
+        let line = egui::Rect::from_min_size(egui::pos2(rect.min.x + 8.0, rect.min.y), egui::vec2(rect.width() - 16.0, 3.0));
+        painter.rect_filled(line, egui::CornerRadius::same(2), ctr.color32());
+    }
+    let narrow = width < 80.0;
+    let show_close = tab.active || (hovered && !narrow);
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect.shrink2(egui::vec2(if narrow { 6.0 } else { 10.0 }, 0.0)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    child.spacing_mut().item_spacing.x = 6.0;
+    tab_icon(&mut child, c, tab);
+    let mut out = TabRow::default();
+    if !narrow || tab.active {
+        let close_w = if show_close { 22.0 } else { 0.0 };
+        let label_w = (child.available_width() - close_w).max(0.0);
+        if label_w > 8.0 {
+            let color = if tab.unloaded { c.muted } else { c.text };
+            let label = egui::Label::new(egui::RichText::new(tab.title).size(12.5).color(color))
+                .truncate()
+                .selectable(false);
+            child.allocate_ui_with_layout(egui::vec2(label_w, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.set_min_width(label_w);
+                ui.add(label);
+            });
+        }
+        if show_close {
+            let close = egui::Button::new(icon(ICON_XMARK, 10.0).color(c.muted))
+                .frame(false)
+                .min_size(egui::vec2(18.0, 18.0))
+                .corner_radius(egui::CornerRadius::same(9));
+            if child.add(close).on_hover_text("Close tab (Ctrl+W)").clicked() {
+                out.close = true;
+            }
+        }
+    }
+    let tip = match tab.container {
+        Some(ctr) => format!("{}\n{}", tab.title, ctr.name),
+        None => tab.title.to_string(),
+    };
+    let resp = resp.on_hover_text(tip);
+    resp.context_menu(|ui| tab_menu(ui, c, containers, &mut out));
+    out.clicked = resp.clicked() && !out.close;
+    out.close |= resp.middle_clicked();
+    out
+}
+
+/// The container badge at the start of the toolbar: the active tab's
+/// container, in its colour. Returns whether it was clicked.
+pub fn container_badge(ui: &mut egui::Ui, ctr: &Container) -> bool {
+    let color = ctr.color32();
+    let text = egui::RichText::new(format!("{}  {}", ctr.glyph(), ctr.name)).size(12.5).color(color);
+    let button = egui::Button::new(text)
+        .fill(color.gamma_multiply(0.16))
+        .stroke(egui::Stroke::new(1.0, color.gamma_multiply(0.6)))
+        .corner_radius(egui::CornerRadius::same(12))
+        .min_size(egui::vec2(0.0, 26.0));
+    let tip = if ctr.temporary {
+        "Temporary container: its cookies and site data are deleted when its last tab closes"
+    } else {
+        "This tab's container: its own cookies, logins and site data"
+    };
+    ui.add(button).on_hover_text(tip).clicked()
+}
+
+/// Stable id of the find bar's text field.
+pub fn find_id() -> egui::Id {
+    egui::Id::new("bc-find")
+}
+
+/// What the user did in the find bar.
+pub enum FindEvent {
+    Changed,
+    Next,
+    Previous,
+    Close,
+}
+
+/// The find-in-page bar: the text, the match count, previous / next and
+/// close.
+pub fn find_bar(ui: &mut egui::Ui, c: &Colors, query: &mut String, matches: Option<u32>, focus: bool) -> Vec<FindEvent> {
+    let mut events = Vec::new();
+    ui.horizontal_centered(|ui| {
+        ui.add_space(12.0);
+        ui.label(icon(egui_phosphor::regular::MAGNIFYING_GLASS, 14.0).color(c.muted));
+        let response = ui.add(
+            egui::TextEdit::singleline(query)
+                .id(find_id())
+                .desired_width(260.0)
+                .hint_text("Find in page"),
+        );
+        if focus {
+            response.request_focus();
+        }
+        if response.changed() {
+            events.push(FindEvent::Changed);
+        }
+        let enter = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+        if enter {
+            events.push(if ui.input(|i| i.modifiers.shift) { FindEvent::Previous } else { FindEvent::Next });
+            response.request_focus();
+        }
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            events.push(FindEvent::Close);
+        }
+        let status = match matches {
+            _ if query.is_empty() => String::new(),
+            None => String::new(),
+            Some(0) => "No matches".into(),
+            Some(1) => "1 match".into(),
+            Some(n) if n >= 1000 => "1000+ matches".into(),
+            Some(n) => format!("{n} matches"),
+        };
+        ui.label(egui::RichText::new(status).size(12.5).color(c.muted));
+        if icon_button(ui, true, egui_phosphor::regular::CARET_UP, "Previous match (Shift+Enter)", 14.0).clicked() {
+            events.push(FindEvent::Previous);
+        }
+        if icon_button(ui, true, egui_phosphor::regular::CARET_DOWN, "Next match (Enter)", 14.0).clicked() {
+            events.push(FindEvent::Next);
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(8.0);
+            if icon_button(ui, true, ICON_XMARK, "Close (Esc)", 13.0).clicked() {
+                events.push(FindEvent::Close);
+            }
+        });
+    });
+    events
+}
+
+/// The header of the drawer: icon, title and a close button. Returns
+/// whether close was clicked.
+pub fn drawer_header(ui: &mut egui::Ui, c: &Colors, glyph: &str, title: &str) -> bool {
+    let mut close = false;
+    ui.horizontal(|ui| {
+        ui.label(icon(glyph, 16.0).color(c.accent));
+        ui.label(egui::RichText::new(title).size(15.0).strong().color(c.text));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            close = icon_button(ui, true, ICON_XMARK, "Close panel", 13.0).clicked();
+        });
+    });
+    close
 }
 
 /// Registers the embedded Phosphor face with egui. The font ships inside the
@@ -883,6 +1197,51 @@ mod tests {
                 assert!(address.max.x <= theme.min.x.min(gear.min.x).min(key.min.x) + 0.5, "address overlaps buttons at {width}px");
                 assert!(address.width() > 150.0, "address bar too small at {width}px");
             }
+        }
+    }
+
+    #[test]
+    fn tabs_shrink_like_chrome_and_never_vanish() {
+        assert_eq!(tab_width(1000.0, 2), 220.0);
+        assert_eq!(tab_width(1000.0, 10), 98.0);
+        assert_eq!(tab_width(1000.0, 100), 48.0, "the strip scrolls instead");
+        assert_eq!(tab_width(1000.0, 0), 220.0);
+    }
+
+    /// Draws the tab strip with `count` tabs in a `screen_w` window and
+    /// returns the right edge of the last widget.
+    fn strip_right_edge(screen_w: f32, count: usize) -> f32 {
+        let ctx = egui::Context::default();
+        install_icon_font(&ctx);
+        let c = Colors::for_dark(true);
+        let ctr = Container { id: "a".into(), name: "Work".into(), color: "red".into(), icon: "briefcase".into(), temporary: false };
+        let titles: Vec<String> = (0..count).map(|i| format!("A rather long page title {i}")).collect();
+        let tabs: Vec<TabInfo> = titles
+            .iter()
+            .enumerate()
+            .map(|(i, t)| TabInfo { title: t, active: i == 0, container: (i % 2 == 1).then_some(&ctr), favicon: None, unloaded: i == 2 })
+            .collect();
+        let mut right = 0.0f32;
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(screen_w, 400.0))),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            egui::Panel::top("tabstrip").exact_size(38.0).show(ui, |ui| {
+                let strip = tab_strip(ui, &c, &tabs, std::slice::from_ref(&ctr));
+                assert_eq!(strip.tabs.len(), count);
+                right = ui.min_rect().max.x;
+            });
+        });
+        output.textures_delta.clear();
+        right
+    }
+
+    #[test]
+    fn tab_strip_fits_the_window() {
+        for (width, count) in [(1280.0, 3), (1280.0, 40), (640.0, 12), (480.0, 1)] {
+            let right = strip_right_edge(width, count);
+            assert!(right <= width + 0.5, "{count} tabs end at {right} in a {width}px window");
         }
     }
 
