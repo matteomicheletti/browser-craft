@@ -143,7 +143,7 @@ impl PluginsPanel {
 
     fn draw(&mut self, ui: &mut egui::Ui, c: &Colors, reg: &Registry, actions: &mut Vec<Action>) {
         let muted = |t: &str| egui::RichText::new(t).size(12.0).color(c.muted);
-        let danger = egui::Color32::from_rgb(0xe5, 0x53, 0x4b);
+        let danger = c.danger;
 
         // ---- add ----
         ui.label(muted("Install a plugin folder (copied into your settings), or add a folder of plugins you are developing (used in place, reloaded when files change)."));
@@ -223,7 +223,7 @@ impl PluginsPanel {
     }
 
     fn entry(&mut self, ui: &mut egui::Ui, c: &Colors, reg: &Registry, e: &super::registry::Entry, actions: &mut Vec<Action>) {
-        let danger = egui::Color32::from_rgb(0xe5, 0x53, 0x4b);
+        let danger = c.danger;
         let Some(m) = e.manifest() else {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.label(egui::RichText::new(e.dir.as_ref().map(|d| d.display().to_string()).unwrap_or_default()).size(12.0).color(c.text));
@@ -292,11 +292,11 @@ impl PluginsPanel {
     }
 }
 
-fn risk_color(r: Risk) -> egui::Color32 {
+fn risk_color(r: Risk, c: &Colors) -> egui::Color32 {
     match r {
-        Risk::High => egui::Color32::from_rgb(0xe5, 0x53, 0x4b),
-        Risk::Medium => egui::Color32::from_rgb(0xd9, 0xa4, 0x41),
-        Risk::Low => egui::Color32::from_rgb(0x4c, 0xaf, 0x7a),
+        Risk::High => c.danger,
+        Risk::Medium => c.warning,
+        Risk::Low => c.success,
     }
 }
 
@@ -311,13 +311,13 @@ fn permission_list(ui: &mut egui::Ui, c: &Colors, m: &Manifest) {
             Requested::Api(p) => {
                 let i = p.info();
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(i.name).size(12.0).strong().color(risk_color(i.risk)));
+                    ui.label(egui::RichText::new(i.name).size(12.0).strong().color(risk_color(i.risk, c)));
                     ui.label(egui::RichText::new(i.description).size(11.5).color(c.muted));
                 });
             }
             Requested::Host(h) => {
                 ui.horizontal_wrapped(|ui| {
-                    ui.label(egui::RichText::new(h.as_str()).size(12.0).strong().color(risk_color(Risk::Medium)));
+                    ui.label(egui::RichText::new(h.as_str()).size(12.0).strong().color(risk_color(Risk::Medium, c)));
                     ui.label(egui::RichText::new("Host access (reserved; no API uses it yet).").size(11.5).color(c.muted));
                 });
             }

@@ -21,12 +21,8 @@ pub enum TabsPosition {
     Hidden,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Theme {
-    Auto,
-    Light,
-    Dark,
-}
+/// The chosen theme (see `crate::theme`).
+pub use crate::theme::ThemeId as Theme;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum Chrome {
@@ -52,6 +48,9 @@ pub struct Flags {
     /// Reopen the previous session's tabs at start-up (each loads only when
     /// first shown).
     pub restore_tabs: bool,
+    /// Use the desktop's own title bar and window frame instead of the
+    /// browser's (tabs in the title bar, window buttons on the right).
+    pub system_titlebar: bool,
 }
 
 /// The choices offered for `suspend_after_min` and `max_live_tabs`.
@@ -66,12 +65,13 @@ impl Default for Flags {
 
 const DEFAULT_FLAGS: Flags = Flags {
     tabs_position: TabsPosition::Top,
-    theme: Theme::Dark,
+    theme: Theme::LateNight,
     chrome: Chrome::Auto,
     bookmarks_bar: true,
     suspend_after_min: 30,
     max_live_tabs: 16,
     restore_tabs: true,
+    system_titlebar: false,
 };
 
 static FLAGS: RwLock<Flags> = RwLock::new(DEFAULT_FLAGS);
@@ -98,9 +98,11 @@ fn load_from_mut(flags: &mut Flags) {
             ("tabs-position", "left") => flags.tabs_position = TabsPosition::Left,
             ("tabs-position", "right") => flags.tabs_position = TabsPosition::Right,
             ("tabs-position", "hidden") => flags.tabs_position = TabsPosition::Hidden,
-            ("theme", "auto") => flags.theme = Theme::Auto,
-            ("theme", "light") => flags.theme = Theme::Light,
-            ("theme", "dark") => flags.theme = Theme::Dark,
+            ("theme", v) => {
+                if let Some(id) = Theme::from_key(v) {
+                    flags.theme = id;
+                }
+            }
             ("chrome", "auto") => flags.chrome = Chrome::Auto,
             ("chrome", "egui") => flags.chrome = Chrome::Egui,
             ("chrome", "engine") => flags.chrome = Chrome::Engine,
@@ -122,6 +124,8 @@ fn load_from_mut(flags: &mut Flags) {
             }
             ("restore-tabs", "on") => flags.restore_tabs = true,
             ("restore-tabs", "off") => flags.restore_tabs = false,
+            ("system-titlebar", "on") => flags.system_titlebar = true,
+            ("system-titlebar", "off") => flags.system_titlebar = false,
             _ => {}
         }
     }
@@ -135,11 +139,7 @@ fn save_to(path: &Path, flags: &Flags) -> std::io::Result<()> {
         TabsPosition::Right => text += "tabs-position=right\n",
         TabsPosition::Hidden => text += "tabs-position=hidden\n",
     }
-    match flags.theme {
-        Theme::Auto => text += "theme=auto\n",
-        Theme::Light => text += "theme=light\n",
-        Theme::Dark => text += "theme=dark\n",
-    }
+    text += &format!("theme={}\n", flags.theme.key());
     match flags.chrome {
         Chrome::Auto => text += "chrome=auto\n",
         Chrome::Egui => text += "chrome=egui\n",
@@ -153,6 +153,7 @@ fn save_to(path: &Path, flags: &Flags) -> std::io::Result<()> {
     text += &format!("suspend-after={}\n", flags.suspend_after_min);
     text += &format!("max-live-tabs={}\n", flags.max_live_tabs);
     text += if flags.restore_tabs { "restore-tabs=on\n" } else { "restore-tabs=off\n" };
+    text += if flags.system_titlebar { "system-titlebar=on\n" } else { "system-titlebar=off\n" };
     crate::storage::write_private(path, text.as_bytes())
 }
 
@@ -185,12 +186,37 @@ pub fn set(flags: Flags) -> Result<(), String> {
 // ---- browsecraft://flags page ---------------------------------------------------
 
 /// The effective theme for the browser chrome: the flag, or the OS theme.
+pub fn effective_theme(window_dark: bool) -> &'static crate::theme::Theme {
+    get().theme.resolve(window_dark)
+}
+
+/// Whether the effective theme is a dark one.
+#[cfg(test)]
 pub fn effective_dark(window_dark: bool) -> bool {
-    match get().theme {
-        Theme::Light => false,
-        Theme::Dark => true,
-        Theme::Auto => window_dark,
+    effective_theme(window_dark).dark
+}
+
+/// Saves a new theme choice (the palette and the toolbar menu use this; the
+/// settings page goes through its form).
+pub fn set_theme(id: Theme) -> Result<(), String> {
+    let mut flags = get();
+    if flags.theme == id {
+        return Ok(());
     }
+    flags.theme = id;
+    set(flags)
+}
+
+/// Saves the title bar choice (the debug test hook; the settings page goes
+/// through its form).
+#[cfg(any(test, debug_assertions))]
+pub fn set_system_titlebar(on: bool) -> Result<(), String> {
+    let mut flags = get();
+    if flags.system_titlebar == on {
+        return Ok(());
+    }
+    flags.system_titlebar = on;
+    set(flags)
 }
 
 /// The one-time token the settings page's links must send back. Only that
@@ -237,17 +263,11 @@ fn apply_query(pairs: impl Iterator<Item = (String, String)>) -> bool {
                 changed |= flags.tabs_position != TabsPosition::Hidden;
                 flags.tabs_position = TabsPosition::Hidden;
             }
-            ("theme", "auto") => {
-                changed |= flags.theme != Theme::Auto;
-                flags.theme = Theme::Auto;
-            }
-            ("theme", "light") => {
-                changed |= flags.theme != Theme::Light;
-                flags.theme = Theme::Light;
-            }
-            ("theme", "dark") => {
-                changed |= flags.theme != Theme::Dark;
-                flags.theme = Theme::Dark;
+            ("theme", v) => {
+                if let Some(id) = Theme::from_key(v) {
+                    changed |= flags.theme != id;
+                    flags.theme = id;
+                }
             }
             ("chrome", "auto") => {
                 changed |= flags.chrome != Chrome::Auto;
@@ -289,6 +309,14 @@ fn apply_query(pairs: impl Iterator<Item = (String, String)>) -> bool {
                 changed |= flags.restore_tabs;
                 flags.restore_tabs = false;
             }
+            ("system-titlebar", "on") => {
+                changed |= !flags.system_titlebar;
+                flags.system_titlebar = true;
+            }
+            ("system-titlebar", "off") => {
+                changed |= flags.system_titlebar;
+                flags.system_titlebar = false;
+            }
             _ => {}
         }
     }
@@ -320,19 +348,16 @@ pub fn page_html() -> String {
     // Every option is a link back to the page carrying the token.
     let to = |key: &str, value: &str| format!("browsecraft://flags?token={token}&{key}={value}");
 
-    let theme = |label: &'static str, value: &str, on: bool| (label, to("theme", value), on);
     let side = |label: &'static str, value: &str, on: bool| (label, to("tabs-position", value), on);
     let render = |label: &'static str, value: &str, on: bool| (label, to("chrome", value), on);
 
-    let appearance = internal::segmented_row(
-        true,
-        "Theme",
-        "Dark is easiest on the eyes. System follows your OS.",
-        &[
-            theme("System", "auto", flags.theme == Theme::Auto),
-            theme("Light", "light", flags.theme == Theme::Light),
-            theme("Dark", "dark", flags.theme == Theme::Dark),
-        ],
+    let appearance = theme_row(flags.theme, &to);
+    let titlebar = internal::switch_row(
+        false,
+        "Use system title bar",
+        "Show the desktop's own window frame instead of BrowseCraft's, which keeps the tabs and the window buttons in one row.",
+        flags.system_titlebar,
+        &to("system-titlebar", if flags.system_titlebar { "off" } else { "on" }),
     );
     let layout = internal::segmented_row(
         true,
@@ -395,7 +420,7 @@ pub fn page_html() -> String {
     );
     let body = format!(
         "<h1>Settings</h1><p class=\"sub\">Changes apply immediately.</p>{error}\
-         <div class=\"card\"><h2>Appearance</h2>{appearance}</div>\
+         <div class=\"card\"><h2>Appearance</h2>{appearance}{titlebar}</div>\
          <div class=\"card\"><h2>Layout</h2>{layout}{bar}</div>\
          <div class=\"card\"><h2>Tabs and memory</h2>{suspend}{live}{restore}</div>\
          <div class=\"card\"><h2>Advanced</h2>{renderer}</div>\
@@ -408,6 +433,37 @@ pub fn page_html() -> String {
          <a class=\"btn ghost\" href=\"browsecraft://passwords\">Open</a></div></div>"
     );
     internal::page("Settings", &body)
+}
+
+/// The theme picker of the settings page: one swatch per theme, the current
+/// one marked. `to(key, value)` builds a link carrying the form token.
+fn theme_row(current: Theme, to: &dyn Fn(&str, &str) -> String) -> String {
+    use crate::theme::css_hex;
+    let mut cards = String::new();
+    for id in Theme::ALL {
+        // "Follow system" shows its light and dark halves.
+        let (a, b) = match id {
+            Theme::System => (crate::theme::LIGHT.t, crate::theme::DARK.t),
+            other => (crate::theme::get(other).t, crate::theme::get(other).t),
+        };
+        cards.push_str(&format!(
+            "<a class=\"theme{}\" href=\"{}\"><span class=\"sw3\" style=\"background: {}; border-color: {}\">\
+             <i style=\"background: {}\"></i><i style=\"background: {}\"></i><i style=\"background: {}\"></i></span>{}</a>",
+            if id == current { " on" } else { "" },
+            internal::escape(&to("theme", id.key())),
+            css_hex(a.background),
+            css_hex(b.border),
+            css_hex(a.surface),
+            css_hex(b.background),
+            css_hex(b.accent),
+            internal::escape(id.label()),
+        ));
+    }
+    format!(
+        "<div class=\"row first\"><div class=\"grow\"><div class=\"t\">Theme</div>\
+         <div class=\"d\">The colours of the browser and of its own pages. Also in the command palette: Change theme.</div>\
+         <div class=\"themes\">{cards}</div></div></div>"
+    )
 }
 
 #[cfg(test)]
@@ -442,8 +498,31 @@ mod tests {
 
     #[test]
     fn dark_is_the_default_theme() {
-        assert_eq!(Flags::default().theme, Theme::Dark);
+        assert_eq!(Flags::default().theme, Theme::LateNight);
         assert!(Flags::default().bookmarks_bar);
+        assert!(!Flags::default().system_titlebar, "the browser's own title bar by default");
+    }
+
+    #[test]
+    fn themes_and_title_bar_persist() {
+        let _guard = SERIAL.lock().unwrap();
+        let before = get();
+        set(Flags::default()).unwrap();
+        assert!(apply_query(vec![("theme".into(), "olive".into()), ("system-titlebar".into(), "on".into())].into_iter()));
+        assert!(!apply_query(vec![("theme".into(), "neon".into())].into_iter()), "unknown themes are ignored");
+        let mut flags = Flags::default();
+        load_from_mut(&mut flags);
+        assert_eq!(flags.theme, Theme::Olive);
+        assert!(flags.system_titlebar);
+        set_theme(Theme::Frost).unwrap();
+        set_system_titlebar(false).unwrap();
+        let mut flags = Flags::default();
+        load_from_mut(&mut flags);
+        assert_eq!((flags.theme, flags.system_titlebar), (Theme::Frost, false));
+        assert!(effective_dark(false), "Frost is dark whatever the desktop");
+        set_theme(Theme::System).unwrap();
+        assert!(!effective_dark(false) && effective_dark(true));
+        set(before).unwrap();
     }
 
     /// The token from a freshly rendered settings page.
@@ -468,14 +547,14 @@ mod tests {
         let token = rendered_token();
         assert!(!apply_form("theme=light"));
         assert!(!apply_form(&query(&"0".repeat(32))));
-        assert_eq!(get().theme, Theme::Dark);
+        assert_eq!(get().theme, Theme::LateNight);
 
         // The real link works once; replaying it (back/forward) does not.
         assert!(apply_form(&query(&token)));
         assert_eq!(get().theme, Theme::Light);
         set(Flags::default()).unwrap();
         assert!(!apply_form(&query(&token)));
-        assert_eq!(get().theme, Theme::Dark);
+        assert_eq!(get().theme, Theme::LateNight);
 
         // Rendering again issues a different token.
         assert_ne!(rendered_token(), token);
@@ -507,7 +586,9 @@ mod tests {
         let html = page_html();
         assert!(html.contains("tabs-position=right\">Right"), "unselected links have no class");
         assert!(html.contains("class=\"on\" href=\"browsecraft://flags?token="));
-        assert_eq!(html.matches("class=\"on\"").count(), 5, "one selected option per control");
+        assert_eq!(html.matches("class=\"on\"").count(), 4, "one selected option per control");
+        assert_eq!(html.matches("class=\"theme on\"").count(), 1, "one theme selected");
+        assert!(html.contains("theme=sand"), "every theme is offered");
         // The bookmarks-bar switch is off and offers to turn it on.
         assert!(html.contains("bookmarks-bar=on"));
         assert!(!html.contains("class=\"sw on\""));
@@ -570,7 +651,7 @@ mod tests {
         assert!(apply_form(&format!("token={second}&theme=auto")));
         assert!(!apply_form(&format!("token={first}&theme=dark")));
         assert!(!apply_form(&format!("token={second}&theme=dark")));
-        assert_eq!(get().theme, Theme::Auto);
+        assert_eq!(get().theme, Theme::System);
         assert!(page_html().contains("already used"));
         set(Flags::default()).unwrap();
     }

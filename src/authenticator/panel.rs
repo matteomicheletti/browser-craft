@@ -32,8 +32,6 @@ pub enum AuthEvent {
     Locked,
 }
 
-const DANGER: u32 = 0xe5484d;
-const WARN: u32 = 0xd99a1e;
 const COPIED_FOR: Duration = Duration::from_millis(1500);
 const AUTO_LOCK_CHOICES: [(u64, &str); 5] = [
     (0, "Never"),
@@ -432,7 +430,7 @@ impl AuthenticatorPanel {
 
     fn message_ui(&mut self, ui: &mut egui::Ui, c: &Colors) {
         let Some((text, is_error)) = self.message.clone() else { return };
-        let tint = if is_error { rgb(DANGER) } else { c.accent };
+        let tint = if is_error { c.danger } else { c.accent };
         let mut close = false;
         egui::Frame::NONE
             .fill(tint.gamma_multiply(0.14))
@@ -481,7 +479,7 @@ impl AuthenticatorPanel {
             Ok(p) => p.clone(),
             Err(e) => {
                 let e = e.clone();
-                ui.label(RichText::new(e).color(rgb(DANGER)));
+                ui.label(RichText::new(e).color(c.danger));
                 return;
             }
         };
@@ -1040,7 +1038,7 @@ impl AuthenticatorPanel {
         let busy = self.busy();
         card(ui, c, |ui| {
             ui.horizontal(|ui| {
-                ui.label(icon(ph::SHIELD_CHECK, 16.0).color(c.accent));
+                ui.label(icon(crate::icons::AUTHENTICATOR, 16.0).color(c.accent));
                 ui.label(RichText::new("Encrypted backup").strong().color(c.text));
                 ui.label(RichText::new("recommended").size(11.0).color(c.accent));
             });
@@ -1057,7 +1055,7 @@ impl AuthenticatorPanel {
         });
         card(ui, c, |ui| {
             ui.horizontal(|ui| {
-                ui.label(icon(ph::WARNING, 16.0).color(rgb(WARN)));
+                ui.label(icon(ph::WARNING, 16.0).color(c.warning));
                 ui.label(RichText::new("Plain text links").strong().color(c.text));
             });
             hint(
@@ -1255,7 +1253,7 @@ fn path_input(ui: &mut egui::Ui, c: &Colors, text: &mut String, hint: &str) {
 }
 
 fn primary_button<'a>(c: &Colors, text: &str) -> egui::Button<'a> {
-    egui::Button::new(RichText::new(text).size(13.0).strong().color(Color32::WHITE))
+    egui::Button::new(RichText::new(text).size(13.0).strong().color(c.accent_text))
         .fill(c.accent)
         .corner_radius(CornerRadius::same(9))
         .min_size(vec2(0.0, 32.0))
@@ -1281,7 +1279,7 @@ fn secondary(ui: &mut egui::Ui, c: &Colors, text: &str) -> egui::Response {
 }
 
 fn chip(ui: &mut egui::Ui, c: &Colors, text: &str, on: bool) -> egui::Response {
-    let (fill, fg) = if on { (c.accent, Color32::WHITE) } else { (c.hover, c.text) };
+    let (fill, fg) = if on { (c.accent, c.accent_text) } else { (c.hover, c.text) };
     ui.add(
         egui::Button::new(RichText::new(text).size(12.0).color(fg))
             .fill(fill)
@@ -1335,7 +1333,7 @@ fn ring(ui: &mut egui::Ui, c: &Colors, secs: u32, fraction: f32) {
     let (rect, response) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::hover());
     let center = rect.center();
     let radius = 11.0;
-    let color = if secs <= 5 { rgb(DANGER) } else { c.accent };
+    let color = if secs <= 5 { c.danger } else { c.accent };
     let painter = ui.painter();
     painter.circle_stroke(center, radius, Stroke::new(2.5, c.line));
     let steps = (64.0 * fraction).ceil().max(1.0) as usize;
@@ -1383,7 +1381,7 @@ fn row_ui(
                     otp::group_code(&row.code)
                 };
                 let code_color = match row.totp {
-                    Some((secs, _)) if secs <= 5 => rgb(DANGER),
+                    Some((secs, _)) if secs <= 5 => c.danger,
                     _ => c.text,
                 };
                 let code = ui
@@ -1417,7 +1415,7 @@ fn row_ui(
                     }
                 });
                 let copy_glyph = if copied { ph::CHECK } else { ph::COPY };
-                let copy_color = if copied { rgb(0x2bb673) } else { c.muted };
+                let copy_color = if copied { c.success } else { c.muted };
                 let copy = ui
                     .add(egui::Button::new(icon(copy_glyph, 15.0).color(copy_color)).frame(false))
                     .on_hover_text(if copied { "Copied" } else { "Copy code" });
@@ -1451,8 +1449,8 @@ fn row_ui(
                 .wrap(),
             );
             ui.horizontal(|ui| {
-                let delete = egui::Button::new(RichText::new("Delete").size(12.5).strong().color(Color32::WHITE))
-                    .fill(rgb(DANGER))
+                let delete = egui::Button::new(RichText::new("Delete").size(12.5).strong().color(c.danger_text))
+                    .fill(c.danger)
                     .corner_radius(CornerRadius::same(8));
                 if ui.add(delete).clicked() {
                     actions.push(RowAction::Delete(id.clone()));
@@ -1470,7 +1468,7 @@ fn empty_state(ui: &mut egui::Ui, c: &Colors) -> bool {
     let mut add = false;
     ui.add_space(24.0);
     ui.vertical_centered(|ui| {
-        ui.label(icon(ph::SHIELD_CHECK, 40.0).color(c.accent));
+        ui.label(icon(crate::icons::AUTHENTICATOR, 40.0).color(c.accent));
         ui.label(RichText::new("No accounts yet").size(15.0).strong().color(c.text));
         ui.add(
             egui::Label::new(
@@ -1604,7 +1602,7 @@ mod tests {
         let mut fonts = egui::FontDefinitions::default();
         crate::icons::add_fonts(&mut fonts);
         ctx.set_fonts(fonts);
-        crate::egui_chrome::apply_style(&ctx, dark);
+        crate::egui_chrome::apply_style(&ctx, &Colors::for_dark(dark));
         let c = Colors::for_dark(dark);
         let mut events = Vec::new();
         let input = egui::RawInput {

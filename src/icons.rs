@@ -40,6 +40,9 @@ pub const CHECK: &str = egui_phosphor::regular::CHECK;
 pub const LOCK_KEY: &str = egui_phosphor::regular::LOCK_KEY;
 pub const USER: &str = egui_phosphor::regular::USER;
 pub const FOLDER: &str = egui_phosphor::regular::FOLDER;
+pub const THEME: &str = egui_phosphor::regular::PALETTE;
+/// The authenticator (toolbar, drawer, palette).
+pub const AUTHENTICATOR: &str = egui_phosphor::regular::QR_CODE;
 
 /// The Phosphor family, for `RichText::family`.
 pub fn family() -> egui::FontFamily {

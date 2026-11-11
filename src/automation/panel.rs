@@ -3,7 +3,7 @@
 
 use super::Settings;
 use super::console::{ConsoleLog, Level};
-use crate::egui_chrome::{Colors, icon, rgb};
+use crate::egui_chrome::{Colors, icon};
 
 /// What the browser has to do after the panel changed something.
 #[derive(Clone, Debug, PartialEq)]
@@ -57,8 +57,8 @@ pub fn mcp_command() -> String {
 
 fn level_color(level: Level, c: &Colors) -> egui::Color32 {
     match level {
-        Level::Error => rgb(0xe5484d),
-        Level::Warn => rgb(0xd99a1e),
+        Level::Error => c.danger,
+        Level::Warn => c.warning,
         Level::Info => c.accent,
         Level::Log => c.text,
         Level::Debug => c.muted,
@@ -152,7 +152,7 @@ impl AutomationPanel {
     fn server_ui(&mut self, ui: &mut egui::Ui, c: &Colors, settings: &Settings, server: &ServerState, events: &mut Vec<AutomationEvent>) {
         let status = if server.running { "Running" } else { "Stopped" };
         ui.horizontal(|ui| {
-            let color = if server.running { rgb(0x30a46c) } else { c.muted };
+            let color = if server.running { c.success } else { c.muted };
             ui.label(icon(egui_phosphor::regular::CIRCLE, 10.0).color(color));
             ui.label(egui::RichText::new(status).strong().color(c.text));
             if server.forced {
@@ -160,7 +160,7 @@ impl AutomationPanel {
             }
         });
         if let Some(e) = server.error {
-            ui.label(egui::RichText::new(e).color(rgb(0xe5484d)));
+            ui.label(egui::RichText::new(e).color(c.danger));
         }
         ui.add_space(6.0);
         let mut s = settings.clone();
@@ -198,7 +198,7 @@ impl AutomationPanel {
                 ui.label(egui::RichText::new(p).monospace().size(12.0).color(c.text));
             }
             Err(e) => {
-                ui.label(egui::RichText::new(e).color(rgb(0xe5484d)));
+                ui.label(egui::RichText::new(e).color(c.danger));
             }
         }
         ui.add_space(10.0);

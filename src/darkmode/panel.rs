@@ -243,7 +243,7 @@ impl DarkModePanel {
         });
 
         if let Some(e) = &self.error {
-            ui.colored_label(egui::Color32::LIGHT_RED, format!("Could not save: {e}"));
+            ui.colored_label(c.danger, format!("Could not save: {e}"));
         }
         if changed {
             self.commit(&mut events);

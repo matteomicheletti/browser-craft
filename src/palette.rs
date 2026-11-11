@@ -6,7 +6,7 @@
 //! overlay is drawn with ordinary egui areas.
 //!
 //! Prefixes narrow the search: `>` commands, `@` open tabs, `#` bookmarks and
-//! history, `~` containers, `?` help.
+//! history, `~` containers, `%` themes, `?` help.
 // The API is wired into the browser in the integration step.
 #![allow(dead_code)]
 
@@ -28,6 +28,8 @@ pub enum PaletteOutcome {
     OpenUrl(String),
     /// Open a new tab in a container; `url` is empty for a blank tab.
     OpenInContainer { url: String, container: String },
+    /// Switch the browser to this theme.
+    SetTheme(crate::theme::ThemeId),
 }
 
 /// A container's colour and name, shown as a dot next to a tab.
@@ -71,6 +73,8 @@ pub struct PaletteSources {
     pub on_web_page: bool,
     /// A screen recording is running (shows Stop instead of Start).
     pub recording: bool,
+    /// The theme chosen now (marked in the theme list).
+    pub theme: crate::theme::ThemeId,
 }
 
 // ---- fuzzy matching --------------------------------------------------------
@@ -223,6 +227,7 @@ pub enum Mode {
     Tabs,
     Links,
     Containers,
+    Themes,
     Help,
 }
 
@@ -234,6 +239,7 @@ impl Mode {
             Mode::Tabs => "Tabs",
             Mode::Links => "Bookmarks and history",
             Mode::Containers => "Containers",
+            Mode::Themes => "Themes",
             Mode::Help => "Help",
         }
     }
@@ -247,6 +253,7 @@ pub fn parse_query(raw: &str) -> (Mode, &str) {
         Some('@') => Mode::Tabs,
         Some('#') => Mode::Links,
         Some('~') => Mode::Containers,
+        Some('%') => Mode::Themes,
         Some('?') => Mode::Help,
         _ => return (Mode::All, raw.trim()),
     };
@@ -299,6 +306,8 @@ struct Row {
     matches: Vec<usize>,
     enabled: bool,
     dot: Option<Color32>,
+    /// A theme's colours: background, border, accent.
+    swatch: Option<[Color32; 3]>,
 }
 
 impl Row {
@@ -314,6 +323,7 @@ impl Row {
             matches: Vec::new(),
             enabled: true,
             dot: None,
+            swatch: None,
         }
     }
 }
@@ -351,6 +361,10 @@ fn command_row(
     if c.id == CommandId::NewTabInContainer {
         row.action = Action::SetQuery("~");
     }
+    // "Change theme…" lists the themes.
+    if c.id == CommandId::Theme {
+        row.action = Action::SetQuery("%");
+    }
     row
 }
 
@@ -370,6 +384,7 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
             ("@ ", "Switch to an open tab", "@"),
             ("# ", "Bookmarks and history", "#"),
             ("~ ", "Open a tab in a container", "~"),
+            ("% ", "Change the theme", "%"),
         ] {
             let mut r = Row::new(
                 "Prefixes",
@@ -556,6 +571,49 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
             rows.push(r);
         }
     }
+
+    if mode == Mode::Themes || (mode == Mode::All && q.chars().count() >= 3) {
+        let mut found = theme_rows(q, s);
+        if mode == Mode::All {
+            found.truncate(SMALL_LIMIT);
+        }
+        rows.extend(found);
+    }
+    rows
+}
+
+/// The theme rows: every theme whose name matches `q`, the current one
+/// tagged.
+fn theme_rows(q: &str, s: &PaletteSources) -> Vec<Row> {
+    use crate::egui_chrome::rgb;
+    use crate::theme::{self, ThemeId};
+    let mut rows = Vec::new();
+    for id in ThemeId::ALL {
+        let Some(m) = score_terms(q, id.label(), &[id.key()]) else {
+            continue;
+        };
+        let mut r = Row::new(
+            "Themes",
+            Action::Outcome(PaletteOutcome::SetTheme(id)),
+            crate::icons::THEME,
+            id.label().to_string(),
+        );
+        r.matches = m.positions;
+        let (t, other) = match id {
+            ThemeId::System => (&theme::LIGHT, &theme::DARK),
+            other => (theme::get(other), theme::get(other)),
+        };
+        r.swatch = Some([rgb(t.t.background), rgb(other.t.background), rgb(other.t.accent)]);
+        r.detail = match id {
+            ThemeId::System => "Light or Late Night, as the desktop is".to_string(),
+            other if theme::get(other).dark => "Dark".to_string(),
+            _ => "Light".to_string(),
+        };
+        if id == s.theme {
+            r.tag = Some("Current");
+        }
+        rows.push(r);
+    }
     rows
 }
 
@@ -718,7 +776,7 @@ impl Palette {
             .show(ctx, |ui| {
                 let r = ui.allocate_rect(screen, Sense::click());
                 ui.painter()
-                    .rect_filled(screen, 0.0, Color32::from_black_alpha(110));
+                    .rect_filled(screen, 0.0, c.scrim);
                 if r.clicked() {
                     close = true;
                 }
@@ -726,12 +784,11 @@ impl Palette {
 
         let width = (screen.width() - 32.0).clamp(280.0, 660.0);
         let top = (screen.height() * 0.12).clamp(24.0, 120.0);
-        let dark = c.bar_bg.r() < 128;
         let shadow = egui::Shadow {
             offset: [0, 12],
             blur: 40,
             spread: 0,
-            color: Color32::from_black_alpha(if dark { 160 } else { 70 }),
+            color: c.shadow,
         };
         let frame = egui::Frame::new()
             .fill(c.bar_bg)
@@ -1102,6 +1159,16 @@ fn draw_row(ui: &mut egui::Ui, c: &Colors, row: &Row, rect: Rect, selected: bool
         if row.enabled { c.muted } else { text_col },
     );
     left += 28.0;
+    if let Some([bg, other, accent]) = row.swatch {
+        // The theme's background (half light, half dark for "Follow
+        // system"), with its accent as a dot.
+        let sw = Rect::from_min_size(Pos2::new(left, cy - 8.0), vec2(28.0, 16.0));
+        painter.rect_filled(sw, CornerRadius::same(4), other);
+        painter.rect_filled(Rect::from_min_max(sw.min, Pos2::new(sw.center().x, sw.max.y)), CornerRadius { nw: 4, sw: 4, ne: 0, se: 0 }, bg);
+        painter.rect_stroke(sw, CornerRadius::same(4), Stroke::new(1.0, c.line), egui::StrokeKind::Inside);
+        painter.circle_filled(Pos2::new(sw.right() - 7.0, cy), 3.5, accent);
+        left += 36.0;
+    }
     if let Some(dot) = row.dot {
         painter.circle_filled(Pos2::new(left + 4.0, cy), 4.0, dot);
         left += 14.0;
@@ -1330,7 +1397,28 @@ mod tests {
             }],
             on_web_page: true,
             recording: false,
+            theme: crate::theme::ThemeId::Olive,
         }
+    }
+
+    #[test]
+    fn change_theme_lists_every_theme_and_marks_the_current_one() {
+        let s = sources();
+        // The command opens the theme list instead of running.
+        let rows = build_rows("change theme", &s, &[]);
+        let cmd = rows.iter().find(|r| r.label == "Change theme…").expect("the command is found");
+        assert!(matches!(cmd.action, Action::SetQuery("%")));
+        let rows = build_rows("%", &s, &[]);
+        assert_eq!(rows.len(), crate::theme::ThemeId::ALL.len());
+        assert!(rows.iter().all(|r| r.swatch.is_some()));
+        let current: Vec<_> = rows.iter().filter(|r| r.tag == Some("Current")).collect();
+        assert_eq!(current.len(), 1);
+        assert_eq!(current[0].label, "Olive");
+        let rows = build_rows("% fro", &s, &[]);
+        assert!(matches!(rows[0].action, Action::Outcome(PaletteOutcome::SetTheme(crate::theme::ThemeId::Frost))));
+        // Typing a theme's name finds it from the start too.
+        assert!(build_rows("slate", &s, &[]).iter().any(|r| matches!(r.action, Action::Outcome(PaletteOutcome::SetTheme(crate::theme::ThemeId::SlateGray)))));
+        assert_eq!(parse_query("% x"), (Mode::Themes, "x"));
     }
 
     fn actions(rows: &[Row]) -> Vec<PaletteOutcome> {
@@ -1421,7 +1509,7 @@ mod tests {
             }]
         );
         let help = build_rows("?", &s, &[]);
-        assert_eq!(help.len(), 4);
+        assert_eq!(help.len(), 5);
     }
 
     #[test]

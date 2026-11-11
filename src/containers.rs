@@ -687,7 +687,7 @@ impl ContainersPanel {
                         if ui.button("Cancel").clicked() {
                             self.confirm_delete = None;
                         }
-                        if ui.button(egui::RichText::new("Delete").color(crate::egui_chrome::rgb(0xff613d))).on_hover_text("Closes its tabs and deletes its cookies and site data").clicked() {
+                        if ui.button(egui::RichText::new("Delete").color(c.danger)).on_hover_text("Closes its tabs and deletes its cookies and site data").clicked() {
                             match delete(&ctr.id) {
                                 Ok(()) => events.push(ContainersEvent::Deleted(ctr.id.clone())),
                                 Err(e) => events.push(ContainersEvent::Notice(e)),

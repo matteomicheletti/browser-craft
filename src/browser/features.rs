@@ -166,6 +166,22 @@ fn toggle_button(ui: &mut egui::Ui, code: &str, tip: &str, active: bool, c: &Col
     ui.add(button).on_hover_text(tip)
 }
 
+/// The authenticator's toolbar button: a QR code, in the accent colour while
+/// the vault is unlocked, with a small padlock (closed or open) in its
+/// corner showing the lock state.
+fn authenticator_button(ui: &mut egui::Ui, unlocked: bool, open: bool, c: &Colors) -> egui::Response {
+    use egui_phosphor::regular as ph;
+    let tip = if unlocked { "Authenticator (unlocked)" } else { "Authenticator (locked)" };
+    let r = toggle_button(ui, crate::icons::AUTHENTICATOR, tip, unlocked || open, c);
+    let (badge, color) = if unlocked { (ph::LOCK_SIMPLE_OPEN, c.accent) } else { (ph::LOCK_SIMPLE, c.muted) };
+    let center = r.rect.center() + egui::vec2(7.0, 7.0);
+    let back = if r.hovered() { c.hover } else { c.bar_bg };
+    let p = ui.painter();
+    p.circle_filled(center, 6.0, back);
+    p.text(center, egui::Align2::CENTER_CENTER, badge, egui::FontId::new(10.0, crate::icons::family()), color);
+    r
+}
+
 impl Browser {
     /// A notice that stays five seconds longer, for one that names a file.
     pub(super) fn set_notice_long(&mut self, message: impl Into<String>) {
@@ -466,6 +482,7 @@ impl Browser {
             containers,
             on_web_page: self.web_page,
             recording: self.feat.recorder.path().is_some(),
+            theme: crate::flags::get().theme,
         }
     }
 
@@ -478,6 +495,7 @@ impl Browser {
                 let url = (!url.is_empty()).then_some(url);
                 self.new_tab_in(ContainerChoice::Id(container), url);
             }
+            PaletteOutcome::SetTheme(id) => self.set_theme(id),
         }
     }
 
@@ -596,6 +614,9 @@ impl Browser {
             }
             DarkModeSiteToggle => self.toggle_dark_for_site(),
             DarkModeSettings => self.open_drawer(Drawer::DarkMode),
+            Theme => {
+                self.feat.palette.open_with("% ");
+            }
             Plugins => self.open_drawer(Drawer::Plugins),
             ReloadPlugins => {
                 plugins::shared().lock().unwrap_or_else(std::sync::PoisonError::into_inner).reload();
@@ -899,7 +920,7 @@ impl Browser {
         let cmd = |a: &mut Vec<Action>, id| a.push(Action::Feature(FeatureAction::Command(id)));
         // Recording: always visible while it runs.
         if self.feat.recorder.path().is_some() {
-            let label = egui::RichText::new(format!("{}  Stop", ph::RECORD)).color(egui_chrome::rgb(0xe5484d));
+            let label = egui::RichText::new(format!("{}  Stop", ph::RECORD)).color(c.danger);
             if ui.add(egui::Button::new(label).corner_radius(egui::CornerRadius::same(10))).on_hover_text("Stop the screen recording").clicked() {
                 cmd(actions, CommandId::StopRecording);
             }
@@ -907,13 +928,8 @@ impl Browser {
         let auth_on = plugins::is_enabled("builtin.authenticator");
         if auth_on {
             let unlocked = self.feat.auth_unlocked;
-            let (glyph, tip) = if unlocked {
-                (ph::SHIELD_CHECK, "Authenticator (unlocked)")
-            } else {
-                (ph::SHIELD, "Authenticator (locked)")
-            };
             let open = self.drawer == Some(Drawer::Authenticator);
-            if toggle_button(ui, glyph, tip, unlocked || open, c).clicked() {
+            if authenticator_button(ui, unlocked, open, c).clicked() {
                 actions.push(Action::ToggleDrawer(Drawer::Authenticator));
             }
         }
