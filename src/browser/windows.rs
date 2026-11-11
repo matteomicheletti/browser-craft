@@ -258,6 +258,14 @@ pub(super) fn session_text(windows: &[Value]) -> String {
     root.to_string()
 }
 
+/// Whether every tab of these session windows is the start-up chooser
+/// (`browsecraft://sessions?startup=1`).
+fn only_chooser(windows: &[Value]) -> bool {
+    let chooser = format!("{}?startup=1", crate::presets_page::URL);
+    let mut urls = windows.iter().flat_map(|w| w.get("tabs").and_then(Value::as_array).into_iter().flatten()).map(|t| t.get("url").and_then(Value::as_str));
+    urls.all(|u| u == Some(chooser.as_str()))
+}
+
 /// The notice after opening `name`, mentioning tabs that lost their
 /// container.
 pub(super) fn preset_notice(name: &str, missing: usize) -> String {
@@ -1000,6 +1008,9 @@ impl ApplicationHandler<UserMessage> for App {
                 // rewritten with what opens now.
                 if let Ok(path) = crate::storage::config_file(crate::presets::PREVIOUS_SESSION_FILE) {
                     match saved.filter(|t| !session_windows(t).is_empty()) {
+                        // Closed at the chooser: the session before it is
+                        // still the one to offer.
+                        Some(text) if only_chooser(&session_windows(&text)) => {}
                         Some(text) => drop(crate::storage::write_private(&path, text.as_bytes())),
                         None => drop(std::fs::remove_file(&path)),
                     }
@@ -1525,6 +1536,14 @@ impl Drop for Browser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_session_closed_at_the_chooser_is_not_the_previous_one() {
+        let chooser = session_windows(r#"{"windows":[{"tabs":[{"url":"browsecraft://sessions?startup=1"}]}]}"#);
+        assert!(only_chooser(&chooser));
+        let work = session_windows(r#"{"windows":[{"tabs":[{"url":"browsecraft://sessions?startup=1"}]},{"tabs":[{"url":"https://a.test/"}]}]}"#);
+        assert!(!only_chooser(&work));
+    }
 
     #[test]
     fn window_names_are_one_short_line() {
