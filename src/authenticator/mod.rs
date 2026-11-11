@@ -15,6 +15,7 @@
 // integration step; until then most of it is only reached from tests.
 #![allow(dead_code)]
 
+pub mod import;
 pub mod otp;
 pub mod uri;
 pub mod vault;
