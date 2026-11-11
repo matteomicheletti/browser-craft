@@ -23,8 +23,6 @@ pub enum CommandId {
     ReopenClosedTab,
     NextTab,
     PrevTab,
-    ToggleTabsPosition,
-    ToggleSidebar,
     // Windows and the tab overview
     NewWindow,
     ShowAllTabs,
@@ -72,6 +70,9 @@ pub enum CommandId {
     BookmarksBar,
     BookmarksPage,
     History,
+    ToggleSidebar,
+    ShowBookmarksSidebar,
+    ShowHistorySidebar,
     ClearBrowsingData,
     ImportData,
     ExportBookmarks,
@@ -211,7 +212,7 @@ pub fn catalog() -> &'static [Command] {
     &CATALOG
 }
 
-static CATALOG: [Command; 65] = [
+static CATALOG: [Command; 66] = [
     cmd!(
         NewTab,
         "new-tab",
@@ -327,24 +328,6 @@ static CATALOG: [Command; 65] = [
         ["switch", "left"],
         Some("Ctrl+Shift+Tab"),
         ph::CARET_LEFT,
-        Tabs
-    ),
-    cmd!(
-        ToggleTabsPosition,
-        "toggle-tabs-position",
-        "Move tabs to top or side",
-        ["vertical", "horizontal", "sidebar", "layout"],
-        None,
-        ph::SIDEBAR_SIMPLE,
-        Tabs
-    ),
-    cmd!(
-        ToggleSidebar,
-        "toggle-sidebar",
-        "Show or hide the tab sidebar",
-        ["vertical tabs", "side", "panel", "collapse", "hide tabs"],
-        Some("Ctrl+B"),
-        ph::SIDEBAR,
         Tabs
     ),
     cmd!(
@@ -651,6 +634,33 @@ static CATALOG: [Command; 65] = [
         ["toolbar", "favorites"],
         Some("Ctrl+Shift+B"),
         ph::BOOKMARKS_SIMPLE,
+        Library
+    ),
+    cmd!(
+        ToggleSidebar,
+        "toggle-sidebar",
+        "Toggle sidebar",
+        ["library", "side panel", "bookmarks", "history", "hide", "show"],
+        Some("Ctrl+B"),
+        ph::SIDEBAR,
+        Library
+    ),
+    cmd!(
+        ShowBookmarksSidebar,
+        "bookmarks-sidebar",
+        "Show bookmarks sidebar",
+        ["library", "side panel", "favorites", "folders"],
+        None,
+        ph::SIDEBAR_SIMPLE,
+        Library
+    ),
+    cmd!(
+        ShowHistorySidebar,
+        "history-sidebar",
+        "Show history sidebar",
+        ["library", "side panel", "visited", "recent"],
+        None,
+        ph::CLOCK_COUNTER_CLOCKWISE,
         Library
     ),
     cmd!(

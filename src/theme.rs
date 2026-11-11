@@ -81,7 +81,7 @@ impl ThemeId {
 /// A theme's colours, as `0xRRGGBB`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tokens {
-    /// The window behind everything: title bar, tab strip, tab sidebar,
+    /// The window behind everything: title bar, tab strip, Library sidebar,
     /// window frame.
     pub background: u32,
     /// Toolbar, bars under it, menus, the palette.

@@ -688,6 +688,30 @@ pub fn search(query: &str, limit: usize) -> Vec<Hit> {
     with_reader(|db| db.search(query, limit, now_us())).unwrap_or_default()
 }
 
+/// Visits newest first, filtered like `search`, from `offset` (the
+/// Library sidebar's pages). The flag says whether there are more.
+pub fn visits(query: &str, offset: usize, limit: usize) -> (Vec<VisitRow>, bool) {
+    with_reader(|db| db.visits(query, offset, limit)).unwrap_or_default()
+}
+
+/// Forgets an address and all its visits.
+pub fn remove_url(url: &str) -> Result<bool, String> {
+    let url = url.to_string();
+    run_writer(move |db| db.remove_url(&url)).unwrap_or_else(|| Err("history is unavailable".into()))
+}
+
+/// The local day of a visit and its "Today" / "Yesterday" / date heading.
+pub fn day_heading(us: i64) -> (i64, String) {
+    let day = local_day(us).0;
+    (day, day_label(day, local_day(now_us()).0))
+}
+
+/// "14:05", local time.
+pub fn time_of_day(us: i64) -> String {
+    let secs = local_day(us).1;
+    format!("{:02}:{:02}", secs / 3600, secs % 3600 / 60)
+}
+
 /// Forgets every visit.
 pub fn clear() -> Result<(), String> {
     run_writer(|db| db.clear_all()).unwrap_or_else(|| Err("history is unavailable".into()))

@@ -824,6 +824,11 @@ pub fn entries() -> Vec<Entry> {
     snapshot().entries()
 }
 
+/// A new folder at the end of folder `parent` (see `Tree::create_folder`).
+pub fn create_folder(parent: u64, name: &str) -> Result<u64, String> {
+    update(|t| Some(t.create_folder(parent, name))).and_then(|r| r.unwrap_or_else(|| Err("not saved".into())))
+}
+
 /// See `Tree::search`.
 pub fn search(query: &str, limit: usize) -> Vec<Entry> {
     snapshot().search(query, limit)

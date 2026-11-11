@@ -1,4 +1,4 @@
-//! GPU-rendered browser chrome (toolbar + tab sidebar) using `egui` on
+//! GPU-rendered browser chrome (toolbar, tab strip, Library sidebar) using `egui` on
 //! `wgpu`, with the engine's software raster uploaded as a texture.
 //!
 //! This is the Phase 2 path. It is only constructed when the `chrome` flag
@@ -874,35 +874,6 @@ fn group_chip(ui: &mut egui::Ui, c: &Colors, group: &GroupInfo) -> (egui::Rect, 
     (rect, out)
 }
 
-/// A group's header row in the tab sidebar: caret, colour, name and count.
-pub fn group_header_row(ui: &mut egui::Ui, c: &Colors, group: &GroupInfo) -> Vec<GroupEvent> {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), egui::Sense::click());
-    let fill = c.group_color(group.color);
-    let painter = ui.painter();
-    if resp.hovered() {
-        painter.rect_filled(rect, egui::CornerRadius::same(7), c.hover.gamma_multiply(0.6));
-    }
-    let caret = if group.collapsed { egui_phosphor::regular::CARET_RIGHT } else { egui_phosphor::regular::CARET_DOWN };
-    let y = rect.center().y;
-    painter.text(egui::pos2(rect.min.x + 8.0, y), egui::Align2::LEFT_CENTER, caret, egui::FontId::new(12.0, crate::icons::family()), c.muted);
-    let name = if group.name.is_empty() { "Unnamed group" } else { group.name };
-    let font = egui::FontId::proportional(12.5);
-    let galley = ui.fonts_mut(|f| f.layout_no_wrap(name.to_string(), font.clone(), group_label_color(c)));
-    let pill_w = (galley.size().x + 16.0).min(rect.width() - 70.0).max(24.0);
-    let pill = egui::Rect::from_min_size(egui::pos2(rect.min.x + 26.0, y - 10.0), egui::vec2(pill_w, 20.0));
-    painter.rect_filled(pill, egui::CornerRadius::same(6), fill);
-    painter
-        .with_clip_rect(pill.shrink2(egui::vec2(6.0, 0.0)))
-        .galley(egui::pos2(pill.min.x + 8.0, y - galley.size().y / 2.0), galley, group_label_color(c));
-    painter.text(egui::pos2(rect.max.x - 10.0, y), egui::Align2::RIGHT_CENTER, group.tabs.to_string(), font, c.muted);
-    let resp = resp.on_hover_text(if group.collapsed { "Expand group (right-click to edit)" } else { "Collapse group (right-click to edit)" });
-    let mut out = group_editor_popup(ui, c, &resp, group);
-    if resp.clicked() {
-        out.push(GroupEvent::ToggleCollapsed);
-    }
-    out
-}
-
 /// The page icon of a tab: its favicon, or a globe.
 fn tab_icon(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo) {
     match tab.favicon {
@@ -919,88 +890,6 @@ fn tab_icon(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo) {
             ui.label(icon(ICON_GLOBE, 13.0).color(color));
         }
     }
-}
-
-/// One row in the tab sidebar: the page icon, the (truncated) title and a
-/// close button that appears on the active/hovered row; a container's tabs
-/// get its colour as the left bar, a group's tabs are indented under its
-/// header with the group's colour, and the split pair is outlined. The
-/// whole row is clickable.
-pub fn tab_row(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Container], groups: &[GroupInfo], windows: WindowList) -> TabRow {
-    let (full, row) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
-    let hovered = row.hovered();
-    let painter = ui.painter();
-    let rect = if let Some((_, color)) = tab.group {
-        let line = egui::Rect::from_min_size(egui::pos2(full.min.x + 8.0, full.min.y), egui::vec2(2.0, full.height()));
-        painter.rect_filled(line, 0.0, color);
-        full.with_min_x(full.min.x + 14.0)
-    } else {
-        full
-    };
-    if tab.active {
-        painter.rect_filled(rect, egui::CornerRadius::same(7), c.hover);
-    } else if hovered {
-        painter.rect_filled(rect, egui::CornerRadius::same(7), c.hover.gamma_multiply(0.6));
-    }
-    if tab.split.is_some() {
-        painter.rect_stroke(rect.shrink(1.0), egui::CornerRadius::same(7), egui::Stroke::new(1.0, c.accent), egui::StrokeKind::Inside);
-    }
-    let bar_color = match tab.container {
-        Some(ctr) => Some(ctr.color32()),
-        None if tab.active => Some(c.accent),
-        None => None,
-    };
-    if let Some(color) = bar_color {
-        let bar = egui::Rect::from_min_size(egui::pos2(rect.min.x, rect.min.y + 6.0), egui::vec2(3.0, rect.height() - 12.0));
-        painter.rect_filled(bar, egui::CornerRadius::same(2), color);
-    }
-
-    let inner = rect.shrink2(egui::vec2(10.0, 0.0));
-    let mut child = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(inner)
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    child.spacing_mut().item_spacing.x = 7.0;
-    tab_icon(&mut child, c, tab);
-
-    let show_close = tab.active || hovered;
-    let split_w = if tab.split.is_some() { 18.0 } else { 0.0 };
-    let label_w = (child.available_width() - if show_close { 26.0 } else { 0.0 } - split_w).max(10.0);
-    let color = if tab.unloaded { c.muted } else { c.text };
-    let label = egui::Label::new(egui::RichText::new(tab.title).size(13.0).color(color))
-        .truncate()
-        .selectable(false)
-        .sense(egui::Sense::click());
-    let label_resp = child
-        .allocate_ui_with_layout(egui::vec2(label_w, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.set_min_width(label_w);
-            ui.add(label)
-        })
-        .inner;
-    if tab.split.is_some() {
-        child.label(icon(egui_phosphor::regular::COLUMNS, 12.0).color(c.accent)).on_hover_text("In split view");
-    }
-
-    let mut out = TabRow::default();
-    if show_close {
-        child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let resp = ui.add(
-                egui::Button::new(icon(ICON_XMARK, 11.0).color(c.muted))
-                    .frame(false)
-                    .min_size(egui::vec2(20.0, 20.0)),
-            );
-            if resp.on_hover_text("Close tab").clicked() {
-                out.close = true;
-            }
-        });
-    }
-    row.context_menu(|ui| tab_menu(ui, c, tab, containers, groups, windows, &mut out));
-    out.clicked = row.clicked() || label_resp.clicked();
-    out.close |= row.middle_clicked();
-    out.hovered = hovered || label_resp.hovered();
-    out.rect = Some(full);
-    out
 }
 
 /// What the user did in the tab strip.

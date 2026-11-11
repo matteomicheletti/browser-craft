@@ -143,7 +143,7 @@ pub const BROWSER_KEYS: &[(&str, &str)] = &[
     ("Ctrl+Shift+I", "developer tools"),
     ("Ctrl+H", "history"),
     ("Ctrl+D", "bookmark"),
-    ("Ctrl+B", "tab sidebar (after the page: Bold in editors)"),
+    ("Ctrl+B", "bookmarks and history sidebar (after the page: Bold in editors)"),
     ("Ctrl+Shift+B", "bookmarks bar"),
     ("Ctrl+Shift+O", "bookmarks page"),
     ("Ctrl+Q", "quit"),

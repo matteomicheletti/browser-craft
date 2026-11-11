@@ -273,17 +273,12 @@ pub fn scaled_image(thumb: &crate::thumbnails::Thumb, width: u32) -> Option<Imag
     Some(Image { width: scaled.width(), height: scaled.height(), pixels })
 }
 
-/// Where a card goes, in the parent window's pixels: under the tab's chip
-/// (strip) or beside its row (sidebar), kept inside the window.
-pub fn card_position(anchor: Rect, sidebar: Option<bool>, card: (u32, u32), window: (u32, u32), gap: f32) -> (i32, i32) {
+/// Where a card goes, in the parent window's pixels: under the tab's chip,
+/// kept inside the window.
+pub fn card_position(anchor: Rect, card: (u32, u32), window: (u32, u32), gap: f32) -> (i32, i32) {
     let (cw, ch) = (card.0 as f32, card.1 as f32);
     let (ww, wh) = (window.0 as f32, window.1 as f32);
-    let (x, y) = match sidebar {
-        // Sidebar on the left: to the right of the row; on the right: left.
-        Some(true) => (anchor.x + anchor.w + gap, anchor.y),
-        Some(false) => (anchor.x - gap - cw, anchor.y),
-        None => (anchor.x, anchor.y + anchor.h + gap),
-    };
+    let (x, y) = (anchor.x, anchor.y + anchor.h + gap);
     let x = x.min(ww - cw - 2.0).max(2.0);
     let y = y.min(wh - ch - 2.0).max(2.0);
     (x.round() as i32, y.round() as i32)
@@ -332,9 +327,9 @@ impl CardWindow {
     /// Shows `content` at `anchor` (parent pixels). Draws only when it
     /// changed; raises the window above the web views every time.
     #[allow(clippy::too_many_arguments)]
-    pub fn show(&mut self, fonts: &Fonts, content: CardContent, thumb: Option<&crate::thumbnails::Thumb>, anchor: Rect, sidebar: Option<bool>, c: CardColors, scale: f32, window_size: (u32, u32)) {
+    pub fn show(&mut self, fonts: &Fonts, content: CardContent, thumb: Option<&crate::thumbnails::Thumb>, anchor: Rect, c: CardColors, scale: f32, window_size: (u32, u32)) {
         let key = format!(
-            "{content:?}|{:?}|{sidebar:?}|{:?}|{scale}|{window_size:?}",
+            "{content:?}|{:?}|{:?}|{scale}|{window_size:?}",
             (anchor.x, anchor.y, anchor.w, anchor.h),
             (c.bg, c.border, c.text, c.muted, c.image_bg)
         );
@@ -353,7 +348,7 @@ impl CardWindow {
             None => None,
         };
         let (w, h, pixels) = render_card(fonts, &content, image, c, scale);
-        let pos = card_position(anchor, sidebar, (w, h), window_size, 6.0 * scale);
+        let pos = card_position(anchor, (w, h), window_size, 6.0 * scale);
         let same = self.shown.as_ref().is_some_and(|(old, at)| *old == content && *at == pos);
         if !same || !self.visible {
             let _ = self.window.request_inner_size(winit::dpi::PhysicalSize::new(w, h));
@@ -467,13 +462,10 @@ mod tests {
     fn cards_stay_inside_the_window() {
         let anchor = Rect { x: 900.0, y: 0.0, w: 200.0, h: 38.0 };
         // Under the chip, pushed left at the right edge.
-        assert_eq!(card_position(anchor, None, (264, 200), (1000, 800), 6.0), (734, 44));
-        // Beside a left sidebar row.
-        let row = Rect { x: 10.0, y: 100.0, w: 200.0, h: 34.0 };
-        assert_eq!(card_position(row, Some(true), (264, 200), (1000, 800), 6.0), (216, 100));
-        // A right sidebar puts it on the left of the row.
-        let row = Rect { x: 780.0, y: 700.0, w: 200.0, h: 34.0 };
-        assert_eq!(card_position(row, Some(false), (264, 200), (1000, 800), 6.0), (510, 598));
+        assert_eq!(card_position(anchor, (264, 200), (1000, 800), 6.0), (734, 44));
+        // Pushed up at the bottom edge.
+        let low = Rect { x: 10.0, y: 700.0, w: 200.0, h: 34.0 };
+        assert_eq!(card_position(low, (264, 200), (1000, 800), 6.0), (10, 598));
     }
 
     #[test]
@@ -503,9 +495,8 @@ impl super::Browser {
     }
 
     /// After a frame: shows, moves or hides the hover card for the tab
-    /// under the pointer (`hover_anchor`). `sidebar`: the tabs are in a
-    /// sidebar on the left (`Some(true)`) or the right.
-    pub(super) fn update_hover_card(&mut self, ppp: f32, sidebar: Option<bool>) {
+    /// under the pointer (`hover_anchor`).
+    pub(super) fn update_hover_card(&mut self, ppp: f32) {
         let f = crate::flags::get();
         // Not gated on the window's focus: winit reports the window as
         // unfocused while the keyboard is in the page (a child window).
@@ -554,9 +545,9 @@ impl super::Browser {
         let size = self.gfx.as_ref().map(|g| g.window.inner_size()).map(|s| (s.width, s.height)).unwrap_or((1, 1));
         #[cfg(target_os = "linux")]
         if let Some(card) = &mut self.card {
-            card.show(&self.fonts, content, thumb.as_ref(), anchor, sidebar, card_colors, ppp, size);
+            card.show(&self.fonts, content, thumb.as_ref(), anchor, card_colors, ppp, size);
         }
         #[cfg(not(target_os = "linux"))]
-        let _ = (content, card_colors, anchor, size, sidebar, thumb);
+        let _ = (content, card_colors, anchor, size, thumb);
     }
 }

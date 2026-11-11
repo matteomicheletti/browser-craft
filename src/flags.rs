@@ -3,7 +3,7 @@
 //! BrowseCraft's own experiment switches (no Chromium involved): a tiny
 //! `key=value` store. They load once at process start and are written back whenever they change,
 //! as `key=value` lines. The internal `browsecraft://flags` page (the settings
-//! page) edits them; a few (theme, tab side) also have toolbar/panel shortcuts.
+//! page) edits them; a few (theme, Library sidebar) also have toolbar/panel shortcuts.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, RwLock};
@@ -12,14 +12,17 @@ use crate::internal::{self, FormToken};
 
 const FILE_NAME: &str = "flags.txt";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TabsPosition {
-    /// A horizontal tab strip above the address bar (Chrome, Firefox).
-    Top,
-    Left,
-    Right,
-    Hidden,
+/// The section the Library sidebar (Ctrl+B) shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum LibrarySection {
+    #[default]
+    Bookmarks,
+    History,
 }
+
+/// The Library sidebar's width limits, in points.
+pub const LIBRARY_MIN_WIDTH: u32 = 200;
+pub const LIBRARY_MAX_WIDTH: u32 = 600;
 
 /// The chosen theme (see `crate::theme`).
 pub use crate::theme::ThemeId as Theme;
@@ -34,7 +37,6 @@ pub enum Chrome {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Flags {
-    pub tabs_position: TabsPosition,
     pub theme: Theme,
     pub chrome: Chrome,
     /// The bookmarks bar under the address bar.
@@ -58,9 +60,12 @@ pub struct Flags {
     pub hover_card_images: bool,
     /// How long the pointer rests on a tab before the first card shows.
     pub hover_card_delay_ms: u32,
-    /// The side the tab sidebar was last on (`Left` or `Right`): where
-    /// Ctrl+B shows it again after hiding it.
-    pub sidebar_side: TabsPosition,
+    /// The Library sidebar (bookmarks and history, on the left) is open.
+    pub library_open: bool,
+    /// The section it shows.
+    pub library_section: LibrarySection,
+    /// Its width in points (clamped to `LIBRARY_MIN_WIDTH..=LIBRARY_MAX_WIDTH`).
+    pub library_width: u32,
     /// Days of browsing history kept (0: until cleared).
     pub history_days: u32,
     /// The most visits kept; the oldest go first (0: no cap).
@@ -87,7 +92,6 @@ impl Default for Flags {
 }
 
 const DEFAULT_FLAGS: Flags = Flags {
-    tabs_position: TabsPosition::Top,
     theme: Theme::LateNight,
     chrome: Chrome::Auto,
     bookmarks_bar: true,
@@ -98,7 +102,9 @@ const DEFAULT_FLAGS: Flags = Flags {
     hover_cards: true,
     hover_card_images: true,
     hover_card_delay_ms: 500,
-    sidebar_side: TabsPosition::Left,
+    library_open: false,
+    library_section: LibrarySection::Bookmarks,
+    library_width: 300,
     history_days: 365,
     history_max_visits: 500_000,
     import_hint: true,
@@ -124,10 +130,8 @@ fn load_from_mut(flags: &mut Flags) {
             continue;
         };
         match (key.trim(), value.trim()) {
-            ("tabs-position", "top") => flags.tabs_position = TabsPosition::Top,
-            ("tabs-position", "left") => flags.tabs_position = TabsPosition::Left,
-            ("tabs-position", "right") => flags.tabs_position = TabsPosition::Right,
-            ("tabs-position", "hidden") => flags.tabs_position = TabsPosition::Hidden,
+            // Tabs are always on top now: the old `tabs-position` and
+            // `sidebar-side` lines are ignored.
             ("theme", v) => {
                 if let Some(id) = Theme::from_key(v) {
                     flags.theme = id;
@@ -167,8 +171,15 @@ fn load_from_mut(flags: &mut Flags) {
                     flags.hover_card_delay_ms = n;
                 }
             }
-            ("sidebar-side", "left") => flags.sidebar_side = TabsPosition::Left,
-            ("sidebar-side", "right") => flags.sidebar_side = TabsPosition::Right,
+            ("library", "open") => flags.library_open = true,
+            ("library", "closed") => flags.library_open = false,
+            ("library-section", "bookmarks") => flags.library_section = LibrarySection::Bookmarks,
+            ("library-section", "history") => flags.library_section = LibrarySection::History,
+            ("library-width", v) => {
+                if let Ok(n) = v.parse::<u32>() {
+                    flags.library_width = n.clamp(LIBRARY_MIN_WIDTH, LIBRARY_MAX_WIDTH);
+                }
+            }
             ("history-days", v) => {
                 if let Ok(n) = v.parse::<u32>()
                     && n <= 100 * 365
@@ -190,12 +201,6 @@ fn load_from_mut(flags: &mut Flags) {
 
 fn save_to(path: &Path, flags: &Flags) -> std::io::Result<()> {
     let mut text = String::new();
-    match flags.tabs_position {
-        TabsPosition::Top => text += "tabs-position=top\n",
-        TabsPosition::Left => text += "tabs-position=left\n",
-        TabsPosition::Right => text += "tabs-position=right\n",
-        TabsPosition::Hidden => text += "tabs-position=hidden\n",
-    }
     text += &format!("theme={}\n", flags.theme.key());
     match flags.chrome {
         Chrome::Auto => text += "chrome=auto\n",
@@ -214,7 +219,12 @@ fn save_to(path: &Path, flags: &Flags) -> std::io::Result<()> {
     text += if flags.hover_cards { "hover-cards=on\n" } else { "hover-cards=off\n" };
     text += if flags.hover_card_images { "hover-card-images=on\n" } else { "hover-card-images=off\n" };
     text += &format!("hover-card-delay={}\n", flags.hover_card_delay_ms);
-    text += if flags.sidebar_side == TabsPosition::Right { "sidebar-side=right\n" } else { "sidebar-side=left\n" };
+    text += if flags.library_open { "library=open\n" } else { "library=closed\n" };
+    text += match flags.library_section {
+        LibrarySection::Bookmarks => "library-section=bookmarks\n",
+        LibrarySection::History => "library-section=history\n",
+    };
+    text += &format!("library-width={}\n", flags.library_width);
     text += &format!("history-days={}\n", flags.history_days);
     text += &format!("history-max-visits={}\n", flags.history_max_visits);
     text += if flags.import_hint { "import-hint=on\n" } else { "import-hint=off\n" };
@@ -234,11 +244,7 @@ pub fn get() -> Flags {
 }
 
 /// Persist atomically before changing in-memory flags; report failures to UI.
-pub fn set(mut flags: Flags) -> Result<(), String> {
-    // A sidebar remembers its side for Ctrl+B.
-    if matches!(flags.tabs_position, TabsPosition::Left | TabsPosition::Right) {
-        flags.sidebar_side = flags.tabs_position;
-    }
+pub fn set(flags: Flags) -> Result<(), String> {
     let mut current = FLAGS.write().unwrap_or_else(|p| p.into_inner());
     let result = file_path().and_then(|path| {
         save_to(&path, &flags)
@@ -287,18 +293,6 @@ pub fn set_system_titlebar(on: bool) -> Result<(), String> {
     set(flags)
 }
 
-/// What Ctrl+B does with the tabs, given where they are now (`effective`:
-/// the engine chrome shows "top" as a left sidebar): a sidebar hides, a
-/// hidden one comes back on its last side (`last`), and tabs on top stay
-/// (`None`: there is no sidebar to toggle).
-pub fn sidebar_toggled(effective: TabsPosition, last: TabsPosition) -> Option<TabsPosition> {
-    match effective {
-        TabsPosition::Left | TabsPosition::Right => Some(TabsPosition::Hidden),
-        TabsPosition::Hidden => Some(if last == TabsPosition::Right { TabsPosition::Right } else { TabsPosition::Left }),
-        TabsPosition::Top => None,
-    }
-}
-
 /// The one-time token the settings page's links must send back. Only that
 /// page can change the flags: a link, a pop-up, another page's form or a
 /// back/forward replay of an earlier submission cannot know it.
@@ -336,22 +330,6 @@ fn apply_query(pairs: impl Iterator<Item = (String, String)>) -> bool {
     let mut changed = false;
     for (key, value) in pairs {
         match (key.as_str(), value.as_str()) {
-            ("tabs-position", "top") => {
-                changed |= flags.tabs_position != TabsPosition::Top;
-                flags.tabs_position = TabsPosition::Top;
-            }
-            ("tabs-position", "left") => {
-                changed |= flags.tabs_position != TabsPosition::Left;
-                flags.tabs_position = TabsPosition::Left;
-            }
-            ("tabs-position", "right") => {
-                changed |= flags.tabs_position != TabsPosition::Right;
-                flags.tabs_position = TabsPosition::Right;
-            }
-            ("tabs-position", "hidden") => {
-                changed |= flags.tabs_position != TabsPosition::Hidden;
-                flags.tabs_position = TabsPosition::Hidden;
-            }
             ("theme", v) => {
                 if let Some(id) = Theme::from_key(v) {
                     changed |= flags.theme != id;
@@ -465,7 +443,6 @@ pub fn page_html() -> String {
     // Every option is a link back to the page carrying the token.
     let to = |key: &str, value: &str| format!("browsecraft://flags?token={token}&{key}={value}");
 
-    let side = |label: &'static str, value: &str, on: bool| (label, to("tabs-position", value), on);
     let render = |label: &'static str, value: &str, on: bool| (label, to("chrome", value), on);
 
     let appearance = theme_row(flags.theme, &to);
@@ -476,19 +453,8 @@ pub fn page_html() -> String {
         flags.system_titlebar,
         &to("system-titlebar", if flags.system_titlebar { "off" } else { "on" }),
     );
-    let layout = internal::segmented_row(
-        true,
-        "Tabs",
-        "Where your open tabs are listed: a strip above the address bar, or a sidebar.",
-        &[
-            side("Top", "top", flags.tabs_position == TabsPosition::Top),
-            side("Left", "left", flags.tabs_position == TabsPosition::Left),
-            side("Right", "right", flags.tabs_position == TabsPosition::Right),
-            side("Hidden", "hidden", flags.tabs_position == TabsPosition::Hidden),
-        ],
-    );
     let bar = internal::switch_row(
-        false,
+        true,
         "Bookmarks bar",
         "Show your bookmarks under the address bar.",
         flags.bookmarks_bar,
@@ -589,7 +555,7 @@ pub fn page_html() -> String {
     let body = format!(
         "<h1>Settings</h1><p class=\"sub\">Changes apply immediately.</p>{error}\
          <div class=\"card\"><h2>Appearance</h2>{appearance}{titlebar}</div>\
-         <div class=\"card\"><h2>Layout</h2>{layout}{bar}{hover}{hover_images}{hover_delay}</div>\
+         <div class=\"card\"><h2>Layout</h2>{bar}{hover}{hover_images}{hover_delay}</div>\
          <div class=\"card\"><h2>Tabs and memory</h2>{suspend}{live}{restore}</div>\
          <div class=\"card\"><h2>History</h2>{history_days}{history_max}</div>\
          <div class=\"card\"><h2>Advanced</h2>{renderer}</div>{agents}\
@@ -651,14 +617,12 @@ mod tests {
         let before = get();
         set(Flags::default()).unwrap();
         let pairs = vec![
-            ("tabs-position".into(), "right".into()),
             ("theme".into(), "light".into()),
             ("chrome".into(), "egui".into()),
             ("bookmarks-bar".into(), "off".into()),
         ];
         assert!(apply_query(pairs.into_iter()));
         let after = get();
-        assert_eq!(after.tabs_position, TabsPosition::Right);
         assert_eq!(after.theme, Theme::Light);
         assert_eq!(after.chrome, Chrome::Egui);
         assert!(!after.bookmarks_bar);
@@ -738,7 +702,6 @@ mod tests {
         let before = get();
         set(Flags::default()).unwrap();
         assert!(!apply_query(vec![("bogus".into(), "1".into())].into_iter()));
-        assert_eq!(get().tabs_position, TabsPosition::Top);
         set(before).unwrap();
     }
 
@@ -747,7 +710,6 @@ mod tests {
         let _guard = SERIAL.lock().unwrap();
         let before = get();
         set(Flags {
-            tabs_position: TabsPosition::Right,
             theme: Theme::Light,
             chrome: Chrome::Egui,
             bookmarks_bar: false,
@@ -757,9 +719,10 @@ mod tests {
             ..Flags::default()
         }).unwrap();
         let html = page_html();
-        assert!(html.contains("tabs-position=right\">Right"), "unselected links have no class");
+        assert!(html.contains("chrome=auto\">Auto"), "unselected links have no class");
+        assert!(!html.contains("tabs-position"), "tabs are always on top");
         assert!(html.contains("class=\"on\" href=\"browsecraft://flags?token="));
-        assert_eq!(html.matches("class=\"on\"").count(), 7, "one selected option per control");
+        assert_eq!(html.matches("class=\"on\"").count(), 6, "one selected option per control");
         assert_eq!(html.matches("class=\"theme on\"").count(), 1, "one theme selected");
         assert!(html.contains("theme=sand"), "every theme is offered");
         // The bookmarks-bar switch is off and offers to turn it on.
@@ -775,7 +738,9 @@ mod tests {
         let _guard = SERIAL.lock().unwrap();
         let before = get();
         set(Flags {
-            tabs_position: TabsPosition::Right,
+            library_open: true,
+            library_section: LibrarySection::History,
+            library_width: 420,
             theme: Theme::Light,
             chrome: Chrome::Egui,
             bookmarks_bar: false,
@@ -783,7 +748,8 @@ mod tests {
         }).unwrap();
         let mut flags = Flags::default();
         load_from_mut(&mut flags);
-        assert_eq!(flags.tabs_position, TabsPosition::Right);
+        assert!(flags.library_open);
+        assert_eq!((flags.library_section, flags.library_width), (LibrarySection::History, 420));
         assert_eq!(flags.theme, Theme::Light);
         assert_eq!(flags.chrome, Chrome::Egui);
         assert!(!flags.bookmarks_bar);
@@ -795,9 +761,7 @@ mod tests {
         let _guard = SERIAL.lock().unwrap();
         let before = get();
         set(Flags::default()).unwrap();
-        assert_eq!(get().tabs_position, TabsPosition::Top, "tabs on top by default");
         let pairs = vec![
-            ("tabs-position".into(), "left".into()),
             ("suspend-after".into(), "5".into()),
             ("max-live-tabs".into(), "4".into()),
             ("restore-tabs".into(), "off".into()),
@@ -807,7 +771,6 @@ mod tests {
         assert!(!apply_query(vec![("suspend-after".into(), "7".into()), ("max-live-tabs".into(), "0".into())].into_iter()));
         let mut flags = Flags::default();
         load_from_mut(&mut flags);
-        assert_eq!(flags.tabs_position, TabsPosition::Left);
         assert_eq!((flags.suspend_after_min, flags.max_live_tabs, flags.restore_tabs), (5, 4, false));
         set(before).unwrap();
     }
@@ -849,26 +812,17 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_b_hides_the_sidebar_and_brings_it_back_on_its_side() {
-        use TabsPosition::*;
-        assert_eq!(sidebar_toggled(Left, Left), Some(Hidden));
-        assert_eq!(sidebar_toggled(Right, Right), Some(Hidden));
-        assert_eq!(sidebar_toggled(Hidden, Right), Some(Right));
-        assert_eq!(sidebar_toggled(Hidden, Left), Some(Left));
-        assert_eq!(sidebar_toggled(Hidden, Top), Some(Left), "a sidebar side is left or right");
-        assert_eq!(sidebar_toggled(Top, Right), None, "tabs on top: nothing to toggle");
-
+    fn old_tab_sidebar_lines_load_as_tabs_on_top() {
         let _guard = SERIAL.lock().unwrap();
         let before = get();
-        set(Flags::default()).unwrap();
-        assert_eq!(get().sidebar_side, Left);
-        set(Flags { tabs_position: Right, ..get() }).unwrap();
-        assert_eq!(get().sidebar_side, Right, "a sidebar remembers its side");
-        set(Flags { tabs_position: Hidden, ..get() }).unwrap();
+        set(before).unwrap(); // creates the folder
+        let path = file_path().unwrap();
+        std::fs::write(&path, "tabs-position=left\nsidebar-side=right\ntheme=light\nlibrary=open\nlibrary-width=9999\n").unwrap();
         let mut flags = Flags::default();
         load_from_mut(&mut flags);
-        assert_eq!((flags.tabs_position, flags.sidebar_side), (Hidden, Right), "persisted");
-        assert_eq!(sidebar_toggled(flags.tabs_position, flags.sidebar_side), Some(Right));
+        assert_eq!(flags.theme, Theme::Light, "the rest still loads");
+        assert!(flags.library_open);
+        assert_eq!(flags.library_width, LIBRARY_MAX_WIDTH, "clamped");
         set(before).unwrap();
     }
 

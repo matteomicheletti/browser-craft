@@ -23,7 +23,7 @@ use crate::automation::panel::{AutomationEvent, AutomationPanel, ServerState};
 use crate::commands::CommandId;
 use crate::darkmode::{self, DarkEvent, DarkModePanel, Decision, Mode, SiteMode};
 use crate::egui_chrome::{self, Colors};
-use crate::flags::{self, TabsPosition};
+use crate::flags;
 use crate::palette::{self, Palette, PaletteOutcome, PaletteSources};
 use crate::plugins::{self, PageCall, PluginEvent, PluginsEvent, PluginsPanel};
 use crate::recording::{self, Recorder};
@@ -646,14 +646,8 @@ impl Browser {
             SwapSplitPanes => self.swap_split(),
             FocusOtherPane => self.focus_other_pane(),
             CloseSplitView => self.close_split(),
-            ToggleTabsPosition => {
-                let mut f = flags::get();
-                f.tabs_position = if f.tabs_position == TabsPosition::Top { TabsPosition::Left } else { TabsPosition::Top };
-                if let Err(e) = flags::set(f) {
-                    self.set_notice(e);
-                }
-                self.web_bounds = None;
-            }
+            ShowBookmarksSidebar => self.show_library(flags::LibrarySection::Bookmarks),
+            ShowHistorySidebar => self.show_library(flags::LibrarySection::History),
             Back => self.go(-1),
             Forward => self.go(1),
             Reload => self.reload(),

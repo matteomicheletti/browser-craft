@@ -1,11 +1,11 @@
-//! The browser shell: window, toolbar, tab sidebar, history, input, forms and
+//! The browser shell: window, toolbar, tab strip, Library sidebar, history, input, forms and
 //! the render loop.
 //!
 //! Two kinds of pages live side by side. `about:`, `view-source:` and `browsecraft:`
 //! URLs go through BrowseCraft's own engine (loader -> html/css -> style ->
 //! layout -> paint); everything else renders in an embedded WebView2 pane
-//! (`wry`) exposed below the toolbar and beside the tab sidebar. The chrome
-//! (toolbar and tab sidebar) is drawn either by the engine into a softbuffer
+//! (`wry`) exposed below the toolbar and beside the sidebars. The chrome
+//! (toolbar, tabs and sidebars) is drawn either by the engine into a softbuffer
 //! frame, or by egui on wgpu when a GPU is available.
 
 use std::cell::RefCell;
@@ -37,7 +37,7 @@ use crate::bookmarks;
 use crate::css::Color;
 use crate::dom::{Document, NodeId};
 use crate::egui_chrome::{self, EguiChrome};
-use crate::flags::{self, Chrome, TabsPosition};
+use crate::flags::{self, Chrome};
 use crate::font::{FontKey, Fonts};
 use crate::history;
 use crate::icons;
@@ -56,6 +56,7 @@ mod automation_rpc;
 mod features;
 mod groups_split;
 mod hover;
+mod library;
 mod overview;
 mod windows;
 #[cfg(target_os = "linux")]
@@ -363,7 +364,6 @@ enum Action {
     Flags,
     Navigate(String),
     RestoreAddress,
-    NewTab,
     SwitchTab(usize),
     CloseTab(usize),
     DuplicateTab(usize),
@@ -373,6 +373,8 @@ enum Action {
     OpenInNewTab(String),
     RemoveBookmark(u64),
     BookmarksPage,
+    Library(Vec<library::LibraryEvent>),
+    LibraryWidth(f32),
     FillLogin(String),
     SuggestPassword,
     SaveLogin,
@@ -577,6 +579,12 @@ pub struct Browser {
     /// The egui chrome is in use (`egui` is taken out while a frame is
     /// built, so it cannot tell).
     gpu_chrome: bool,
+    /// The Library sidebar (Ctrl+B): bookmarks and history on the left.
+    library: library::Library,
+    library_open: bool,
+    library_section: flags::LibrarySection,
+    /// Its width in points (dragging its edge changes it).
+    library_width: f32,
     /// A chrome text field has egui's keyboard focus: the pages' key
     /// handlers forward keys to it (Linux, see `attach_webview_shortcuts_gtk`).
     chrome_keys: Rc<std::cell::Cell<bool>>,
@@ -1572,7 +1580,7 @@ pub enum Shortcut {
     NewTemporaryTab,
     /// Ctrl+P, F1: the command palette.
     Palette,
-    /// Ctrl+B: show or hide the tab sidebar. Page first: in a page, Bold
+    /// Ctrl+B: show or hide the Library sidebar. Page first: in a page, Bold
     /// in an editor wins (see `attach_webview_sidebar_key_gtk`).
     ToggleSidebar,
     /// A palette command that also has a key: Ctrl+Shift+P (print),
@@ -1790,7 +1798,7 @@ const EDITABLE_FOCUS_PROBE: &str = r#"(function () {
   return false;
 })()"#;
 
-/// Ctrl+B typed in a page toggles the tab sidebar only when the page leaves
+/// Ctrl+B typed in a page toggles the Library sidebar only when the page leaves
 /// it: WebKit first gives the key to the page (and to its editor, where it
 /// is Bold); a key nobody used comes back through GTK, and this handler,
 /// connected after WebKit's own, only sees that second pass. A focused
@@ -2303,6 +2311,10 @@ impl Browser {
             snapshot_pending: false,
             extra_page_scripts: Vec::new(),
             gpu_chrome: false,
+            library: library::Library::default(),
+            library_open: flags::get().library_open,
+            library_section: flags::get().library_section,
+            library_width: flags::get().library_width as f32,
             chrome_keys,
             pending_egui_events: Vec::new(),
             servo_frame: None,
@@ -2397,7 +2409,7 @@ impl Browser {
                 scale,
                 self.egui.is_some() && !self.web_fullscreen,
                 Bars {
-                    tab_strip: self.tabs_position() == TabsPosition::Top,
+                    tab_strip: self.gpu_chrome,
                     bookmarks: flags::get().bookmarks_bar,
                     save: save_bar,
                     find: self.find.is_some(),
@@ -2405,22 +2417,18 @@ impl Browser {
             )
     }
 
-    /// Where the tabs are: the flag, except that the engine chrome has no
-    /// tab strip and shows the sidebar on the left instead.
-    fn tabs_position(&self) -> TabsPosition {
-        match flags::get().tabs_position {
-            TabsPosition::Top if !self.gpu_chrome => TabsPosition::Left,
-            p => p,
-        }
-    }
-
+    /// What is left of the page: the Library sidebar on the GPU chrome
+    /// (tabs are in the strip on top), the tab list on the engine chrome,
+    /// which has no tab strip.
     fn sidebar_w(&self) -> f32 {
         if self.web_fullscreen {
-            return 0.0;
-        }
-        match self.tabs_position() {
-            TabsPosition::Hidden | TabsPosition::Top => 0.0,
-            _ => (SIDEBAR_WIDTH * self.scale()).round(),
+            0.0
+        } else if !self.gpu_chrome {
+            (SIDEBAR_WIDTH * self.scale()).round()
+        } else if self.library_open {
+            (self.library_width * self.scale()).round()
+        } else {
+            0.0
         }
     }
 
@@ -2484,24 +2492,23 @@ impl Browser {
     fn page_rect(&self) -> Rect {
         let (w, h) = self.window_size();
         let (th, sw, e) = (self.top_h(), self.sidebar_w(), self.frame_edge());
-        let left = self.tabs_position() == TabsPosition::Left;
         self.focused_pane(Rect {
-            x: if left { sw } else { 0.0 } + e,
+            x: sw + e,
             y: th,
             w: (w - sw - self.drawer_w() - 2.0 * e).max(1.0),
             h: (h - th - self.notice_h() - e).max(1.0),
         })
     }
 
+    /// The engine chrome's tab list (the GPU chrome draws its own panels).
     fn sidebar_rect(&self) -> Option<Rect> {
-        let pos = self.tabs_position();
-        if matches!(pos, TabsPosition::Hidden | TabsPosition::Top) || self.web_fullscreen {
+        if self.gpu_chrome || self.web_fullscreen {
             return None;
         }
-        let (w, h) = self.window_size();
+        let (_, h) = self.window_size();
         let (th, sw, e) = (self.top_h(), self.sidebar_w(), self.frame_edge());
         Some(Rect {
-            x: if pos == TabsPosition::Left { e } else { w - sw - e },
+            x: e,
             y: th,
             w: sw,
             h: (h - th - e).max(1.0),
@@ -3678,27 +3685,73 @@ impl Browser {
         self.refresh_if_internal("browsecraft://bookmarks");
     }
 
-    /// Ctrl+B: hides the tab sidebar or shows it again on its last side.
-    /// With tabs on top there is no sidebar: a notice says so.
+    /// Ctrl+B: shows or hides the Library sidebar (bookmarks and history).
     pub(super) fn toggle_sidebar(&mut self) {
+        let open = !self.library_open;
+        self.set_library(open, self.library_section);
+    }
+
+    /// Opens the Library sidebar on `section` (the palette's "Show
+    /// bookmarks/history sidebar").
+    pub(super) fn show_library(&mut self, section: flags::LibrarySection) {
+        self.set_library(true, section);
+        self.library.focus_search = true;
+    }
+
+    fn set_library(&mut self, open: bool, section: flags::LibrarySection) {
+        if !self.gpu_chrome {
+            self.set_notice("The bookmarks and history sidebar needs the GPU interface");
+            return;
+        }
+        if open && (!self.library_open || section != self.library_section) {
+            self.library.invalidate_history();
+            // egui lays a new panel out on its first frame and shows its
+            // contents on the next one.
+            self.library.fresh = true;
+        }
+        self.library_open = open;
+        self.library_section = section;
         let mut f = flags::get();
-        match flags::sidebar_toggled(self.tabs_position(), f.sidebar_side) {
-            Some(next) => {
-                f.tabs_position = next;
-                if let Err(error) = flags::set(f) {
+        if (f.library_open, f.library_section) != (open, section) {
+            f.library_open = open;
+            f.library_section = section;
+            if let Err(error) = flags::set(f) {
+                self.set_notice(error);
+            }
+        }
+        // The page area changed width.
+        self.web_bounds = None;
+        self.request_redraw();
+    }
+
+    fn library_event(&mut self, event: library::LibraryEvent) {
+        use library::LibraryEvent as E;
+        match event {
+            E::Open(url) => self.load(Request::Get(url), true),
+            E::OpenInNewTab(url) => self.open_in_new_tab(url),
+            E::OpenIn(url, pick) => self.new_tab_in(pick, Some(url)),
+            E::Section(section) => self.set_library(true, section),
+            E::Close => self.set_library(false, self.library_section),
+            E::DeleteBookmark(id) => {
+                let message = if bookmarks::remove_id(id) { "Deleted" } else { "Could not delete it" };
+                self.set_notice(message);
+                self.refresh_if_internal("browsecraft://bookmarks");
+            }
+            E::NewFolder(parent, name) => {
+                if let Err(error) = bookmarks::create_folder(parent, &name) {
                     self.set_notice(error);
                 }
-                // The page area changed width.
-                self.web_bounds = None;
-                #[cfg(debug_assertions)]
-                eprintln!("browsecraft: tab sidebar: {next:?}");
+                self.refresh_if_internal("browsecraft://bookmarks");
             }
-            None => self.set_notice(format!(
-                "{} shows or hides the tab sidebar; tabs are on top",
-                crate::commands::display_shortcut("Ctrl+B")
-            )),
+            E::RemoveHistory(url) => {
+                match history::remove_url(&url) {
+                    Ok(_) => self.set_notice("Removed from history"),
+                    Err(error) => self.set_notice(error),
+                }
+                self.library.invalidate_history();
+                self.refresh_if_internal("browsecraft://history");
+            }
         }
-        self.request_redraw();
     }
 
     fn toggle_bookmarks_bar(&mut self) {
@@ -3825,6 +3878,7 @@ impl Browser {
                     .is_some_and(|e| e.request.url().starts_with("about:blocked:"));
                 if !blocked && !url.starts_with("about:") {
                     history::record(&url, &title, self.container.as_deref());
+                    self.library.invalidate_history();
                 }
                 self.title = title;
                 self.tab = Some(Tab {
@@ -3916,6 +3970,7 @@ impl Browser {
             self.address.set(&url);
         }
         history::record(&url, &self.title, self.container.as_deref());
+        self.library.invalidate_history();
         self.schedule_thumbnail(self.tab_id);
     }
 
@@ -5627,11 +5682,7 @@ impl Browser {
         };
         let s = self.scale();
         canvas.fill_rect(sr, pal.sidebar_bg);
-        let edge_x = if self.tabs_position() == TabsPosition::Left {
-            sr.x + sr.w - 1.0
-        } else {
-            sr.x
-        };
+        let edge_x = sr.x + sr.w - 1.0;
         canvas.fill_rect(Rect { x: edge_x, y: sr.y, w: 1.0, h: sr.h }, pal.line);
         canvas.push_clip(sr);
 
@@ -6131,7 +6182,6 @@ impl Browser {
             .collect();
         let mut group_events: Vec<(u64, egui_chrome::GroupEvent)> = Vec::new();
         let active_container = tab_meta.get(self.active).and_then(|m| m.1.clone());
-        let position = self.tabs_position();
         let mut tab_events: Vec<(usize, egui_chrome::TabRow)> = Vec::new();
         // The other windows, for "Move to window".
         let other_windows: Vec<(u64, String)> =
@@ -6141,7 +6191,7 @@ impl Browser {
         // Tab strip (tabs on top), above the toolbar. With the browser's own
         // frame it is the title bar: the window buttons sit at its right end
         // and its empty part moves the window.
-        if position == TabsPosition::Top && !fullscreen {
+        if !fullscreen {
             egui::Panel::top("tabstrip")
                 .exact_size(TAB_STRIP_HEIGHT)
                 .resizable(false)
@@ -6199,11 +6249,6 @@ impl Browser {
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.fill(c.bar_bg))
                 .show(ui, |ui| {
-                    // Without tabs on top the toolbar is the title bar.
-                    let toolbar_is_titlebar = titlebar && position != TabsPosition::Top;
-                    if toolbar_is_titlebar {
-                        titlebar::drag_area(ui, ui.max_rect(), &c, maximized, &mut win_ops);
-                    }
                     ui.horizontal_centered(|ui| {
                         ui.add_space(8.0);
                         if egui_chrome::icon_button(ui, can_back, ICON_BACK, "Back", 16.0).clicked() {
@@ -6228,18 +6273,7 @@ impl Browser {
                         // the address bar takes whatever room is left. Nothing can be
                         // pushed past the window edge, at any window width.
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if toolbar_is_titlebar {
-                                let spacing = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, 0.0);
-                                titlebar::window_buttons(ui, &c, TOOLBAR_HEIGHT, maximized, edge, &mut win_ops);
-                                ui.spacing_mut().item_spacing.x = spacing;
-                                ui.add_space(4.0);
-                                if let Some(name) = &self.win_name {
-                                    ui.label(egui::RichText::new(display_text(name, 24)).size(12.0).color(c.muted))
-                                        .on_hover_text("This window's name (right-click the title bar to change it)");
-                                }
-                            } else {
-                                ui.add_space(8.0);
-                            }
+                            ui.add_space(8.0);
                             let key_tip = match &pw_status {
                                 passwords::Status::Unlocked { .. } => "Passwords (unlocked)",
                                 passwords::Status::Locked => "Passwords (locked)",
@@ -6405,49 +6439,32 @@ impl Browser {
             }
         }
 
-        // Tab sidebar.
-        if matches!(position, TabsPosition::Left | TabsPosition::Right) && !fullscreen {
-            let panel = if position == TabsPosition::Left {
-                egui::Panel::left("tabs")
-            } else {
-                egui::Panel::right("tabs")
-            };
-            panel
-                .exact_size(SIDEBAR_WIDTH)
-                .resizable(false)
+        // The Library sidebar (Ctrl+B): bookmarks and history, left of
+        // the page. Dragging its edge resizes it.
+        if self.library_open && !fullscreen {
+            let section = self.library_section;
+            let panel = egui::Panel::left("library")
+                .resizable(true)
+                .default_size(self.library_width)
+                .size_range(flags::LIBRARY_MIN_WIDTH as f32..=flags::LIBRARY_MAX_WIDTH as f32)
                 .show_separator_line(false)
-                .frame(egui::Frame::NONE.fill(c.sidebar_bg))
-                .show(ui, |ui| {
-                    egui::Frame::NONE.inner_margin(egui::Margin::same(10)).show(ui, |ui| {
-                        let label = egui::RichText::new(format!("{}  New tab", egui_chrome::ICON_PLUS))
-                            .size(13.0)
-                            .color(c.text);
-                        let button = egui::Button::new(label)
-                            .fill(c.hover)
-                            .corner_radius(egui::CornerRadius::same(10));
-                        if ui.add_sized([ui.available_width(), 34.0], button).clicked() {
-                            actions.push(Action::NewTab);
-                        }
-                        ui.add_space(8.0);
-                        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                            for item in &strip_items {
-                                match *item {
-                                    crate::tab_groups::StripItem::Group(id) => {
-                                        if let Some(group) = group_infos.iter().find(|g| g.id == id) {
-                                            let events = egui_chrome::group_header_row(ui, &c, group);
-                                            group_events.extend(events.into_iter().map(|e| (id, e)));
-                                        }
-                                    }
-                                    crate::tab_groups::StripItem::Tab(i) => {
-                                        if let Some(info) = tab_infos.get(i) {
-                                            tab_events.push((i, egui_chrome::tab_row(ui, &c, info, &containers_list, &group_infos, &other_windows)));
-                                        }
-                                    }
-                                }
-                            }
-                        });
-                    });
-                });
+                .frame(
+                    egui::Frame::NONE
+                        .fill(c.drawer)
+                        .inner_margin(egui::Margin::symmetric(10, 10))
+                        .stroke(egui::Stroke::new(1.0, c.line)),
+                )
+                .show(ui, |ui| self.library.ui(ui, &c, section, &containers_list));
+            if !panel.inner.is_empty() {
+                actions.push(Action::Library(panel.inner));
+            }
+            if std::mem::take(&mut self.library.fresh) {
+                self.request_redraw();
+            }
+            let width = panel.response.rect.width();
+            if (width - self.library_width).abs() > 0.5 {
+                actions.push(Action::LibraryWidth(width));
+            }
         }
 
         // Notice strip.
@@ -6643,7 +6660,6 @@ impl Browser {
                     let url = self.current_url();
                     self.address.set(&url);
                 }
-                Action::NewTab => self.new_tab(),
                 Action::SwitchTab(i) => self.switch_tab(i),
                 Action::CloseTab(i) => self.close_tab(i),
                 Action::DuplicateTab(i) => {
@@ -6664,6 +6680,15 @@ impl Browser {
                     self.refresh_if_internal("browsecraft://bookmarks");
                 }
                 Action::BookmarksPage => self.load(Request::Get("browsecraft://bookmarks".into()), true),
+                Action::Library(events) => {
+                    for event in events {
+                        self.library_event(event);
+                    }
+                }
+                Action::LibraryWidth(width) => {
+                    self.library_width = width;
+                    self.web_bounds = None;
+                }
                 Action::FillLogin(id) => self.fill_login(&id),
                 Action::SuggestPassword => self.suggest_password(),
                 Action::SaveLogin => match passwords::save_offer() {
@@ -6736,12 +6761,14 @@ impl Browser {
             }
         }
         // The hover card follows the pointer over the tabs.
-        let sidebar = match position {
-            TabsPosition::Left => Some(true),
-            TabsPosition::Right => Some(false),
-            _ => None,
-        };
-        self.update_hover_card(ppp, sidebar);
+        self.update_hover_card(ppp);
+        // The sidebar's width is saved once the drag ends.
+        let width = self.library_width.round() as u32;
+        if self.library_open && flags::get().library_width != width && !ctx.input(|i| i.pointer.any_down()) {
+            let mut f = flags::get();
+            f.library_width = width.clamp(flags::LIBRARY_MIN_WIDTH, flags::LIBRARY_MAX_WIDTH);
+            let _ = flags::set(f);
+        }
         if changed {
             self.request_redraw();
         }
@@ -7101,17 +7128,9 @@ impl Browser {
             }
             "hover-off" => self.hover_force = None,
             "rename-dialog" => self.rename = Some(self.win_name.clone().unwrap_or_default()),
-            "tabs-top" | "tabs-left" | "tabs-right" => {
-                let mut f = flags::get();
-                f.tabs_position = match op {
-                    "tabs-left" => TabsPosition::Left,
-                    "tabs-right" => TabsPosition::Right,
-                    _ => TabsPosition::Top,
-                };
-                if let Err(e) = flags::set(f) {
-                    self.set_notice(e);
-                }
-            }
+            "library-bookmarks" => self.show_library(flags::LibrarySection::Bookmarks),
+            "library-history" => self.show_library(flags::LibrarySection::History),
+            "library-close" => self.set_library(false, self.library_section),
             other => {
                 if let Some(q) = other.strip_prefix("overview-query:") {
                     self.overview.query = q.to_string();
