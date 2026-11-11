@@ -929,6 +929,9 @@ impl Browser {
             })
             .with_url(url);
         let builder = register_protocol(builder, needs_protocol);
+        // The same User-Agent as the tabs (WebKitGTK's own claims Safari 60.5).
+        #[cfg(target_os = "linux")]
+        let builder = builder.with_user_agent(crate::useragent::default_ua());
         match builder.build_as_child(&window) {
             Ok(view) => {
                 let _ = view.focus();

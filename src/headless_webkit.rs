@@ -7,7 +7,9 @@
 //! - `text <url>`, `snapshot <url>`, `eval <url> <js>`
 //!
 //! Options for all: `--timeout S` (load + work, default 30), `--delay MS`
-//! (wait after load, default 0). Exit codes: 0 done, 1 failed (the JSON
+//! (wait after load, default 0), `--user-agent PRESET|STRING` (one
+//! User-Agent for every site: default, safari, chrome, firefox, edge or a
+//! string; without it the browser's per-site choices apply). Exit codes: 0 done, 1 failed (the JSON
 //! says why), 2 bad usage.
 //!
 //! Each run uses an ephemeral WebKit context (no cookies or cache kept) and
@@ -48,7 +50,8 @@ const USAGE: &str = r##"usage:
   browsecraft headless run <url> <steps-json>
 steps: [{"method":"page.type","params":{"selector":"#q","text":"hi","submit":true}}, …]
        with page.text, html, snapshot, click, type, press, scroll, eval, wait
-options: --timeout SECONDS (default 30), --delay MS after load (default 0)
+options: --timeout SECONDS (default 30), --delay MS after load (default 0),
+         --user-agent default|safari|chrome|firefox|edge|STRING (every site)
 Prints one JSON object on stdout; exit code 0 on success, 1 on failure.
 "##;
 
@@ -74,12 +77,14 @@ struct Options {
     height: i32,
     timeout: Duration,
     delay: Duration,
+    user_agent: Option<String>,
 }
 
 fn parse_args(args: &[String]) -> Result<Options, String> {
     let mut positional = Vec::new();
     let (mut width, mut height, mut full_page) = (1280, 800, false);
     let (mut timeout, mut delay) = (Duration::from_secs(30), Duration::ZERO);
+    let mut user_agent = None;
     let mut it = args.iter();
     let num = |v: Option<&String>, name: &str, max: u64| -> Result<u64, String> {
         v.and_then(|s| s.parse::<u64>().ok())
@@ -93,6 +98,7 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
             "--full-page" => full_page = true,
             "--timeout" => timeout = Duration::from_secs(num(it.next(), "--timeout", 600)?),
             "--delay" => delay = Duration::from_millis(num(it.next(), "--delay", 60_000)?),
+            "--user-agent" => user_agent = Some(it.next().ok_or("--user-agent needs a value")?.clone()),
             s if s.starts_with("--") => return Err(format!("unknown option {s}")),
             _ => positional.push(arg.clone()),
         }
@@ -113,7 +119,7 @@ fn parse_args(args: &[String]) -> Result<Options, String> {
     if p.next().is_some() {
         return Err("too many arguments".into());
     }
-    Ok(Options { command, url: page_url(&url), width, height, timeout, delay })
+    Ok(Options { command, url: page_url(&url), width, height, timeout, delay, user_agent })
 }
 
 /// The `run` steps: a JSON array of `{method, params}` whose methods are
@@ -165,6 +171,13 @@ pub fn main(args: &[String]) -> i32 {
             return 2;
         }
     };
+    crate::useragent::load();
+    if let Some(ua) = &opts.user_agent
+        && let Err(e) = crate::useragent::force(ua)
+    {
+        eprint!("browsecraft headless: {e}\n{USAGE}");
+        return 2;
+    }
     match run(&opts) {
         Ok(v) => {
             println!("{v}");
@@ -216,6 +229,8 @@ fn run(opts: &Options) -> Result<Value, String> {
         settings.set_enable_write_console_messages_to_stdout(false);
         settings.set_enable_developer_extras(false);
     }
+    // The browser's User-Agent and per-site choices, as in a tab.
+    crate::useragent::webkit::attach(&webview, |_| true);
     let window = gtk::OffscreenWindow::new();
     window.set_default_size(opts.width, opts.height);
     webview.set_size_request(opts.width, opts.height);
@@ -241,7 +256,10 @@ fn run(opts: &Options) -> Result<Value, String> {
         webview.connect_load_failed(move |_, _, uri, error| {
             // A load replaced by another (redirect, script navigation) is
             // not a failure.
-            if !error.matches(webkit2gtk::NetworkError::Cancelled) {
+            // Nor one the User-Agent switch dropped to load again.
+            if !error.matches(webkit2gtk::NetworkError::Cancelled)
+                && !error.matches(webkit2gtk::PolicyError::FrameLoadInterruptedByPolicyChange)
+            {
                 finish(Err(format!("cannot load {uri}: {error}")));
             }
             false
@@ -373,10 +391,9 @@ fn page_info(wv: &WebView) -> Value {
 /// string when it threw or did not parse (as wry's
 /// `evaluate_script_with_callback` does).
 pub fn run_script(wv: &WebView, script: &str, done: impl FnOnce(String) + 'static) {
-    wv.run_javascript(script, None::<&gio::Cancellable>, move |r| {
+    wv.evaluate_javascript(script, None, None, None::<&gio::Cancellable>, move |r| {
         let json = r
             .ok()
-            .and_then(|r| r.js_value())
             .and_then(|v| v.to_json(0))
             .map(|s| s.to_string())
             .unwrap_or_default();
@@ -509,6 +526,9 @@ mod tests {
         assert_eq!(o.command, Command::Eval { script: "document.title".into() });
         assert_eq!((o.url.as_str(), o.delay, o.timeout), ("https://example.com", Duration::from_millis(500), Duration::from_secs(5)));
         assert_eq!(parse_args(&args(&["text", "https://a.test"])).unwrap().command, Command::Text);
+        let o = parse_args(&args(&["text", "https://a.test", "--user-agent", "chrome"])).unwrap();
+        assert_eq!(o.user_agent.as_deref(), Some("chrome"));
+        assert!(parse_args(&args(&["text", "https://a.test", "--user-agent"])).is_err());
         assert!(parse_args(&args(&["text"])).is_err());
         assert!(parse_args(&args(&["text", "u", "extra"])).is_err());
         assert!(parse_args(&args(&["pdf", "u"])).is_err());

@@ -45,6 +45,7 @@ mod textfield;
 mod thumbnails;
 mod theme;
 mod titlebar;
+mod useragent;
 #[cfg(test)]
 mod test_http;
 mod vault;
@@ -66,6 +67,7 @@ fn main() {
     bookmarks::load();
     passwords::load();
     containers::load();
+    useragent::load();
     internal::set_theme(flags::get().theme.resolve(true));
     let fonts = match font::Fonts::new() {
         Ok(fonts) => fonts,

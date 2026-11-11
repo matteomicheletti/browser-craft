@@ -77,7 +77,7 @@ rustls = { version = "0.23", optional = true, default-features = false, features
 gtk = "0.18"
 # The headless mode drives WebKitGTK directly (offscreen window, snapshots,
 # printing to PDF); same versions and features wry already pulls in.
-webkit2gtk = { version = "=2.0.2", features = ["v2_38"] }
+webkit2gtk = { version = "=2.0.2", features = ["v2_40"] }
 javascriptcore-rs = { version = "=1.1.2", features = ["v2_28"] }
 # Moves a tab's web view (wry's X11 container) between browser windows and
 # raises the hover card above the web views (XReparentWindow, XRaiseWindow);
