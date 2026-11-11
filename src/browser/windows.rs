@@ -738,6 +738,18 @@ impl App {
                 {
                     self.drop_tab(event_loop, key, tab, (*x, *y));
                 }
+            } else if let Some(rest) = op.strip_prefix("go:") {
+                // go:<window number>:<tab index>: the overview's click on
+                // a tab of that window.
+                let mut parts = rest.split(':').filter_map(|p| p.parse::<usize>().ok());
+                if let (Some(w), Some(i), Some(key)) = (parts.next(), parts.next(), key)
+                    && let Some(tab) = self.browsers.get(w.saturating_sub(1)).map(|b| b.tab_id_at(i))
+                {
+                    if let Some(b) = self.browsers.get_mut(target) {
+                        b.overview.hide();
+                    }
+                    self.request(event_loop, key, AppRequest::ActivateTab(tab));
+                }
             } else if op == "new-window" {
                 if let Some(i) = self.spawn(event_loop, WindowSetup::default(), Vec::new()) {
                     self.browsers[i].new_window_tab();

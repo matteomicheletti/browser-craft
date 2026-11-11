@@ -544,6 +544,8 @@ impl super::Browser {
     pub(super) fn toggle_overview(&mut self) {
         if self.overview.open {
             self.overview.hide();
+        } else if !self.gpu_chrome {
+            self.set_notice("The tab overview needs the GPU interface");
         } else {
             if self.feat.palette.is_open() {
                 self.toggle_palette();

@@ -5865,8 +5865,11 @@ impl Browser {
         raw.events.append(&mut self.pending_egui_events);
         egui.frame(&window, raw, |ui| self.build_egui_chrome(ui, tex));
         // While a chrome text field has the focus, keys typed with the
-        // pointer over the page go to it.
-        self.chrome_keys.set(egui.ctx().egui_wants_keyboard_input());
+        // pointer over the page go to it. The flag is shared by the windows:
+        // the one in use sets it.
+        if self.is_last_active {
+            self.chrome_keys.set(egui.ctx().egui_wants_keyboard_input());
+        }
         self.egui = Some(egui);
     }
 
