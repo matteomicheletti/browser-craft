@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.matteomicheletti.browsecraft</id>
+  <launchable type="desktop-id">io.github.matteomicheletti.browsecraft.desktop</launchable>
+  <name>BrowseCraft</name>
+  <summary>Lightweight Rust web browser with built-in ad blocking</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <developer id="io.github.matteomicheletti">
+    <name>Matteo Micheletti</name>
+  </developer>
+  <description>
+    <p>BrowseCraft is a small web browser written in Rust. Pages are rendered by the system WebKitGTK engine inside a bubblewrap sandbox, and an uBlock-compatible filter engine blocks ads and trackers.</p>
+    <ul>
+      <li>Tab sidebar and compact toolbar</li>
+      <li>Built-in ad and tracker blocking with EasyList-style filter lists</li>
+      <li>Local KeePass-compatible password vault</li>
+    </ul>
+  </description>
+  <url type="homepage">https://github.com/matteomicheletti/browser-craft</url>
+  <url type="bugtracker">https://github.com/matteomicheletti/browser-craft/issues</url>
+  <content_rating type="oars-1.1"/>
+  <provides>
+    <binary>browsecraft</binary>
+  </provides>
+  <categories>
+    <category>Network</category>
+    <category>WebBrowser</category>
+  </categories>
+  <releases>
+    <release version="@VERSION@" date="@DATE@"/>
+  </releases>
+</component>

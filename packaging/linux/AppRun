@@ -1,0 +1,38 @@
+#!/bin/sh
+# AppRun for the lean BrowseCraft AppImage: BrowseCraft + filters/ are bundled,
+# WebKitGTK (webkit2gtk-4.1), GTK 3 and bubblewrap come from the host.
+HERE=$(dirname "$(readlink -f "$0")")
+APPNAME=BrowseCraft
+
+have_lib() {
+  if command -v ldconfig >/dev/null 2>&1 || [ -x /sbin/ldconfig ]; then
+    { ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null; } | grep -q "$1"
+  else
+    ls /usr/lib*/"$1"* /usr/lib/*-linux-gnu/"$1"* >/dev/null 2>&1
+  fi
+}
+
+missing=
+have_lib libwebkit2gtk-4.1.so.0 || missing="$missing webkit2gtk-4.1"
+have_lib libgtk-3.so.0 || missing="$missing gtk3"
+
+if [ -n "$missing" ] && [ -z "$BROWSECRAFT_NO_WEBKIT" ]; then
+  msg="BrowseCraft needs these system packages:$missing
+
+Arch/Manjaro: sudo pacman -S webkit2gtk-4.1 gtk3 bubblewrap xdg-dbus-proxy
+Fedora:       sudo dnf install webkit2gtk4.1 gtk3 bubblewrap xdg-dbus-proxy
+Ubuntu/Debian: sudo apt install libwebkit2gtk-4.1-0 libgtk-3-0 bubblewrap xdg-dbus-proxy"
+  echo "browsecraft: $msg" >&2
+  if [ -n "$DISPLAY$WAYLAND_DISPLAY" ]; then
+    if command -v zenity >/dev/null 2>&1; then
+      zenity --error --title="$APPNAME" --no-markup --text="$msg" 2>/dev/null
+    elif command -v kdialog >/dev/null 2>&1; then
+      kdialog --title "$APPNAME" --error "$msg" 2>/dev/null
+    elif command -v notify-send >/dev/null 2>&1; then
+      notify-send -u critical "$APPNAME: missing packages" "$missing" 2>/dev/null
+    fi
+  fi
+  exit 127
+fi
+
+exec "$HERE/usr/bin/browsecraft" "$@"
