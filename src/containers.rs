@@ -11,7 +11,9 @@
 //! Isolation itself is WebKit's: each container's tabs get a web context
 //! whose website data manager points at `profiles/container-<id>`
 //! (`data_dir`), so two containers never share a cookie jar or a storage
-//! origin. "No container" uses the default profile.
+//! origin. "No container" uses the default profile. On macOS, where
+//! WKWebView has no data folder, each container instead gets its own
+//! `WKWebsiteDataStore` (macOS 14+), named by `store_identifier`.
 
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
@@ -326,6 +328,8 @@ pub fn delete(id: &str) -> Result<(), String> {
 
 /// Deletes a persistent container's web data (cookies, storage, cache).
 pub fn remove_data(id: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    remove_store(id);
     let dir = data_dir(id)?;
     match std::fs::remove_dir_all(&dir) {
         Ok(()) => Ok(()),
@@ -464,6 +468,57 @@ pub fn create_temporary() -> Container {
 
 pub fn end_temporary(id: &str) {
     TEMPORARY.write().unwrap_or_else(|p| p.into_inner()).retain(|c| c.id != id);
+    #[cfg(target_os = "macos")]
+    remove_store(id);
+}
+
+/// macOS: the `WKWebsiteDataStore` identifier (a UUID) of container `id`'s
+/// tabs. Derived from the id, so a persistent container finds its cookies
+/// again at the next start; "no container" keeps WebKit's default store.
+#[cfg(target_os = "macos")]
+pub fn store_identifier(id: &str) -> [u8; 16] {
+    use sha2::{Digest, Sha256};
+    let hash = Sha256::digest(format!("browsecraft-container:{id}").as_bytes());
+    let mut uuid = [0u8; 16];
+    uuid.copy_from_slice(&hash[..16]);
+    uuid[6] = (uuid[6] & 0x0f) | 0x80; // version 8 (application defined)
+    uuid[8] = (uuid[8] & 0x3f) | 0x80; // RFC 9562 variant
+    uuid
+}
+
+/// macOS: deletes container `id`'s data store. WebKit refuses while a web
+/// view still uses it; `sweep_stores` then removes it at the next start.
+#[cfg(target_os = "macos")]
+fn remove_store(id: &str) {
+    use wry::WebViewExtDarwin as _;
+    wry::WebView::remove_data_store(&store_identifier(id), |result| {
+        if let Err(e) = result {
+            eprintln!("browsecraft: could not delete a container's web data yet ({e}); it goes at the next start");
+        }
+    });
+}
+
+/// macOS: deletes the data stores of containers that no longer exist
+/// (temporary ones, or deleted while in use). Runs once, after the first
+/// web view is built: before that WebKit has no run loop and crashes.
+#[cfg(target_os = "macos")]
+pub fn sweep_stores() {
+    use wry::WebViewExtDarwin as _;
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    let mut first = false;
+    ONCE.call_once(|| first = true);
+    if !first {
+        return;
+    }
+    let keep: std::collections::HashSet<[u8; 16]> = all().iter().map(|c| store_identifier(&c.id)).collect();
+    let fetched = wry::WebView::fetch_data_store_identifiers(move |stores| {
+        for uuid in stores.into_iter().filter(|u| !keep.contains(u)) {
+            wry::WebView::remove_data_store(&uuid, |_| {});
+        }
+    });
+    if let Err(e) = fetched {
+        eprintln!("browsecraft: could not list the containers' web data ({e})");
+    }
 }
 
 pub fn temporary() -> Vec<Container> {

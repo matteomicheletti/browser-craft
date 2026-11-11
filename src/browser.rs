@@ -483,7 +483,7 @@ const MAX_CLOSED_TABS: usize = 25;
 
 /// A web engine data store (cookies, storage, cache) shared by the tabs of
 /// one container. A temporary container's folder is deleted with it.
-#[cfg_attr(target_os = "macos", allow(dead_code))] // WKWebView: one store
+#[cfg_attr(target_os = "macos", allow(dead_code))] // WKWebView: see `new_web_context`
 struct WebCtx {
     context: wry::WebContext,
     /// Where the favicon database goes, until the first web view turns it
@@ -1287,8 +1287,9 @@ fn new_web_context(container: Option<&str>) -> Result<Option<WebCtx>, String> {
     Ok(Some(WebCtx { context, favicons: Some(dir.join("favicons")), _temp: temp }))
 }
 
-/// WKWebView's data store is not separated per container yet: every tab
-/// uses the default store on macOS.
+/// WKWebView has no data folder: a container's tabs get their own
+/// `WKWebsiteDataStore` when the web view is built (`with_data_store_identifier`),
+/// and "no container" uses the default store.
 #[cfg(target_os = "macos")]
 fn new_web_context(_container: Option<&str>) -> Result<Option<WebCtx>, String> {
     Ok(None)
@@ -4198,6 +4199,12 @@ impl Browser {
             Some(context) => WebViewBuilder::new_with_web_context(context),
             None => WebViewBuilder::new(),
         };
+        // macOS: the container's own cookie jar and storage (macOS 14+).
+        #[cfg(target_os = "macos")]
+        if let Some(id) = container {
+            use wry::WebViewBuilderExtDarwin as _;
+            builder = builder.with_data_store_identifier(crate::containers::store_identifier(id));
+        }
         builder = plugins_host::register_protocol(builder, plugin_scheme);
         for (script, main_only) in scripts {
             builder = builder.with_initialization_script_for_main_only(script, main_only);
@@ -4309,6 +4316,9 @@ impl Browser {
         };
         match builder.build_as_child(window) {
             Ok(wv) => {
+                // WebKit's run loop exists once a web view does.
+                #[cfg(target_os = "macos")]
+                crate::containers::sweep_stores();
                 #[cfg(windows)]
                 {
                     if let Err(error) = crate::webview_network::install(&wv) {
