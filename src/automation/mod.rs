@@ -19,6 +19,7 @@
 pub mod console;
 pub mod ctl;
 pub mod mcp;
+pub mod panel;
 pub mod protocol;
 pub mod scripts;
 #[cfg(unix)]
