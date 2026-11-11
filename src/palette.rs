@@ -38,6 +38,16 @@ pub enum PaletteOutcome {
     SetTheme(crate::theme::ThemeId),
     /// Run a plugin's command (API 1.1 `[[commands]]`).
     PluginCommand { plugin: String, command: String },
+    /// Give the site `host` this User-Agent (`None`: back to automatic).
+    SetUserAgent { host: String, choice: Option<crate::useragent::Choice> },
+}
+
+/// The current page's site and its User-Agent, for `^`.
+#[derive(Clone, Debug)]
+pub struct UserAgentSite {
+    pub host: String,
+    pub current: crate::useragent::Choice,
+    pub origin: crate::useragent::Origin,
 }
 
 /// A command an enabled plugin adds to the palette.
@@ -109,6 +119,8 @@ pub struct PaletteSources {
     pub theme: crate::theme::ThemeId,
     /// Commands of enabled plugins.
     pub plugin_commands: Vec<PluginCommandItem>,
+    /// The current web page's site (`None` on other pages).
+    pub user_agent: Option<UserAgentSite>,
 }
 
 // ---- fuzzy matching --------------------------------------------------------
@@ -266,6 +278,8 @@ pub enum Mode {
     /// `&`: pick the group to add the current tab to.
     Groups,
     Themes,
+    /// `^`: the User-Agent for the current site.
+    UserAgents,
     Help,
 }
 
@@ -280,6 +294,7 @@ impl Mode {
             Mode::Split => "Split view with",
             Mode::Groups => "Add tab to group",
             Mode::Themes => "Themes",
+            Mode::UserAgents => "User agent for this site",
             Mode::Help => "Help",
         }
     }
@@ -296,6 +311,7 @@ pub fn parse_query(raw: &str) -> (Mode, &str) {
         Some('|') => Mode::Split,
         Some('&') => Mode::Groups,
         Some('%') => Mode::Themes,
+        Some('^') => Mode::UserAgents,
         Some('?') => Mode::Help,
         _ => return (Mode::All, raw.trim()),
     };
@@ -405,6 +421,7 @@ fn command_row(
         CommandId::NewTabInContainer => row.action = Action::SetQuery("~"),
         CommandId::SplitWithTab => row.action = Action::SetQuery("|"),
         CommandId::AddTabToGroup => row.action = Action::SetQuery("&"),
+        CommandId::SiteUserAgent => row.action = Action::SetQuery("^"),
         _ => {}
     }
     // "Change theme…" lists the themes.
@@ -433,6 +450,7 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
             ("| ", "Split view with an open tab", "|"),
             ("& ", "Add the tab to a group", "&"),
             ("% ", "Change the theme", "%"),
+            ("^ ", "User agent for this site", "^"),
         ] {
             let mut r = Row::new(
                 "Prefixes",
@@ -713,6 +731,10 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
         }
     }
 
+    if mode == Mode::UserAgents {
+        rows.extend(user_agent_rows(q, s));
+    }
+
     if mode == Mode::Themes || (mode == Mode::All && q.chars().count() >= 3) {
         let mut found = theme_rows(q, s);
         if mode == Mode::All {
@@ -754,6 +776,61 @@ fn theme_rows(q: &str, s: &PaletteSources) -> Vec<Row> {
             r.tag = Some("Current");
         }
         rows.push(r);
+    }
+    rows
+}
+
+/// The User-Agent presets for the current site, the one in effect tagged.
+/// Without a web page there is nothing to choose for.
+fn user_agent_rows(q: &str, s: &PaletteSources) -> Vec<Row> {
+    use crate::useragent::{Choice, Origin, Preset};
+    let Some(site) = &s.user_agent else {
+        let mut r = Row::new("User agent", Action::SetQuery(""), crate::icons::GLOBE, "Open a web page first".to_string());
+        r.enabled = false;
+        return vec![r];
+    };
+    let mut rows = Vec::new();
+    if site.origin == Origin::User {
+        let label = "Automatic".to_string();
+        if let Some(m) = score_terms(q, &label, &["reset", "remove", "built-in"]) {
+            let mut r = Row::new(
+                "User agent",
+                Action::Outcome(PaletteOutcome::SetUserAgent { host: site.host.clone(), choice: None }),
+                egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE,
+                label,
+            );
+            r.matches = m.positions;
+            r.detail = format!("Remove the override for {}", site.host);
+            rows.push(r);
+        }
+    }
+    for p in Preset::ALL {
+        let Some(m) = score_terms(q, p.label(), &[p.key()]) else {
+            continue;
+        };
+        let choice = Choice::Preset(p);
+        let mut r = Row::new(
+            "User agent",
+            Action::Outcome(PaletteOutcome::SetUserAgent { host: site.host.clone(), choice: Some(choice.clone()) }),
+            egui_phosphor::regular::IDENTIFICATION_CARD,
+            p.label().to_string(),
+        );
+        r.matches = m.positions;
+        r.detail = p.ua();
+        if site.current == choice {
+            r.tag = Some(match site.origin {
+                Origin::BuiltIn => "Current (built in)",
+                _ => "Current",
+            });
+        }
+        rows.push(r);
+    }
+    if let Choice::Custom(ua) = &site.current {
+        let mut r = Row::new("User agent", Action::SetQuery("^"), egui_phosphor::regular::IDENTIFICATION_CARD, "Custom".to_string());
+        r.detail = ua.clone();
+        r.tag = Some("Current");
+        r.enabled = false;
+        rows.insert(0, r);
     }
     rows
 }
@@ -1554,6 +1631,7 @@ mod tests {
                 plugin_name: "Clipboard".into(),
                 shortcut: Some("Ctrl+V".into()),
             }],
+            user_agent: None,
         }
     }
 
@@ -1594,6 +1672,39 @@ mod tests {
         // Typing a theme's name finds it from the start too.
         assert!(build_rows("slate", &s, &[]).iter().any(|r| matches!(r.action, Action::Outcome(PaletteOutcome::SetTheme(crate::theme::ThemeId::SlateGray)))));
         assert_eq!(parse_query("% x"), (Mode::Themes, "x"));
+    }
+
+    #[test]
+    fn user_agent_for_this_site_lists_presets_and_marks_the_current_one() {
+        use crate::useragent::{Choice, Origin, Preset};
+        let mut s = sources();
+        let rows = build_rows("user agent", &s, &[]);
+        let cmd = rows.iter().find(|r| r.label == "User agent for this site…").expect("the command is found");
+        assert!(matches!(cmd.action, Action::SetQuery("^")));
+        // No web page: nothing to choose.
+        let rows = build_rows("^", &s, &[]);
+        assert!(rows.len() == 1 && !rows[0].enabled);
+
+        s.user_agent = Some(UserAgentSite {
+            host: "outlook.cloud.microsoft".into(),
+            current: Choice::Preset(Preset::Safari),
+            origin: Origin::BuiltIn,
+        });
+        let rows = build_rows("^", &s, &[]);
+        assert_eq!(rows.len(), Preset::ALL.len(), "no Automatic row without an override");
+        let current: Vec<_> = rows.iter().filter(|r| r.tag.is_some()).collect();
+        assert_eq!((current.len(), current[0].label.as_str(), current[0].tag), (1, "Safari on macOS", Some("Current (built in)")));
+        let rows = build_rows("^ chrome", &s, &[]);
+        assert!(matches!(
+            &rows[0].action,
+            Action::Outcome(PaletteOutcome::SetUserAgent { host, choice: Some(Choice::Preset(Preset::Chrome)) }) if host == "outlook.cloud.microsoft"
+        ));
+
+        s.user_agent = Some(UserAgentSite { host: "a.test".into(), current: Choice::Custom("X/1".into()), origin: Origin::User });
+        let rows = build_rows("^", &s, &[]);
+        assert_eq!(rows[0].label, "Custom");
+        assert!(rows.iter().any(|r| matches!(&r.action, Action::Outcome(PaletteOutcome::SetUserAgent { choice: None, .. }))), "Automatic removes the override");
+        assert_eq!(parse_query("^ fire"), (Mode::UserAgents, "fire"));
     }
 
     fn actions(rows: &[Row]) -> Vec<PaletteOutcome> {
@@ -1690,7 +1801,7 @@ mod tests {
             }]
         );
         let help = build_rows("?", &s, &[]);
-        assert_eq!(help.len(), 7);
+        assert_eq!(help.len(), 8);
     }
 
     #[test]

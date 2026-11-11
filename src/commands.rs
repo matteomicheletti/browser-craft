@@ -24,6 +24,7 @@ pub enum CommandId {
     NextTab,
     PrevTab,
     ToggleTabsPosition,
+    ToggleSidebar,
     // Windows and the tab overview
     NewWindow,
     ShowAllTabs,
@@ -55,6 +56,7 @@ pub enum CommandId {
     Print,
     SavePage,
     ViewSource,
+    SiteUserAgent,
     // Capture
     Screenshot,
     ScreenshotFullPage,
@@ -164,6 +166,7 @@ pub fn needs_page(id: CommandId) -> bool {
             | Bookmark
             | DarkModeSiteToggle
             | DuplicateTab
+            | SiteUserAgent
     )
 }
 
@@ -206,7 +209,7 @@ pub fn catalog() -> &'static [Command] {
     &CATALOG
 }
 
-static CATALOG: [Command; 61] = [
+static CATALOG: [Command; 63] = [
     cmd!(
         NewTab,
         "new-tab",
@@ -331,6 +334,15 @@ static CATALOG: [Command; 61] = [
         ["vertical", "horizontal", "sidebar", "layout"],
         None,
         ph::SIDEBAR_SIMPLE,
+        Tabs
+    ),
+    cmd!(
+        ToggleSidebar,
+        "toggle-sidebar",
+        "Show or hide the tab sidebar",
+        ["vertical tabs", "side", "panel", "collapse", "hide tabs"],
+        Some("Ctrl+B"),
+        ph::SIDEBAR,
         Tabs
     ),
     cmd!(
@@ -538,6 +550,15 @@ static CATALOG: [Command; 61] = [
         ["html", "code"],
         Some("Ctrl+U"),
         ph::CODE,
+        Page
+    ),
+    cmd!(
+        SiteUserAgent,
+        "site-user-agent",
+        "User agent for this site…",
+        ["browser identity", "ua", "spoof", "chrome", "safari", "firefox", "edge", "compatibility", "unsupported browser"],
+        None,
+        ph::IDENTIFICATION_CARD,
         Page
     ),
     cmd!(

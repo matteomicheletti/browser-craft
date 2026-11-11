@@ -58,6 +58,9 @@ pub struct Flags {
     pub hover_card_images: bool,
     /// How long the pointer rests on a tab before the first card shows.
     pub hover_card_delay_ms: u32,
+    /// The side the tab sidebar was last on (`Left` or `Right`): where
+    /// Ctrl+B shows it again after hiding it.
+    pub sidebar_side: TabsPosition,
 }
 
 /// The choices offered for `suspend_after_min` and `max_live_tabs`.
@@ -84,6 +87,7 @@ const DEFAULT_FLAGS: Flags = Flags {
     hover_cards: true,
     hover_card_images: true,
     hover_card_delay_ms: 500,
+    sidebar_side: TabsPosition::Left,
 };
 
 static FLAGS: RwLock<Flags> = RwLock::new(DEFAULT_FLAGS);
@@ -149,6 +153,8 @@ fn load_from_mut(flags: &mut Flags) {
                     flags.hover_card_delay_ms = n;
                 }
             }
+            ("sidebar-side", "left") => flags.sidebar_side = TabsPosition::Left,
+            ("sidebar-side", "right") => flags.sidebar_side = TabsPosition::Right,
             _ => {}
         }
     }
@@ -180,6 +186,7 @@ fn save_to(path: &Path, flags: &Flags) -> std::io::Result<()> {
     text += if flags.hover_cards { "hover-cards=on\n" } else { "hover-cards=off\n" };
     text += if flags.hover_card_images { "hover-card-images=on\n" } else { "hover-card-images=off\n" };
     text += &format!("hover-card-delay={}\n", flags.hover_card_delay_ms);
+    text += if flags.sidebar_side == TabsPosition::Right { "sidebar-side=right\n" } else { "sidebar-side=left\n" };
     crate::storage::write_private(path, text.as_bytes())
 }
 
@@ -196,7 +203,11 @@ pub fn get() -> Flags {
 }
 
 /// Persist atomically before changing in-memory flags; report failures to UI.
-pub fn set(flags: Flags) -> Result<(), String> {
+pub fn set(mut flags: Flags) -> Result<(), String> {
+    // A sidebar remembers its side for Ctrl+B.
+    if matches!(flags.tabs_position, TabsPosition::Left | TabsPosition::Right) {
+        flags.sidebar_side = flags.tabs_position;
+    }
     let mut current = FLAGS.write().unwrap_or_else(|p| p.into_inner());
     let result = file_path().and_then(|path| {
         save_to(&path, &flags)
@@ -245,6 +256,18 @@ pub fn set_system_titlebar(on: bool) -> Result<(), String> {
     set(flags)
 }
 
+/// What Ctrl+B does with the tabs, given where they are now (`effective`:
+/// the engine chrome shows "top" as a left sidebar): a sidebar hides, a
+/// hidden one comes back on its last side (`last`), and tabs on top stay
+/// (`None`: there is no sidebar to toggle).
+pub fn sidebar_toggled(effective: TabsPosition, last: TabsPosition) -> Option<TabsPosition> {
+    match effective {
+        TabsPosition::Left | TabsPosition::Right => Some(TabsPosition::Hidden),
+        TabsPosition::Hidden => Some(if last == TabsPosition::Right { TabsPosition::Right } else { TabsPosition::Left }),
+        TabsPosition::Top => None,
+    }
+}
+
 /// The one-time token the settings page's links must send back. Only that
 /// page can change the flags: a link, a pop-up, another page's form or a
 /// back/forward replay of an earlier submission cannot know it.
@@ -265,7 +288,16 @@ pub fn apply_form(query: &str) -> bool {
         return false;
     };
     *SAVE_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = None;
-    apply_query(pairs.into_iter().map(|(k, v)| (k, v.to_string())))
+    let pairs: Vec<(String, String)> = pairs.into_iter().map(|(k, v)| (k, v.to_string())).collect();
+    // The site user agents have their own file (see `crate::useragent`).
+    let agents = match crate::useragent::apply_form_pairs(&pairs) {
+        Ok(changed) => changed,
+        Err(error) => {
+            *SAVE_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = Some(error);
+            false
+        }
+    };
+    apply_query(pairs.into_iter()) || agents
 }
 
 fn apply_query(pairs: impl Iterator<Item = (String, String)>) -> bool {
@@ -486,12 +518,13 @@ pub fn page_html() -> String {
         "How long the pointer rests on a tab before the first card shows; moving to the next tab is immediate.",
         &delays,
     );
+    let agents = crate::useragent::settings_card(&to, &token);
     let body = format!(
         "<h1>Settings</h1><p class=\"sub\">Changes apply immediately.</p>{error}\
          <div class=\"card\"><h2>Appearance</h2>{appearance}{titlebar}</div>\
          <div class=\"card\"><h2>Layout</h2>{layout}{bar}{hover}{hover_images}{hover_delay}</div>\
          <div class=\"card\"><h2>Tabs and memory</h2>{suspend}{live}{restore}</div>\
-         <div class=\"card\"><h2>Advanced</h2>{renderer}</div>\
+         <div class=\"card\"><h2>Advanced</h2>{renderer}</div>{agents}\
          <div class=\"card\"><h2>Shortcuts to your data</h2>\
          <div class=\"row first\"><div class=\"grow\"><div class=\"t\">Bookmarks</div><div class=\"d\">Pages you saved.</div></div>\
          <a class=\"btn ghost\" href=\"browsecraft://bookmarks\">Open</a></div>\
@@ -727,6 +760,47 @@ mod tests {
         load_from_mut(&mut flags);
         assert_eq!((flags.hover_cards, flags.hover_card_images, flags.hover_card_delay_ms), (false, false, 250));
         set(before).unwrap();
+    }
+
+    #[test]
+    fn ctrl_b_hides_the_sidebar_and_brings_it_back_on_its_side() {
+        use TabsPosition::*;
+        assert_eq!(sidebar_toggled(Left, Left), Some(Hidden));
+        assert_eq!(sidebar_toggled(Right, Right), Some(Hidden));
+        assert_eq!(sidebar_toggled(Hidden, Right), Some(Right));
+        assert_eq!(sidebar_toggled(Hidden, Left), Some(Left));
+        assert_eq!(sidebar_toggled(Hidden, Top), Some(Left), "a sidebar side is left or right");
+        assert_eq!(sidebar_toggled(Top, Right), None, "tabs on top: nothing to toggle");
+
+        let _guard = SERIAL.lock().unwrap();
+        let before = get();
+        set(Flags::default()).unwrap();
+        assert_eq!(get().sidebar_side, Left);
+        set(Flags { tabs_position: Right, ..get() }).unwrap();
+        assert_eq!(get().sidebar_side, Right, "a sidebar remembers its side");
+        set(Flags { tabs_position: Hidden, ..get() }).unwrap();
+        let mut flags = Flags::default();
+        load_from_mut(&mut flags);
+        assert_eq!((flags.tabs_position, flags.sidebar_side), (Hidden, Right), "persisted");
+        assert_eq!(sidebar_toggled(flags.tabs_position, flags.sidebar_side), Some(Right));
+        set(before).unwrap();
+    }
+
+    #[test]
+    fn settings_page_lists_site_user_agents() {
+        let _guard = SERIAL.lock().unwrap();
+        let _ua = crate::useragent::TEST_SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let html = page_html();
+        assert!(html.contains("Site user agents") && html.contains("name=\"ua-pattern\""));
+        let token = rendered_token();
+        assert!(apply_form(&format!("token={token}&ua-pattern=127.0.0.1&ua-preset=chrome")));
+        assert!(page_html().contains("ua-remove=127.0.0.1"));
+        let token = rendered_token();
+        assert!(apply_form(&format!("token={token}&ua-remove=127.0.0.1")));
+        assert!(!page_html().contains("ua-remove=127.0.0.1"));
+        let token = rendered_token();
+        assert!(!apply_form(&format!("token={token}&ua-pattern=a%20b&ua-preset=chrome")));
+        assert!(page_html().contains("not a host name"), "the error is shown");
     }
 
     #[test]

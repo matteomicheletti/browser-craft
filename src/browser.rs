@@ -1567,6 +1567,9 @@ pub enum Shortcut {
     NewTemporaryTab,
     /// Ctrl+P, F1: the command palette.
     Palette,
+    /// Ctrl+B: show or hide the tab sidebar. Page first: in a page, Bold
+    /// in an editor wins (see `attach_webview_sidebar_key_gtk`).
+    ToggleSidebar,
     /// A palette command that also has a key: Ctrl+Shift+P (print),
     /// Ctrl+Shift+R, Ctrl+Shift+J, Ctrl+Shift+Delete, Ctrl+,.
     Command(crate::commands::CommandId),
@@ -1611,6 +1614,7 @@ fn shortcut_for(key: &Key, ctrl: bool, shift: bool, alt: bool, typing: bool) -> 
                 "h" => Some(Shortcut::History),
                 "d" => Some(Shortcut::Bookmark),
                 "b" if shift => Some(Shortcut::BookmarksBar),
+                "b" => Some(Shortcut::ToggleSidebar),
                 "o" if shift => Some(Shortcut::BookmarksPage),
                 "q" => Some(Shortcut::Quit),
                 "=" | "+" => Some(Shortcut::Zoom(Some(true))),
@@ -1714,7 +1718,13 @@ fn attach_webview_shortcuts_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>
         };
         // `typing`: the page may have a text field focused, so Ctrl+Left
         // and Ctrl+Right stay with it.
-        if let Some(shortcut) = key.as_ref().and_then(|key| shortcut_for(key, ctrl, shift, alt, true)) {
+        let shortcut = key.as_ref().and_then(|key| shortcut_for(key, ctrl, shift, alt, true));
+        if shortcut == Some(Shortcut::ToggleSidebar) && !chrome_keys.get() {
+            // Page first: WebKit gets Ctrl+B (Bold in an editor) and hands
+            // it back unused to `attach_webview_sidebar_key_gtk`.
+            return Propagation::Proceed;
+        }
+        if let Some(shortcut) = shortcut {
             if !repeat {
                 last.set(stamp);
                 let _ = proxy.send_event(UserMessage::WebKey(shortcut));
@@ -1755,6 +1765,74 @@ fn attach_webview_shortcuts_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>
     });
 }
 
+/// Whether the focused element of a page takes text: Ctrl+B there is Bold
+/// (or the page's own key), never the sidebar. A focused iframe counts as
+/// editable (its document cannot be seen from here). Runs in an isolated
+/// world, so the page cannot redefine what it reads.
+#[cfg(target_os = "linux")]
+const EDITABLE_FOCUS_PROBE: &str = r#"(function () {
+  var e = document.activeElement;
+  while (e && e.shadowRoot && e.shadowRoot.activeElement) e = e.shadowRoot.activeElement;
+  if (document.designMode === 'on') return true;
+  if (!e) return false;
+  if (e.isContentEditable) return true;
+  var t = e.tagName;
+  if (t === 'TEXTAREA' || t === 'SELECT' || t === 'IFRAME' || t === 'FRAME' || t === 'EMBED' || t === 'OBJECT') return true;
+  if (t === 'INPUT') {
+    var ty = (e.getAttribute('type') || 'text').toLowerCase();
+    return ['button', 'checkbox', 'radio', 'submit', 'reset', 'image', 'file', 'color', 'range', 'hidden'].indexOf(ty) < 0;
+  }
+  return false;
+})()"#;
+
+/// Ctrl+B typed in a page toggles the tab sidebar only when the page leaves
+/// it: WebKit first gives the key to the page (and to its editor, where it
+/// is Bold); a key nobody used comes back through GTK, and this handler,
+/// connected after WebKit's own, only sees that second pass. A focused
+/// text field still keeps it (WebKit's Bold only acts on rich text).
+#[cfg(target_os = "linux")]
+fn attach_webview_sidebar_key_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>) {
+    use gtk::gdk::ModifierType;
+    use gtk::glib::prelude::*;
+    use webkit2gtk::WebViewExt as _;
+    use wry::WebViewExtUnix as _;
+    let last = std::cell::Cell::new(0u32);
+    wv.webview().connect_local("key-press-event", true, move |args| {
+        let unused = Some(false.to_value());
+        let view = args.first().and_then(|v| v.get::<webkit2gtk::WebView>().ok());
+        let event = args.get(1).and_then(|v| v.get::<gtk::gdk::Event>().ok());
+        let (Some(view), Some(event)) = (view, event) else {
+            return unused;
+        };
+        let Some(key) = event.downcast_ref::<gtk::gdk::EventKey>() else {
+            return unused;
+        };
+        let mods = key.state() & (ModifierType::CONTROL_MASK | ModifierType::SHIFT_MASK | ModifierType::MOD1_MASK);
+        let b = key.keyval().to_lower() == gtk::gdk::keys::constants::b;
+        if !b || mods != ModifierType::CONTROL_MASK {
+            return unused;
+        }
+        if last.replace(key.time()) == key.time() {
+            return Some(true.to_value());
+        }
+        let proxy = proxy.clone();
+        view.evaluate_javascript(
+            EDITABLE_FOCUS_PROBE,
+            Some("browsecraft-keys"),
+            None,
+            None::<&gtk::gio::Cancellable>,
+            move |result| {
+                // When in doubt (the probe failed), the page keeps the key.
+                let editable = result.map(|v| javascriptcore::ValueExt::to_boolean(&v)).unwrap_or(true);
+                if !editable {
+                    let _ = proxy.send_event(UserMessage::WebKey(Shortcut::ToggleSidebar));
+                }
+            },
+        );
+        Some(true.to_value())
+    });
+}
+
 /// Maps a Win32 virtual-key code (`VK_*`) from WebView2's
 /// `AcceleratorKeyPressed` event to the `winit` [`Key`] that `shortcut_for`
 /// expects.
@@ -1792,7 +1870,9 @@ fn vk_to_key(vk: u32) -> Option<Key> {
 #[cfg_attr(not(windows), allow(dead_code))]
 fn web_shortcut_for(vk: u32, ctrl: bool, shift: bool, alt: bool) -> Option<Shortcut> {
     let key = vk_to_key(vk)?;
-    shortcut_for(&key, ctrl, shift, alt, true)
+    // Ctrl+B stays with the page (Bold in editors): WebView2 cannot say
+    // whether the page used it.
+    shortcut_for(&key, ctrl, shift, alt, true).filter(|s| *s != Shortcut::ToggleSidebar)
 }
 
 #[cfg(windows)]
@@ -3593,6 +3673,29 @@ impl Browser {
         self.refresh_if_internal("browsecraft://bookmarks");
     }
 
+    /// Ctrl+B: hides the tab sidebar or shows it again on its last side.
+    /// With tabs on top there is no sidebar: a notice says so.
+    pub(super) fn toggle_sidebar(&mut self) {
+        let mut f = flags::get();
+        match flags::sidebar_toggled(self.tabs_position(), f.sidebar_side) {
+            Some(next) => {
+                f.tabs_position = next;
+                if let Err(error) = flags::set(f) {
+                    self.set_notice(error);
+                }
+                // The page area changed width.
+                self.web_bounds = None;
+                #[cfg(debug_assertions)]
+                eprintln!("browsecraft: tab sidebar: {next:?}");
+            }
+            None => self.set_notice(format!(
+                "{} shows or hides the tab sidebar; tabs are on top",
+                crate::commands::display_shortcut("Ctrl+B")
+            )),
+        }
+        self.request_redraw();
+    }
+
     fn toggle_bookmarks_bar(&mut self) {
         let mut f = flags::get();
         f.bookmarks_bar = !f.bookmarks_bar;
@@ -3966,10 +4069,23 @@ impl Browser {
                     let _ = ipc_proxy.send_event(UserMessage::Tab(tab, TabMessage::Page { sender, message }));
                 }
             })
-            .with_navigation_handler(move |url| match plugins_host::navigation_policy(tab, &url) {
-                // Plugin pages only where the browser opened them.
-                Some(allowed) => allowed,
-                None => match web_navigation(&url) {
+            .with_document_title_changed_handler(move |title| {
+                let _ = title_proxy.send_event(UserMessage::Tab(tab, TabMessage::Title(title)));
+            })
+            .with_on_page_load_handler(move |event, url| {
+                let message = match event {
+                    PageLoadEvent::Started => TabMessage::Start(url),
+                    PageLoadEvent::Finished => TabMessage::Load(url),
+                };
+                let _ = load_proxy.send_event(UserMessage::Tab(tab, message));
+            });
+        // The browser's navigation policy. On Linux it runs in our own
+        // decision handler, which also switches the User-Agent per site
+        // (`useragent::webkit`); elsewhere wry calls it.
+        let navigation = move |url: String| match plugins_host::navigation_policy(tab, &url) {
+            // Plugin pages only where the browser opened them.
+            Some(allowed) => allowed,
+            None => match web_navigation(&url) {
                 WebNavigation::Allow => {
                     // "Always open in": a site a rule puts in another
                     // container leaves this tab's data store.
@@ -3994,18 +4110,10 @@ impl Browser {
                     let _ = nav_proxy.send_event(UserMessage::Tab(tab, TabMessage::Open { epoch, url, popup: false }));
                     false
                 }
-                },
-            })
-            .with_document_title_changed_handler(move |title| {
-                let _ = title_proxy.send_event(UserMessage::Tab(tab, TabMessage::Title(title)));
-            })
-            .with_on_page_load_handler(move |event, url| {
-                let message = match event {
-                    PageLoadEvent::Started => TabMessage::Start(url),
-                    PageLoadEvent::Finished => TabMessage::Load(url),
-                };
-                let _ = load_proxy.send_event(UserMessage::Tab(tab, message));
-            });
+            },
+        };
+        #[cfg(not(target_os = "linux"))]
+        let builder = builder.with_navigation_handler(navigation);
         // On Windows, `attach_webview_guards` handles pop-ups natively, where
         // WebView2 says whether the user opened them.
         #[cfg(not(windows))]
@@ -4046,7 +4154,12 @@ impl Browser {
                     // stays mapped and covers engine pages until it is hidden.
                     let _ = wv.set_visible(false);
                     attach_webview_shortcuts_gtk(&wv, self.proxy.clone(), self.chrome_keys.clone(), tab);
+                    attach_webview_sidebar_key_gtk(&wv, self.proxy.clone());
                     attach_webview_extras_gtk(&wv, self.proxy.clone(), tab);
+                    {
+                        use wry::WebViewExtUnix as _;
+                        crate::useragent::webkit::attach(&wv.webview(), navigation);
+                    }
                     let key = container.unwrap_or("");
                     if let Some(dir) = shared.contexts.get_mut(key).and_then(|c| c.favicons.take()) {
                         use webkit2gtk::{WebContextExt as _, WebViewExt as _};
@@ -4756,7 +4869,7 @@ impl Browser {
                         self.modifiers.shift_key(),
                         self.modifiers.alt_key(),
                         true,
-                    ).is_none() =>
+                    ).is_none_or(|s| s == Shortcut::ToggleSidebar) =>
             {
                 pane.key(key, self.modifiers);
                 false
@@ -4837,6 +4950,7 @@ impl Browser {
             Shortcut::History => self.open_history_page(),
             Shortcut::Bookmark => self.toggle_bookmark(),
             Shortcut::BookmarksBar => self.toggle_bookmarks_bar(),
+            Shortcut::ToggleSidebar => self.toggle_sidebar(),
             Shortcut::BookmarksPage => self.load(Request::Get("browsecraft://bookmarks".into()), true),
             Shortcut::Fullscreen => self.toggle_window_fullscreen(),
             Shortcut::Quit => self.quit_app = true,
@@ -6945,6 +7059,10 @@ impl Browser {
             "overview" => self.toggle_overview(),
             "overview-close" => self.overview.hide(),
             "thumbs" => self.request_all_thumbnails(),
+            // As a click in the page: the keyboard leaves the chrome.
+            "page-click" => {
+                let _ = self.proxy.send_event(UserMessage::PageClicked(self.tab_id));
+            }
             "hover-off" => self.hover_force = None,
             "rename-dialog" => self.rename = Some(self.win_name.clone().unwrap_or_default()),
             "tabs-top" | "tabs-left" | "tabs-right" => {
@@ -7066,7 +7184,9 @@ mod tests {
         assert_eq!(shortcut_for(&ch("I"), true, true, false, false), Some(Shortcut::DevTools));
         assert_eq!(shortcut_for(&ch("d"), true, false, false, false), Some(Shortcut::Bookmark));
         assert_eq!(shortcut_for(&ch("B"), true, true, false, false), Some(Shortcut::BookmarksBar));
-        assert_eq!(shortcut_for(&ch("b"), true, false, false, false), None);
+        assert_eq!(shortcut_for(&ch("b"), true, false, false, false), Some(Shortcut::ToggleSidebar));
+        assert_eq!(shortcut_for(&ch("b"), true, false, false, true), Some(Shortcut::ToggleSidebar), "the chrome's text fields too");
+        assert_eq!(shortcut_for(&ch("b"), false, false, false, false), None);
         assert_eq!(shortcut_for(&ch("O"), true, true, false, false), Some(Shortcut::BookmarksPage));
 
         // Chrome's tab and page shortcuts.
@@ -7250,6 +7370,7 @@ mod tests {
         assert_eq!(web_shortcut_for(0x50, true, false, false), Some(Shortcut::Palette));
         assert_eq!(web_shortcut_for(0x70, false, false, false), Some(Shortcut::Palette));
         assert_eq!(web_shortcut_for(0x43, true, false, false), None); // Ctrl+C stays with WebView2
+        assert_eq!(web_shortcut_for(0x42, true, false, false), None); // Ctrl+B: Bold in the page's editors
         assert_eq!(web_shortcut_for(0x0D, true, false, false), None); // Ctrl+Enter
     }
 

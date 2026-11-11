@@ -495,6 +495,10 @@ impl Browser {
             recording: self.feat.recorder.path().is_some(),
             theme: crate::flags::get().theme,
             plugin_commands: self.plugin_palette_commands(),
+            user_agent: self.web_page.then(|| crate::useragent::url_host(&self.current_url())).flatten().map(|host| {
+                let (current, origin) = crate::useragent::choice_for_host(&host);
+                palette::UserAgentSite { host, current, origin }
+            }),
         }
     }
 
@@ -516,7 +520,24 @@ impl Browser {
                 let target = if self.web_page { super::plugins_host::Target::Page(self.tab_id) } else { super::plugins_host::Target::Nothing };
                 self.run_plugin_command(&plugin, &command, target);
             }
+            PaletteOutcome::SetUserAgent { host, choice } => self.set_site_user_agent(&host, choice),
         }
+    }
+
+    /// Saves the palette's User-Agent pick for `host` and reloads the page,
+    /// which then goes out with it.
+    fn set_site_user_agent(&mut self, host: &str, choice: Option<crate::useragent::Choice>) {
+        if let Err(error) = crate::useragent::choose_for_host(host, choice) {
+            self.set_notice(error);
+            return;
+        }
+        let (now, origin) = crate::useragent::choice_for_host(host);
+        let how = match origin {
+            crate::useragent::Origin::BuiltIn => " (built in)",
+            _ => "",
+        };
+        self.set_notice(format!("{host} now sees {}{how}", now.label()));
+        self.reload();
     }
 
     /// Runs a palette command (also used by the toolbar buttons).
@@ -546,6 +567,8 @@ impl Browser {
             PrevTab => self.cycle_tab(-1),
             NewTabGroup => self.group_new_from_tab(self.active),
             AddTabToGroup => self.feat.palette.open_with("& "),
+            SiteUserAgent => self.feat.palette.open_with("^ "),
+            ToggleSidebar => self.toggle_sidebar(),
             RemoveTabFromGroup => {
                 if self.groups.group_of(self.tab_id).is_some() {
                     self.group_remove_tab(self.active);
