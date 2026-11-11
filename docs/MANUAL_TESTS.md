@@ -228,3 +228,17 @@ For each row try the built-in choice (Safari on macOS) first, then Chrome and Ed
 | 9.7 | Browse in a temporary container; open `browsecraft://history` | Those pages are not listed | |
 | 9.8 | History page: search, *Older*, *Remove*, *Last hour*; restart | Changes persist across restarts | |
 
+## 10. Site permissions and other browsers (wave 8)
+
+| # | Steps | Expected | Result |
+|---|---|---|---|
+| 10.1 | https://webcamtests.com or a getUserMedia test page: start the camera | Bar "<host> wants to use your camera" under the toolbar, Remember ticked; Allow starts the camera (getUserMedia does not need WebRTC) | |
+| 10.2 | Reload 10.1 | No bar: the saved allow applies; *Settings → Site permissions* lists it; *Reset* there, reload: the bar again | |
+| 10.3 | Untick Remember, Block; reload | Blocked once, asked again after the reload | |
+| 10.4 | Ask for the camera, then navigate the tab elsewhere (or close it) before answering | Bar disappears; the request is denied | |
+| 10.5 | Request in a background tab, switch to it | The bar shows there, not in the other tab | |
+| 10.6 | Screen sharing test page (getDisplayMedia) | "wants to share your screen", "Asked every time"; an Allow is not saved | |
+| 10.7 | Palette `!` on a site: Camera: Block; then *Reset site permissions* | Notice; the site asks again | |
+| 10.8 | Open teams.microsoft.com on the distro WebKitGTK (no WebRTC) | One-time bar "Calls need WebRTC…" with "Open in <browser>"; the button opens the page there; not shown again this run | |
+| 10.9 | Tab menu *Open page in another browser* on a web page and on `browsecraft://flags` | Opens in the default browser / notice "Only web pages…" | |
+| 10.10 | Location (maps site) and notifications (`Notification.requestPermission()` in the console) | Same bar with the right text; answers saved per host | |

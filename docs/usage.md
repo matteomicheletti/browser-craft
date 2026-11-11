@@ -476,6 +476,42 @@ On a page with a login form the key menu lists the logins saved for that site: c
 
 Web pages see `Mozilla/5.0 (X11; Linux <arch>) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15`. WebKitGTK's own default claims a made-up "Safari 60.5", which Outlook on the web rejects (`OwaBasicUnsupportedException`). Microsoft 365 (`*.cloud.microsoft`, `*.office.com`, `*.office365.com`, `*.microsoft365.com`, `outlook.live.com`, Teams, `login.microsoftonline.com`, `login.live.com`, `*.sharepoint.com`, OneDrive) gets Safari on macOS, as WebKit's own quirk already does for `outlook.office.com`. Palette *User agent for this site…* (`^`) picks Default, Safari, Chrome, Firefox or Edge for the current host and reloads; *Settings → Site user agents* lists the overrides (remove, add a `host` or `*.domain` pattern, custom string). They live in `user-agents.txt` in the settings folder. WebKit's site-specific quirks stay on, but a WebKit UA quirk replaces any custom string, so they are off for a view while one of our overrides applies. The string switches in the navigation decision, so the first request to the new host carries it (a script navigation across sites is loaded again once). One string per tab: iframes use their page's. A Chrome or Edge string has no `navigator.userAgentData`, which some sites may notice. `browsecraft headless … --user-agent <preset|string>` forces one for every site.
 
+## Site permissions
+
+When a page asks for the microphone, camera, screen sharing, location,
+notifications, the clipboard or its cookies inside another site, a bar under
+the toolbar of the tab's window says so (*teams.microsoft.com wants to use your
+microphone and camera*) with **Allow**, **Block** and *Remember for this site*
+(ticked by default). The page waits until you answer; a tab in the background
+shows its bar when you switch to it. A request still waiting when the tab goes
+to another page or closes is blocked.
+
+With *Remember for this site* the answer is saved for that host (not its
+subdomains) in `permissions.json` in the settings folder, and the site is not
+asked again; without it the answer is for that one request. Nothing is allowed
+without your click or a saved allow. Screen sharing is asked every time: only a
+block can be remembered. The names of cameras and microphones are shown to a
+site only while it may use one of them.
+
+Palette *Site permissions for this site…* (`!`) sets Allow, Block or Ask for
+each permission of the current site; *Reset site permissions* forgets them all
+for it. *Settings → Site permissions* lists every saved decision with *Reset*,
+*Reset site* and *Reset all*. The site is the page's address: a permission an
+embedded frame asks for is shown as the page's (cookies in another site are
+saved for the embedded site).
+
+Calls (Teams, Meet, Zoom, Jitsi) also need WebRTC, which the Arch and Manjaro
+WebKitGTK builds do not include. On those sites a one-time bar says so and
+offers to open the page in your default browser. See
+`scripts/build-webkit-webrtc.sh` (untested) to build WebKitGTK with WebRTC.
+
+## Open page in another browser
+
+Palette *Open page in another browser*, or a tab's right-click menu, hands the
+page's address to the system's default browser (`xdg-open`, else `gio open`, on
+Linux; `open` on macOS; the URL handler on Windows). Only web pages (`http`,
+`https`): internal pages and files never leave.
+
 ## Ad blocking
 
 BrowseCraft blocks ads and trackers with a small built-in filter list plus every

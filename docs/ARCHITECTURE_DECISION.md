@@ -103,3 +103,15 @@ Implementation (M1, `src/main.rs`, `src/browser.rs`, `src/storage.rs`):
   milestone.
 - Headless screenshots still use the own engine (no JS); an AI-first
   headless mode on WebKit is planned (ROADMAP, M1b).
+- **WebRTC on Arch/Manjaro**: the distribution's `webkit2gtk-4.1` (2.52) is
+  built without `ENABLE_WEB_RTC`, so `RTCPeerConnection` does not exist even
+  with `enable-webrtc` on (checked in plain WebKitGTK from Python, outside
+  BrowseCraft). Teams then says "You can't receive or make calls right now";
+  Meet, Zoom and Jitsi calls fail the same way. `getUserMedia` (camera and
+  microphone) is separate and works through the site permission prompt. The
+  browser checks `typeof RTCPeerConnection` once per run, in an isolated
+  script world, the first time a call site finishes loading, and offers to
+  open the page in the default browser. Real calls need a WebKitGTK built
+  with `-DENABLE_WEB_RTC=ON -DUSE_GSTREAMER_WEBRTC=ON`:
+  `scripts/build-webkit-webrtc.sh` (untested, hours of compile, ~30 GB) builds
+  Arch's package that way; installing it is the owner's call.
