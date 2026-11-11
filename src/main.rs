@@ -37,8 +37,10 @@ mod passwords;
 mod recording;
 mod plugins;
 mod servo_pane;
+mod split;
 mod storage;
 mod style;
+mod tab_groups;
 mod textfield;
 #[cfg(test)]
 mod test_http;
