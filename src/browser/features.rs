@@ -295,6 +295,16 @@ impl Browser {
             return;
         }
         self.feat.plugins_generation = generation;
+        // Built-ins turned off take effect at once.
+        if !plugins::is_enabled("builtin.darkmode") {
+            let mut off = self.feat.dark.settings().clone();
+            off.enabled = false;
+            self.evaluate_in_all_tabs(&darkmode::update_script(&off, Some(self.dark())));
+        }
+        if !plugins::is_enabled("builtin.authenticator") && self.feat.auth.is_unlocked() {
+            self.feat.auth.lock();
+            self.feat.auth_unlocked = false;
+        }
         if self.all_views().next().is_some() {
             self.feat.plugins_stale = true;
             self.set_notice("Plugins changed: new tabs use them. Reload open tabs from the Plugins panel to apply");
