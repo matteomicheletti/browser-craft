@@ -12,6 +12,7 @@ mod bookmarks;
 mod browser;
 mod capture;
 mod css;
+mod darkmode;
 mod dom;
 mod egui_chrome;
 mod flags;

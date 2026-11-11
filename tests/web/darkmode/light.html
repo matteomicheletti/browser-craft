@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Light page</title>
+<style>
+body{font:16px/1.5 sans-serif;margin:24px;background:#fff;color:#222}
+a{color:#0645ad} h1{border-bottom:1px solid #ccc}
+table{border-collapse:collapse} td,th{border:1px solid #bbb;padding:4px 10px} th{background:#eef}
+.card{background:#f6f6f6;border:1px solid #ddd;padding:12px;margin:12px 0;max-width:420px}
+.hero{height:60px;background:linear-gradient(90deg,#fff,#cde);margin:8px 0}
+</style></head><body>
+<h1>Light page</h1>
+<p>Body text with a <a href="#">link</a> and <b>bold</b>. Dark mode should turn this page dark and keep it readable.</p>
+<div class="card">A card with a light grey background.</div>
+<div class="hero">gradient background</div>
+<table><tr><th>Name</th><th>Qty</th></tr><tr><td>Apple</td><td>3</td></tr><tr><td>Pear</td><td>5</td></tr></table>
+<form style="margin:12px 0"><input value="text field"> <select><option>Option A</option></select>
+<textarea rows="2">textarea</textarea> <button type="button">Button</button></form>
+<p><img alt="img" src="data:image/svg+xml;utf8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='80'%3E%3Crect width='120' height='80' fill='%23fff'/%3E%3Ccircle cx='40' cy='40' r='28' fill='%23e63946'/%3E%3Crect x='70' y='15' width='40' height='50' fill='%232a9d8f'/%3E%3C/svg%3E"> <canvas id="c" width="120" height="80"></canvas></p>
+<script>var g=document.getElementById('c').getContext('2d');g.fillStyle='#fff';g.fillRect(0,0,120,80);g.fillStyle='#e9c46a';g.fillRect(10,10,60,40);g.fillStyle='#000';g.fillText('canvas',20,70);</script>
+</body></html>
