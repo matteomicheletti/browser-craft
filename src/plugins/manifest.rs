@@ -1,0 +1,688 @@
+//! `plugin.toml`: parsing, validation and loading of a plugin folder.
+//!
+//! Everything here treats the folder as untrusted: size limits on every file,
+//! relative paths only, and a canonical-path check so a symlink cannot point a
+//! script, style or WASM entry outside the plugin folder.
+
+use super::pattern::MatchPattern;
+use super::permissions::{self, Permission, Requested};
+use serde::Deserialize;
+use serde_json::Value;
+use std::path::{Path, PathBuf};
+
+pub const MANIFEST_FILE: &str = "plugin.toml";
+pub const MAX_MANIFEST: u64 = 64 * 1024;
+/// One script or style file.
+pub const MAX_SOURCE: u64 = 1024 * 1024;
+pub const MAX_WASM: u64 = 4 * 1024 * 1024;
+/// A whole plugin folder (install and dev loading).
+pub const MAX_TOTAL: u64 = 16 * 1024 * 1024;
+pub const MAX_FILES: usize = 500;
+
+// ---- versions ----
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Version {
+    pub major: u64,
+    pub minor: u64,
+    pub patch: u64,
+    pub pre: String,
+}
+
+impl Version {
+    /// `MAJOR.MINOR.PATCH[-pre][+build]`, numbers without leading zeros.
+    pub fn parse(s: &str) -> Result<Self, String> {
+        let bad = || format!("version \"{s}\" is not semver (MAJOR.MINOR.PATCH)");
+        if s.len() > 64 {
+            return Err(bad());
+        }
+        let core = s.split('+').next().unwrap_or("");
+        let (nums, pre) = match core.split_once('-') {
+            Some((n, p)) => (n, p),
+            None => (core, ""),
+        };
+        let mut it = nums.split('.');
+        let mut num = || -> Result<u64, String> {
+            let p = it.next().ok_or_else(bad)?;
+            if p.is_empty() || !p.bytes().all(|b| b.is_ascii_digit()) || (p.len() > 1 && p.starts_with('0')) {
+                return Err(bad());
+            }
+            p.parse().map_err(|_| bad())
+        };
+        let (major, minor, patch) = (num()?, num()?, num()?);
+        if it.next().is_some() {
+            return Err(bad());
+        }
+        if core.contains('-') && (pre.is_empty() || !pre.chars().all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')) {
+            return Err(bad());
+        }
+        Ok(Self { major, minor, patch, pre: pre.into() })
+    }
+}
+
+impl std::fmt::Display for Version {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}.{}.{}", self.major, self.minor, self.patch)?;
+        if !self.pre.is_empty() {
+            write!(f, "-{}", self.pre)?;
+        }
+        Ok(())
+    }
+}
+
+/// `"1"` or `"1.2"`: the plugin API the plugin was written for.
+fn parse_api(s: &str) -> Result<(u32, u32), String> {
+    let bad = || format!("api_version \"{s}\" must look like \"1\" or \"1.0\"");
+    let (maj, min) = match s.split_once('.') {
+        Some((a, b)) => (a, b),
+        None => (s, "0"),
+    };
+    let n = |x: &str| {
+        (!x.is_empty() && x.len() < 6 && x.bytes().all(|b| b.is_ascii_digit()))
+            .then(|| x.parse::<u32>().ok())
+            .flatten()
+            .ok_or_else(bad)
+    };
+    let (major, minor) = (n(maj)?, n(min)?);
+    if major != permissions::API_MAJOR {
+        return Err(format!(
+            "api_version {major}.{minor} is not supported: this browser implements API {}.{}",
+            permissions::API_MAJOR,
+            permissions::API_MINOR
+        ));
+    }
+    if minor > permissions::API_MINOR {
+        return Err(format!(
+            "plugin needs API {major}.{minor}, this browser implements {}.{}: update the browser",
+            permissions::API_MAJOR,
+            permissions::API_MINOR
+        ));
+    }
+    Ok((major, minor))
+}
+
+// ---- ids ----
+
+/// Reverse-DNS: at least two dot-separated segments of `[a-z0-9_-]`.
+pub fn valid_id(id: &str) -> bool {
+    id.len() <= 100
+        && id.split('.').count() >= 2
+        && id.split('.').all(|seg| {
+            !seg.is_empty()
+                && seg.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-' || b == b'_')
+                && !seg.starts_with(['-', '_'])
+        })
+}
+
+// ---- manifest ----
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum RunAt {
+    DocumentStart,
+    #[default]
+    DocumentEnd,
+    Idle,
+}
+
+impl RunAt {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DocumentStart => "document_start",
+            Self::DocumentEnd => "document_end",
+            Self::Idle => "idle",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct ContentScript {
+    pub matches: Vec<MatchPattern>,
+    pub exclude_matches: Vec<MatchPattern>,
+    pub js: Vec<String>,
+    pub css: Vec<String>,
+    pub run_at: RunAt,
+    pub all_frames: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OptionKind {
+    Bool,
+    String,
+    Number,
+    Choice,
+}
+
+/// One user-editable setting, rendered in the manager and handed to the
+/// plugin as `bc.settings.<key>`.
+#[derive(Clone, Debug)]
+pub struct OptionDef {
+    pub key: String,
+    pub kind: OptionKind,
+    pub label: String,
+    pub default: Value,
+    pub choices: Vec<String>,
+    pub min: Option<f64>,
+    pub max: Option<f64>,
+}
+
+impl OptionDef {
+    /// Checks a user-supplied value against the definition.
+    pub fn check(&self, v: &Value) -> Result<Value, String> {
+        match (self.kind, v) {
+            (OptionKind::Bool, Value::Bool(_)) => Ok(v.clone()),
+            (OptionKind::String, Value::String(s)) if s.len() <= 1024 && !s.contains('\0') => Ok(v.clone()),
+            (OptionKind::Number, Value::Number(n)) => {
+                let x = n.as_f64().filter(|x| x.is_finite()).ok_or("number out of range")?;
+                if self.min.is_some_and(|m| x < m) || self.max.is_some_and(|m| x > m) {
+                    return Err(format!("{} must be between {} and {}", self.key, self.min.unwrap_or(f64::MIN), self.max.unwrap_or(f64::MAX)));
+                }
+                Ok(v.clone())
+            }
+            (OptionKind::Choice, Value::String(s)) if self.choices.contains(s) => Ok(v.clone()),
+            _ => Err(format!("invalid value for setting \"{}\"", self.key)),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Manifest {
+    pub id: String,
+    pub name: String,
+    pub version: Version,
+    pub api: (u32, u32),
+    pub description: String,
+    pub author: String,
+    pub homepage: String,
+    pub permissions: Vec<Requested>,
+    pub content_scripts: Vec<ContentScript>,
+    pub options: Vec<OptionDef>,
+    /// Path of the optional WASM module, relative to the plugin folder.
+    pub wasm: Option<String>,
+}
+
+impl Manifest {
+    pub fn has(&self, p: Permission) -> bool {
+        self.permissions.contains(&Requested::Api(p))
+    }
+
+    /// Does any content script of this plugin apply to `url`?
+    pub fn applies_to(&self, url: &str) -> bool {
+        self.content_scripts
+            .iter()
+            .any(|c| super::pattern::matches_any(&c.matches, &c.exclude_matches, url))
+    }
+
+    /// Default values of all options.
+    pub fn default_settings(&self) -> serde_json::Map<String, Value> {
+        self.options.iter().map(|o| (o.key.clone(), o.default.clone())).collect()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawManifest {
+    id: String,
+    name: String,
+    version: String,
+    api_version: String,
+    #[serde(default)]
+    description: String,
+    #[serde(default)]
+    author: String,
+    #[serde(default)]
+    homepage: String,
+    #[serde(default)]
+    permissions: Vec<String>,
+    #[serde(default)]
+    content_scripts: Vec<RawScript>,
+    #[serde(default)]
+    options: Vec<RawOption>,
+    wasm: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawScript {
+    #[serde(default)]
+    matches: Vec<String>,
+    #[serde(default)]
+    exclude_matches: Vec<String>,
+    #[serde(default)]
+    js: Vec<String>,
+    #[serde(default)]
+    css: Vec<String>,
+    #[serde(default)]
+    run_at: RunAt,
+    #[serde(default)]
+    all_frames: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawOption {
+    key: String,
+    #[serde(rename = "type")]
+    kind: String,
+    #[serde(default)]
+    label: String,
+    default: Option<toml::Value>,
+    #[serde(default)]
+    choices: Vec<String>,
+    min: Option<f64>,
+    max: Option<f64>,
+}
+
+fn toml_to_json(v: &toml::Value) -> Option<Value> {
+    Some(match v {
+        toml::Value::Boolean(b) => Value::Bool(*b),
+        toml::Value::String(s) => Value::String(s.clone()),
+        toml::Value::Integer(i) => Value::from(*i),
+        toml::Value::Float(f) => Value::from(*f),
+        _ => return None,
+    })
+}
+
+fn is_ident(s: &str) -> bool {
+    !s.is_empty() && s.len() <= 64 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_') && !s.as_bytes()[0].is_ascii_digit()
+}
+
+impl Manifest {
+    /// Parses and validates the text of a `plugin.toml`. All problems found
+    /// are returned together so a developer can fix them in one pass.
+    pub fn parse(text: &str) -> Result<Self, Vec<String>> {
+        let raw: RawManifest = toml::from_str(text).map_err(|e| vec![format!("plugin.toml: {}", e.message())])?;
+        let mut errs = Vec::new();
+        let mut err = |s: String| errs.push(s);
+
+        if !valid_id(&raw.id) {
+            err(format!("id \"{}\" must be reverse-DNS, lowercase (e.g. com.example.my-plugin)", raw.id));
+        } else if raw.id.starts_with("builtin.") {
+            err("ids starting with \"builtin.\" are reserved for the browser's own components".into());
+        }
+        let len_ok = |s: &str, max: usize| s.chars().count() <= max && !s.contains(char::is_control);
+        if raw.name.trim().is_empty() || !len_ok(&raw.name, 80) {
+            err("name is required (at most 80 characters, no control characters)".into());
+        }
+        if !len_ok(&raw.description, 500) || !len_ok(&raw.author, 120) {
+            err("description (500) or author (120) is too long or has control characters".into());
+        }
+        if !raw.homepage.is_empty() && !(raw.homepage.starts_with("https://") || raw.homepage.starts_with("http://")) || raw.homepage.len() > 300 {
+            err("homepage must be an http(s) address".into());
+        }
+        let version = Version::parse(&raw.version).map_err(&mut err).ok();
+        let api = parse_api(&raw.api_version).map_err(&mut err).ok();
+
+        let mut permissions = Vec::new();
+        if raw.permissions.len() > 32 {
+            err("too many permissions (32 at most)".into());
+        }
+        for p in raw.permissions.iter().take(32) {
+            match Requested::parse(p) {
+                Ok(r) if !permissions.contains(&r) => permissions.push(r),
+                Ok(_) => {}
+                Err(e) => err(e),
+            }
+        }
+
+        let mut scripts = Vec::new();
+        if raw.content_scripts.len() > 16 {
+            err("too many content_scripts (16 at most)".into());
+        }
+        let has = |p: Permission| permissions.contains(&Requested::Api(p));
+        for (i, s) in raw.content_scripts.iter().take(16).enumerate() {
+            let at = |m: &str| format!("content_scripts[{i}]: {m}");
+            if s.matches.is_empty() {
+                err(at("matches is required"));
+            }
+            if s.js.is_empty() && s.css.is_empty() {
+                err(at("needs at least one js or css file"));
+            }
+            if s.matches.len() > 32 || s.exclude_matches.len() > 32 || s.js.len() > 16 || s.css.len() > 16 {
+                err(at("too many patterns or files"));
+                continue;
+            }
+            let mut pats = |list: &[String]| -> Vec<MatchPattern> {
+                list.iter().filter_map(|p| MatchPattern::parse(p).map_err(|e| err(at(&e))).ok()).collect()
+            };
+            let (matches, exclude_matches) = (pats(&s.matches), pats(&s.exclude_matches));
+            if !s.js.is_empty() && !(has(Permission::PageRead) || has(Permission::PageModify)) {
+                err(at("js needs the page.read or page.modify permission"));
+            }
+            if !s.css.is_empty() && !has(Permission::PageModify) {
+                err(at("css needs the page.modify permission"));
+            }
+            scripts.push(ContentScript {
+                matches,
+                exclude_matches,
+                js: s.js.clone(),
+                css: s.css.clone(),
+                run_at: s.run_at,
+                all_frames: s.all_frames,
+            });
+        }
+
+        let mut options: Vec<OptionDef> = Vec::new();
+        if raw.options.len() > 32 {
+            err("too many options (32 at most)".into());
+        }
+        for o in raw.options.iter().take(32) {
+            let at = |m: &str| format!("options \"{}\": {m}", o.key);
+            if !is_ident(&o.key) || options.iter().any(|x| x.key == o.key) {
+                err(at("key must be a unique identifier"));
+                continue;
+            }
+            let kind = match o.kind.as_str() {
+                "bool" => OptionKind::Bool,
+                "string" => OptionKind::String,
+                "number" => OptionKind::Number,
+                "choice" => OptionKind::Choice,
+                _ => {
+                    err(at("type must be bool, string, number or choice"));
+                    continue;
+                }
+            };
+            if kind == OptionKind::Choice && (o.choices.is_empty() || o.choices.len() > 32) {
+                err(at("choice options need 1 to 32 choices"));
+                continue;
+            }
+            let Some(default) = o.default.as_ref().and_then(toml_to_json) else {
+                err(at("a scalar default is required"));
+                continue;
+            };
+            let def = OptionDef {
+                key: o.key.clone(),
+                kind,
+                label: if o.label.is_empty() { o.key.clone() } else { o.label.chars().take(80).collect() },
+                default,
+                choices: o.choices.clone(),
+                min: o.min,
+                max: o.max,
+            };
+            match def.check(&def.default) {
+                Ok(_) => options.push(def),
+                Err(e) => err(at(&format!("default is invalid ({e})"))),
+            }
+        }
+
+        if let Some(w) = &raw.wasm
+            && !w.ends_with(".wasm")
+        {
+            err("wasm must name a .wasm file".into());
+        }
+        let manifest_ok = errs.is_empty();
+        match (manifest_ok, version, api) {
+            (true, Some(version), Some(api)) => Ok(Self {
+                id: raw.id,
+                name: raw.name.trim().into(),
+                version,
+                api,
+                description: raw.description,
+                author: raw.author,
+                homepage: raw.homepage,
+                permissions,
+                content_scripts: scripts,
+                options,
+                wasm: raw.wasm,
+            }),
+            _ => Err(errs),
+        }
+    }
+}
+
+// ---- loading a folder ----
+
+#[derive(Debug)]
+pub struct LoadedScript {
+    pub matches: Vec<MatchPattern>,
+    pub exclude: Vec<MatchPattern>,
+    pub run_at: RunAt,
+    pub all_frames: bool,
+    /// (file name, source)
+    pub js: Vec<(String, String)>,
+    pub css: Vec<(String, String)>,
+}
+
+#[derive(Debug)]
+pub struct LoadedPlugin {
+    pub manifest: Manifest,
+    pub dir: PathBuf,
+    pub scripts: Vec<LoadedScript>,
+    pub wasm: Option<Vec<u8>>,
+}
+
+/// Resolves a manifest-relative path inside `root` (already canonical). The
+/// result is canonical too, so a symlink leading outside is refused.
+pub fn safe_join(root: &Path, rel: &str) -> Result<PathBuf, String> {
+    let bad = |why: &str| format!("\"{rel}\": {why}");
+    if rel.is_empty() || rel.len() > 200 || rel.contains(['\\', '\0']) || rel.contains(char::is_control) {
+        return Err(bad("not a valid relative path"));
+    }
+    let p = Path::new(rel);
+    if p.is_absolute() || rel.starts_with('/') {
+        return Err(bad("absolute paths are not allowed"));
+    }
+    if p.components().any(|c| !matches!(c, std::path::Component::Normal(_))) {
+        return Err(bad("\"..\" and \".\" are not allowed"));
+    }
+    let full = root.join(p).canonicalize().map_err(|_| bad("file not found"))?;
+    if !full.starts_with(root) {
+        return Err(bad("resolves outside the plugin folder (symlink?)"));
+    }
+    if !full.is_file() {
+        return Err(bad("not a regular file"));
+    }
+    Ok(full)
+}
+
+fn read_source(root: &Path, rel: &str, max: u64) -> Result<String, String> {
+    let path = safe_join(root, rel)?;
+    crate::storage::read_text_limited(&path, max).map_err(|e| format!("\"{rel}\": {e}"))
+}
+
+/// Reads the manifest and every file it names. Errors are user-facing.
+pub fn load_dir(dir: &Path) -> Result<LoadedPlugin, Vec<String>> {
+    let root = dir.canonicalize().map_err(|e| vec![format!("{}: {e}", dir.display())])?;
+    if !root.is_dir() {
+        return Err(vec![format!("{} is not a folder", dir.display())]);
+    }
+    let mpath = safe_join(&root, MANIFEST_FILE).map_err(|_| vec![format!("no {MANIFEST_FILE} in {}", dir.display())])?;
+    let text = crate::storage::read_text_limited(&mpath, MAX_MANIFEST).map_err(|e| vec![format!("{MANIFEST_FILE}: {e}")])?;
+    let manifest = Manifest::parse(&text)?;
+    let mut errs = Vec::new();
+    let mut total = text.len() as u64;
+    let mut scripts = Vec::new();
+    for cs in &manifest.content_scripts {
+        let mut load = |files: &[String], errs: &mut Vec<String>| -> Vec<(String, String)> {
+            let mut out = Vec::new();
+            for f in files {
+                match read_source(&root, f, MAX_SOURCE) {
+                    Ok(src) => {
+                        total += src.len() as u64;
+                        out.push((f.clone(), src));
+                    }
+                    Err(e) => errs.push(e),
+                }
+            }
+            out
+        };
+        let js = load(&cs.js, &mut errs);
+        let css = load(&cs.css, &mut errs);
+        scripts.push(LoadedScript {
+            matches: cs.matches.clone(),
+            exclude: cs.exclude_matches.clone(),
+            run_at: cs.run_at,
+            all_frames: cs.all_frames,
+            js,
+            css,
+        });
+    }
+    let wasm = match &manifest.wasm {
+        Some(w) => match safe_join(&root, w).and_then(|p| crate::storage::read_limited(&p, MAX_WASM).map_err(|e| format!("\"{w}\": {e}"))) {
+            Ok(b) => {
+                total += b.len() as u64;
+                Some(b)
+            }
+            Err(e) => {
+                errs.push(e);
+                None
+            }
+        },
+        None => None,
+    };
+    if total > MAX_TOTAL {
+        errs.push(format!("plugin is larger than {} MB", MAX_TOTAL >> 20));
+    }
+    if errs.is_empty() { Ok(LoadedPlugin { manifest, dir: root, scripts, wasm }) } else { Err(errs) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const GOOD: &str = r#"
+id = "com.example.hello"
+name = "Hello"
+version = "1.2.3-beta.1"
+api_version = "1.0"
+permissions = ["page.modify", "storage", "*://*.example.com/*"]
+
+[[content_scripts]]
+matches = ["*://*.example.com/*"]
+exclude_matches = ["*://www.example.com/private/*"]
+js = ["a.js"]
+css = ["a.css"]
+run_at = "document_start"
+
+[[options]]
+key = "color"
+type = "choice"
+choices = ["red", "blue"]
+default = "red"
+
+[[options]]
+key = "size"
+type = "number"
+default = 10
+min = 1
+max = 20
+"#;
+
+    #[test]
+    fn a_good_manifest_parses() {
+        let m = Manifest::parse(GOOD).unwrap();
+        assert_eq!(m.id, "com.example.hello");
+        assert_eq!(m.version.to_string(), "1.2.3-beta.1");
+        assert_eq!(m.permissions.len(), 3);
+        assert!(m.has(Permission::Storage) && !m.has(Permission::TabsRead));
+        assert_eq!(m.content_scripts[0].run_at, RunAt::DocumentStart);
+        assert!(m.applies_to("https://shop.example.com/x"));
+        assert!(!m.applies_to("https://www.example.com/private/x"));
+        assert_eq!(m.default_settings()["size"], 10);
+    }
+
+    #[test]
+    fn versions() {
+        assert!(Version::parse("1.0.0").is_ok());
+        assert!(Version::parse("0.10.2+build5").is_ok());
+        assert!(Version::parse("1.0.0") < Version::parse("1.0.1"));
+        for bad in ["1", "1.0", "01.0.0", "1.0.0.0", "a.b.c", "1.0.0-", "1.0.0-a b", ""] {
+            assert!(Version::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn ids() {
+        assert!(valid_id("com.example.my-plugin"));
+        assert!(valid_id("a.b"));
+        for bad in ["hello", "Com.Example", "com..x", ".com.x", "com.-x", "com.ex ample", "com.example/../x"] {
+            assert!(!valid_id(bad), "{bad}");
+        }
+    }
+
+    #[test]
+    fn api_versions() {
+        assert!(parse_api("1").is_ok() && parse_api("1.0").is_ok());
+        assert!(parse_api("2").unwrap_err().contains("not supported"));
+        assert!(parse_api("1.9").unwrap_err().contains("update the browser"));
+        assert!(parse_api("x").is_err());
+    }
+
+    fn with(replace: (&str, &str)) -> Result<Manifest, Vec<String>> {
+        Manifest::parse(&GOOD.replace(replace.0, replace.1))
+    }
+
+    #[test]
+    fn validation_reports_every_problem() {
+        let e = Manifest::parse("id = \"x\"\nname = \"\"\nversion = \"1\"\napi_version = \"9\"\npermissions = [\"root\"]").unwrap_err();
+        assert!(e.len() >= 5, "{e:?}");
+        assert!(with(("id = \"com.example.hello\"", "id = \"builtin.evil\"")).unwrap_err()[0].contains("reserved"));
+        assert!(with(("\"page.modify\", ", "")).unwrap_err().iter().any(|m| m.contains("page.modify")));
+        assert!(with(("matches = [\"*://*.example.com/*\"]", "matches = [\"example.com\"]")).is_err());
+        assert!(with(("default = \"red\"", "default = \"green\"")).is_err());
+        assert!(with(("max = 20", "max = 5")).is_err());
+        assert!(Manifest::parse("not toml [").is_err());
+        assert!(Manifest::parse(&format!("{GOOD}\nunknown_key = 1")).is_err(), "typos are caught");
+    }
+
+    #[test]
+    fn js_without_page_permission_is_rejected() {
+        let t = GOOD.replace("\"page.modify\", ", "");
+        let e = Manifest::parse(&t).unwrap_err();
+        assert!(e.iter().any(|m| m.contains("js needs")));
+    }
+
+    #[test]
+    fn option_values_are_checked() {
+        let m = Manifest::parse(GOOD).unwrap();
+        let size = &m.options[1];
+        assert!(size.check(&Value::from(5)).is_ok());
+        assert!(size.check(&Value::from(50)).is_err());
+        assert!(size.check(&Value::from("5")).is_err());
+        assert!(m.options[0].check(&Value::from("blue")).is_ok());
+        assert!(m.options[0].check(&Value::from("pink")).is_err());
+    }
+
+    #[test]
+    fn safe_join_blocks_traversal_and_symlinks() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path().join("p");
+        std::fs::create_dir_all(root.join("sub")).unwrap();
+        std::fs::write(root.join("sub/a.js"), "1").unwrap();
+        std::fs::write(d.path().join("secret.js"), "s").unwrap();
+        let root = root.canonicalize().unwrap();
+        assert!(safe_join(&root, "sub/a.js").is_ok());
+        for bad in ["../secret.js", "/etc/passwd", "sub/../../secret.js", "", "sub\\a.js", "./sub/a.js", "missing.js", "sub"] {
+            assert!(safe_join(&root, bad).is_err(), "{bad}");
+        }
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(d.path().join("secret.js"), root.join("link.js")).unwrap();
+            assert!(safe_join(&root, "link.js").unwrap_err().contains("outside"));
+            std::os::unix::fs::symlink("sub/a.js", root.join("inner.js")).unwrap();
+            assert!(safe_join(&root, "inner.js").is_ok(), "links inside the folder are fine");
+        }
+    }
+
+    #[test]
+    fn load_dir_reads_files_and_limits_sizes() {
+        let d = tempfile::tempdir().unwrap();
+        let t = r#"id = "com.t.x"
+name = "X"
+version = "1.0.0"
+api_version = "1"
+permissions = ["page.modify"]
+[[content_scripts]]
+matches = ["<all_urls>"]
+js = ["a.js"]
+"#;
+        std::fs::write(d.path().join("plugin.toml"), t).unwrap();
+        assert!(load_dir(d.path()).unwrap_err()[0].contains("not found"));
+        std::fs::write(d.path().join("a.js"), "1").unwrap();
+        let p = load_dir(d.path()).unwrap();
+        assert_eq!(p.scripts[0].js[0].1, "1");
+        std::fs::write(d.path().join("a.js"), vec![b'x'; (MAX_SOURCE + 1) as usize]).unwrap();
+        assert!(load_dir(d.path()).unwrap_err()[0].contains("larger"));
+        assert!(load_dir(&d.path().join("nope")).is_err());
+    }
+}

@@ -26,6 +26,7 @@ mod loader;
 mod net;
 mod paint;
 mod passwords;
+mod plugins;
 mod servo_pane;
 mod storage;
 mod style;
