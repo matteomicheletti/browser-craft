@@ -102,6 +102,12 @@ impl Split {
     }
 }
 
+/// Whether a background tab may be unloaded to save memory: never the
+/// split view's visible pane (`partner`), never a tab playing sound.
+pub fn may_unload(tab: u64, partner: Option<u64>, playing_audio: bool) -> bool {
+    !playing_audio && partner != Some(tab)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,6 +157,14 @@ mod tests {
         assert_eq!(r, (358.0, 750.0));
         assert_eq!(l.1 + d.1 + r.1, 1008.0);
         assert_eq!(s.pane(Side::Right, 100.0, 1008.0, 8.0), r);
+    }
+
+    #[test]
+    fn the_visible_pane_is_never_unloaded() {
+        assert!(!may_unload(7, Some(7), false));
+        assert!(may_unload(8, Some(7), false));
+        assert!(!may_unload(8, Some(7), true));
+        assert!(may_unload(8, None, false));
     }
 
     #[test]

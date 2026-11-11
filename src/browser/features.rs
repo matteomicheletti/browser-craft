@@ -459,11 +459,14 @@ impl Browser {
             .filter(|c| !c.temporary)
             .map(|c| palette::ContainerItem { color: c.color32(), id: c.id, name: c.name, temporary: false })
             .collect();
+        let colors = Colors::for_dark(self.dark());
         PaletteSources {
             tabs,
             bookmarks,
             history,
             containers,
+            groups: self.palette_groups(&colors),
+            active: Some(self.active),
             on_web_page: self.web_page,
             recording: self.feat.recorder.path().is_some(),
         }
@@ -478,6 +481,10 @@ impl Browser {
                 let url = (!url.is_empty()).then_some(url);
                 self.new_tab_in(ContainerChoice::Id(container), url);
             }
+            PaletteOutcome::SplitWith(i) => self.split_with(i),
+            PaletteOutcome::AddToGroup(None) => self.group_new_from_tab(self.active),
+            PaletteOutcome::AddToGroup(Some(g)) => self.group_add_tab(self.active, g),
+            PaletteOutcome::FocusGroup(g) => self.focus_group(g),
         }
     }
 
@@ -506,6 +513,41 @@ impl Browser {
             ReopenClosedTab => self.reopen_closed_tab(),
             NextTab => self.cycle_tab(1),
             PrevTab => self.cycle_tab(-1),
+            NewTabGroup => self.group_new_from_tab(self.active),
+            AddTabToGroup => self.feat.palette.open_with("& "),
+            RemoveTabFromGroup => {
+                if self.groups.group_of(self.tab_id).is_some() {
+                    self.group_remove_tab(self.active);
+                } else {
+                    self.set_notice("This tab is not in a group");
+                }
+            }
+            // Collapses the current tab's group; outside a group, expands
+            // the collapsed ones.
+            ToggleGroupCollapsed => match self.groups.group_of(self.tab_id).map(|g| g.id) {
+                Some(g) => self.set_group_collapsed(g, true),
+                None => {
+                    let collapsed: Vec<u64> = self.groups.all().iter().filter(|g| g.collapsed).map(|g| g.id).collect();
+                    if collapsed.is_empty() {
+                        self.set_notice("This tab is not in a group");
+                    }
+                    for g in collapsed {
+                        self.set_group_collapsed(g, false);
+                    }
+                }
+            },
+            SplitWithTab => {
+                if !self.gpu_chrome {
+                    self.set_notice("Split view needs the GPU interface");
+                } else if self.tabs.len() < 2 {
+                    self.set_notice("Open another tab to show beside this one");
+                } else {
+                    self.feat.palette.open_with("| ");
+                }
+            }
+            SwapSplitPanes => self.swap_split(),
+            FocusOtherPane => self.focus_other_pane(),
+            CloseSplitView => self.close_split(),
             ToggleTabsPosition => {
                 let mut f = flags::get();
                 f.tabs_position = if f.tabs_position == TabsPosition::Top { TabsPosition::Left } else { TabsPosition::Top };

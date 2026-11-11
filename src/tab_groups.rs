@@ -139,8 +139,10 @@ impl TabGroups {
     /// A colour no group uses yet (Chrome's behaviour), else the next one
     /// round the wheel.
     fn next_color(&self) -> GroupColor {
-        GroupColor::ALL
+        // Grey last: it reads as "no colour".
+        GroupColor::ALL[1..]
             .iter()
+            .chain(&GroupColor::ALL[..1])
             .copied()
             .find(|c| !self.groups.iter().any(|g| g.color == *c))
             .unwrap_or(GroupColor::ALL[self.groups.len() % GroupColor::ALL.len()])

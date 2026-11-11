@@ -53,6 +53,7 @@ use crate::vault;
 
 mod automation_rpc;
 mod features;
+mod groups_split;
 
 pub const HOME_URL: &str = "https://www.startpage.com/";
 /// What a new tab opens: the built-in start page (`src/home.html`).
@@ -164,7 +165,9 @@ pub enum UserMessage {
     /// The user clicked into the page (Linux): the chrome gives up the
     /// keyboard.
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
-    PageClicked,
+    /// A page was clicked (the tab's id): the keyboard leaves the chrome,
+    /// and in a split view that pane takes the focus.
+    PageClicked(u64),
     /// An event from the web view of the tab with this id (each tab has its
     /// own web view; events of background tabs update their saved state).
     Tab(u64, TabMessage),
@@ -366,6 +369,18 @@ enum Action {
     /// Open or close the command palette.
     Palette,
     Feature(features::FeatureAction),
+    /// A tab group's chip, header row or editor.
+    Group(u64, egui_chrome::GroupEvent),
+    /// Tab `i`'s menu: into a new group, an existing group, out of its group.
+    GroupNew(usize),
+    GroupAdd(usize, u64),
+    GroupRemove(usize),
+    /// Tab `i`'s menu: split view.
+    Split(usize, egui_chrome::SplitEvent),
+    /// The split divider was dragged.
+    SplitRatio(f32),
+    /// The other split pane's placeholder was clicked.
+    FocusPeer,
 }
 
 struct HistoryEntry {
@@ -585,6 +600,14 @@ pub struct Browser {
     fullscreen_restore: bool,
     /// The feature modules: palette, drawers, automation (`features.rs`).
     feat: features::Features,
+    /// Tab groups (`groups_split.rs`).
+    groups: crate::tab_groups::TabGroups,
+    /// A group just made: its editor opens on the next frame.
+    edit_group: Option<u64>,
+    /// The split view's pair, shown while one of them is active.
+    split: Option<crate::split::Split>,
+    /// The split view's other pane.
+    peer: groups_split::SplitPeer,
 }
 
 struct FindBar {
@@ -1180,6 +1203,38 @@ struct SessionTab {
     url: String,
     title: String,
     container: Option<String>,
+    /// The id of its group in the file's `groups`.
+    group: Option<u64>,
+    /// Its position in the file (entries can be skipped).
+    raw: usize,
+}
+
+/// The tab groups and the split view of a session file. The split names
+/// two tabs by their position in the file.
+struct SessionLayout {
+    groups: Vec<crate::tab_groups::TabGroup>,
+    split: Option<(usize, usize, f32)>,
+}
+
+fn parse_session_layout(text: &str) -> SessionLayout {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(text) else {
+        return SessionLayout { groups: Vec::new(), split: None };
+    };
+    let groups = value
+        .get("groups")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .take(crate::tab_groups::MAX_GROUPS)
+        .filter_map(|g| serde_json::from_value(g.clone()).ok())
+        .collect();
+    let split = value.get("split").and_then(|s| {
+        let left = s.get("left")?.as_u64()? as usize;
+        let right = s.get("right")?.as_u64()? as usize;
+        let ratio = s.get("ratio").and_then(|r| r.as_f64()).unwrap_or(0.5) as f32;
+        (left != right).then_some((left, right, crate::split::clamp_ratio(ratio)))
+    });
+    SessionLayout { groups, split }
 }
 
 /// Reads a session file defensively: unknown or broken entries are
@@ -1190,7 +1245,7 @@ fn parse_session(text: &str) -> (Vec<SessionTab>, usize) {
     };
     let active = value.get("active").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
     let mut tabs = Vec::new();
-    for tab in value.get("tabs").and_then(|v| v.as_array()).into_iter().flatten().take(MAX_SESSION_TABS) {
+    for (raw, tab) in value.get("tabs").and_then(|v| v.as_array()).into_iter().flatten().take(MAX_SESSION_TABS).enumerate() {
         let Some(url) = tab.get("url").and_then(|v| v.as_str()) else { continue };
         let lower = url.to_ascii_lowercase();
         let allowed = is_web_url(url)
@@ -1202,7 +1257,8 @@ fn parse_session(text: &str) -> (Vec<SessionTab>, usize) {
         }
         let title = clean_title(tab.get("title").and_then(|v| v.as_str()).unwrap_or(""));
         let container = tab.get("container").and_then(|v| v.as_str()).map(str::to_string);
-        tabs.push(SessionTab { url: url.to_string(), title, container });
+        let group = tab.get("group").and_then(|v| v.as_u64());
+        tabs.push(SessionTab { url: url.to_string(), title, container, group, raw });
     }
     (tabs, active)
 }
@@ -1497,7 +1553,7 @@ fn shortcut_for(key: &Key, ctrl: bool, shift: bool, alt: bool, typing: bool) -> 
 /// While a chrome text field (address bar, find bar) has egui's focus
 /// (`chrome_keys`), every key goes to it instead of the page.
 #[cfg(target_os = "linux")]
-fn attach_webview_shortcuts_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>, chrome_keys: Rc<std::cell::Cell<bool>>) {
+fn attach_webview_shortcuts_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>, chrome_keys: Rc<std::cell::Cell<bool>>, tab: u64) {
     use gtk::gdk::{ModifierType, keys::constants as k};
     use gtk::glib::Propagation;
     use gtk::prelude::WidgetExt as _;
@@ -1505,7 +1561,7 @@ fn attach_webview_shortcuts_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>
     let click_proxy = proxy.clone();
     wv.webview().connect_button_press_event(move |_, _| {
         // A click in the page takes the keyboard back from the chrome.
-        let _ = click_proxy.send_event(UserMessage::PageClicked);
+        let _ = click_proxy.send_event(UserMessage::PageClicked(tab));
         Propagation::Proceed
     });
     // An input method can hand the same key over twice; act on it once.
@@ -2090,6 +2146,10 @@ impl Browser {
             popup_snapshot: None,
             fullscreen_restore: false,
             feat: features::Features::new(),
+            groups: crate::tab_groups::TabGroups::default(),
+            edit_group: None,
+            split: None,
+            peer: groups_split::SplitPeer::default(),
         }
     }
 
@@ -2187,17 +2247,18 @@ impl Browser {
         self.request_redraw();
     }
 
-    /// The area the page (engine raster or WebView2 pane) occupies.
+    /// The area the page (engine raster or WebView2 pane) occupies: the
+    /// focused pane in a split view.
     fn page_rect(&self) -> Rect {
         let (w, h) = self.window_size();
         let (th, sw) = (self.top_h(), self.sidebar_w());
         let left = self.tabs_position() == TabsPosition::Left;
-        Rect {
+        self.focused_pane(Rect {
             x: if left { sw } else { 0.0 },
             y: th,
             w: (w - sw - self.drawer_w()).max(1.0),
             h: (h - th - self.notice_h()).max(1.0),
-        }
+        })
     }
 
     fn sidebar_rect(&self) -> Option<Rect> {
@@ -2354,7 +2415,13 @@ impl Browser {
             self.servo_frame = None;
         } else if let Some(wv) = self.webview.take() {
             // Each tab keeps its own web view, hidden, with its page alive.
-            wv.set_visible(false);
+            // One of a split view stays up: it may become the other pane
+            // (`sync_split_peer` hides it otherwise).
+            if self.split.is_some_and(|s| s.contains(self.tab_id)) {
+                self.peer.maybe_hide = Some(self.tab_id);
+            } else {
+                wv.set_visible(false);
+            }
             view = Some(wv);
         }
         self.web_visible = false;
@@ -2491,6 +2558,7 @@ impl Browser {
         if i == self.active || i >= self.tabs.len() {
             return;
         }
+        self.expand_group_of(i);
         self.park_active_tab();
         self.activate_pantry(i);
     }
@@ -2541,10 +2609,16 @@ impl Browser {
             self.quit = true;
             return;
         }
+        let id = self.tab_id_at(i);
+        // Closing a split pane focuses the other one.
+        let partner = self.split.and_then(|s| s.other(id));
+        self.forget_closed_tab(id);
         let closed = if i == self.active {
             self.park_active_tab();
             let state = self.tabs.remove(i);
-            let next = i.min(self.tabs.len() - 1);
+            let next = partner
+                .and_then(|p| self.tabs.iter().position(|t| t.id == p))
+                .unwrap_or(i.min(self.tabs.len() - 1));
             self.activate_pantry(next);
             state
         } else {
@@ -2620,13 +2694,16 @@ impl Browser {
             return;
         }
         let f = flags::get();
+        // The split view's other pane is on screen: never unloaded.
+        let partner = self.split_partner();
         let info: Vec<(bool, bool, Option<Instant>)> = (0..self.tabs.len())
             .map(|i| {
                 if i == self.active {
                     (self.webview.is_some(), false, None)
                 } else {
                     let t = &self.tabs[i];
-                    (t.view.is_some(), !t.view.as_ref().is_some_and(WebPane::playing_audio), t.last_active)
+                    let playing = t.view.as_ref().is_some_and(WebPane::playing_audio);
+                    (t.view.is_some(), crate::split::may_unload(t.id, partner, playing), t.last_active)
                 }
             })
             .collect();
@@ -2887,6 +2964,7 @@ impl Browser {
         };
         match message {
             TabMessage::Favicon { w, h, rgba } => self.set_favicon(id, w, h, rgba),
+            TabMessage::Snapshot { w, h, rgba } => self.show_peer_snapshot(id, w, h, rgba),
             TabMessage::Closed => self.suspend_tab(i),
             other => background_web_event(&mut self.tabs[i], other),
         }
@@ -2927,6 +3005,8 @@ impl Browser {
     fn session_json(&self) -> String {
         let mut tabs = Vec::new();
         let mut active = 0;
+        // Tab id -> position in the file, for the split view.
+        let mut saved: HashMap<u64, usize> = HashMap::new();
         for i in 0..self.tabs.len() {
             let container = self.tab_container(i);
             if container.as_deref().is_some_and(|c| c.starts_with("tmp-")) {
@@ -2939,9 +3019,24 @@ impl Browser {
             if i == self.active {
                 active = tabs.len();
             }
-            tabs.push(serde_json::json!({ "url": url, "title": self.tab_title(i), "container": container }));
+            let id = self.tab_id_at(i);
+            saved.insert(id, tabs.len());
+            let mut entry = serde_json::json!({ "url": url, "title": self.tab_title(i), "container": container });
+            if let Some(g) = self.groups.group_of(id) {
+                entry["group"] = serde_json::json!(g.id);
+            }
+            tabs.push(entry);
         }
-        serde_json::json!({ "active": active, "tabs": tabs }).to_string()
+        let mut json = serde_json::json!({ "active": active, "tabs": tabs });
+        if !self.groups.all().is_empty() {
+            json["groups"] = serde_json::json!(self.groups.all());
+        }
+        if let Some(s) = self.split
+            && let (Some(l), Some(r)) = (saved.get(&s.left), saved.get(&s.right))
+        {
+            json["split"] = serde_json::json!({ "left": l, "right": r, "ratio": s.ratio });
+        }
+        json.to_string()
     }
 
     /// Writes the session file when it changed (or deletes it when tabs are
@@ -2976,10 +3071,15 @@ impl Browser {
         if tabs.is_empty() {
             return false;
         }
+        let layout = parse_session_layout(&text);
+        let mut memberships = Vec::with_capacity(tabs.len());
+        let mut raw_ids: HashMap<usize, u64> = HashMap::new();
         self.tabs = tabs
             .into_iter()
             .map(|t| {
                 let id = self.alloc_tab_id();
+                memberships.push((id, t.group));
+                raw_ids.insert(t.raw, id);
                 TabState {
                     id,
                     container: t.container.filter(|c| crate::containers::get(c).is_some()),
@@ -2991,6 +3091,23 @@ impl Browser {
             .collect();
         self.saved_session = text;
         let active = active.min(self.tabs.len() - 1);
+        let active_id = self.tabs[active].id;
+        // Groups keep their tabs together: the order may change.
+        let order = self.groups.restore(layout.groups, &memberships);
+        self.tabs.sort_by_key(|t| order.iter().position(|id| *id == t.id));
+        let active = self.tabs.iter().position(|t| t.id == active_id).unwrap_or(0);
+        self.split = layout.split.and_then(|(l, r, ratio)| {
+            let mut s = crate::split::Split::new(*raw_ids.get(&l)?, *raw_ids.get(&r)?)?;
+            s.set_ratio(ratio);
+            Some(s)
+        });
+        // The active tab's partner loads too: it is on screen.
+        if let Some(other) = self.split.and_then(|s| s.other(active_id))
+            && let Some(j) = self.tabs.iter().position(|t| t.id == other)
+        {
+            self.activate_pantry(j);
+            self.park_active_tab();
+        }
         self.activate_pantry(active);
         true
     }
@@ -3757,7 +3874,7 @@ impl Browser {
                 }
                 #[cfg(target_os = "linux")]
                 {
-                    attach_webview_shortcuts_gtk(&wv, self.proxy.clone(), self.chrome_keys.clone());
+                    attach_webview_shortcuts_gtk(&wv, self.proxy.clone(), self.chrome_keys.clone(), tab);
                     attach_webview_extras_gtk(&wv, self.proxy.clone(), tab);
                     let key = container.unwrap_or("");
                     if let Some(dir) = self.contexts.get_mut(key).and_then(|c| c.favicons.take()) {
@@ -3905,6 +4022,7 @@ impl Browser {
             self.popup_snapshot = None;
             self.snapshot_pending = false;
         }
+        self.sync_split_peer(self.egui_popup_open && !self.cheatsheet);
         let visible = self.web_page && !self.cheatsheet && !(self.egui_popup_open && native);
         let r = self.webview_rect();
         let bounds = (
@@ -5584,17 +5702,40 @@ impl Browser {
                 (self.tab_title(i), container, favicon, self.tab_unloaded(i))
             })
             .collect();
+        // Groups and the split view, for the strip and the sidebar.
+        let split_pair = self.split;
         let tab_infos: Vec<egui_chrome::TabInfo> = tab_meta
             .iter()
             .enumerate()
-            .map(|(i, (title, container, favicon, unloaded))| egui_chrome::TabInfo {
-                title,
-                active: i == self.active,
-                container: container.as_ref(),
-                favicon: *favicon,
-                unloaded: *unloaded,
+            .map(|(i, (title, container, favicon, unloaded))| {
+                let id = self.tab_id_at(i);
+                egui_chrome::TabInfo {
+                    title,
+                    active: i == self.active,
+                    container: container.as_ref(),
+                    favicon: *favicon,
+                    unloaded: *unloaded,
+                    group: self.tab_group_mark(i, &c),
+                    split: split_pair.and_then(|s| s.side_of(id)),
+                    can_split: i != self.active && self.gpu_chrome,
+                }
             })
             .collect();
+        let strip_items = self.strip_items();
+        let group_data = self.group_snapshot();
+        let edit_group = self.edit_group.take();
+        let group_infos: Vec<egui_chrome::GroupInfo> = group_data
+            .iter()
+            .map(|(g, tabs)| egui_chrome::GroupInfo {
+                id: g.id,
+                name: &g.name,
+                color: g.color,
+                collapsed: g.collapsed,
+                tabs: *tabs,
+                edit: edit_group == Some(g.id),
+            })
+            .collect();
+        let mut group_events: Vec<(u64, egui_chrome::GroupEvent)> = Vec::new();
         let active_container = tab_meta.get(self.active).and_then(|m| m.1.clone());
         let position = self.tabs_position();
         let mut tab_events: Vec<(usize, egui_chrome::TabRow)> = Vec::new();
@@ -5607,8 +5748,9 @@ impl Browser {
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.fill(c.sidebar_bg))
                 .show(ui, |ui| {
-                    let strip = egui_chrome::tab_strip(ui, &c, &tab_infos, &containers_list);
+                    let strip = egui_chrome::tab_strip(ui, &c, &tab_infos, &strip_items, &group_infos, &containers_list);
                     tab_events.extend(strip.tabs);
+                    group_events.extend(strip.groups);
                     if let Some(pick) = strip.new_tab {
                         actions.push(Action::NewTabIn(pick));
                     }
@@ -5829,8 +5971,20 @@ impl Browser {
                         }
                         ui.add_space(8.0);
                         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                            for (i, info) in tab_infos.iter().enumerate() {
-                                tab_events.push((i, egui_chrome::tab_row(ui, &c, info, &containers_list)));
+                            for item in &strip_items {
+                                match *item {
+                                    crate::tab_groups::StripItem::Group(id) => {
+                                        if let Some(group) = group_infos.iter().find(|g| g.id == id) {
+                                            let events = egui_chrome::group_header_row(ui, &c, group);
+                                            group_events.extend(events.into_iter().map(|e| (id, e)));
+                                        }
+                                    }
+                                    crate::tab_groups::StripItem::Tab(i) => {
+                                        if let Some(info) = tab_infos.get(i) {
+                                            tab_events.push((i, egui_chrome::tab_row(ui, &c, info, &containers_list, &group_infos)));
+                                        }
+                                    }
+                                }
                             }
                         });
                     });
@@ -5854,8 +6008,19 @@ impl Browser {
                 });
         }
 
+        for (id, event) in group_events {
+            actions.push(Action::Group(id, event));
+        }
         for (i, row) in tab_events {
-            if row.close {
+            if row.new_group {
+                actions.push(Action::GroupNew(i));
+            } else if let Some(g) = row.add_to_group {
+                actions.push(Action::GroupAdd(i, g));
+            } else if row.remove_from_group {
+                actions.push(Action::GroupRemove(i));
+            } else if let Some(event) = row.split {
+                actions.push(Action::Split(i, event));
+            } else if row.close {
                 actions.push(Action::CloseTab(i));
             } else if row.duplicate {
                 actions.push(Action::DuplicateTab(i));
@@ -5917,26 +6082,46 @@ impl Browser {
             ctx.request_repaint();
         }
         let snapshot_id = self.popup_snapshot.as_ref().map(|t| t.id());
+        let split_layout = self.split_layout();
+        let (peer_placeholder, peer_title) = self.peer_placeholder();
+        let peer_snapshot = self.peer.snapshot.as_ref().map(|t| t.id());
 
         // The page: the engine raster as a texture; the WebView2 pane sits
-        // exactly over this rectangle.
+        // exactly over this rectangle. In a split view, the focused pane.
         let central = egui::CentralPanel::default()
             .frame(egui::Frame::NONE)
             .show(ui, |ui| {
-                let rect = ui.max_rect();
+                let panes = groups_split::split_panes(
+                    ui,
+                    &c,
+                    ui.max_rect(),
+                    split_layout,
+                    &peer_title,
+                    peer_placeholder,
+                    peer_snapshot,
+                );
+                let rect = panes.focus;
                 if let Some((id, [w, h])) = tex {
                     let size = egui::vec2(w as f32 / ppp, h as f32 / ppp);
                     let at = egui::Rect::from_min_size(rect.min, size);
                     let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-                    ui.painter().image(id, at, uv, egui::Color32::WHITE);
+                    ui.painter().with_clip_rect(rect).image(id, at, uv, egui::Color32::WHITE);
                 }
                 if let Some(id) = snapshot_id {
                     let uv = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
                     ui.painter().image(id, rect, uv, egui::Color32::WHITE);
                 }
-                rect
+                panes
             });
-        let r = central.inner;
+        let panes = central.inner;
+        if let Some(ratio) = panes.ratio {
+            actions.push(Action::SplitRatio(ratio));
+        }
+        if panes.focus_peer {
+            actions.push(Action::FocusPeer);
+        }
+        self.set_peer_rect(panes.peer, ppp);
+        let r = panes.focus;
         self.egui_page = Some(Rect {
             x: (r.min.x * ppp).round(),
             y: (r.min.y * ppp).round(),
@@ -6024,6 +6209,25 @@ impl Browser {
                 },
                 Action::Palette => self.toggle_palette(),
                 Action::Feature(action) => self.feature_action(action),
+                Action::Group(id, event) => self.group_event(id, event),
+                Action::GroupNew(i) => self.group_new_from_tab(i),
+                Action::GroupAdd(i, g) => self.group_add_tab(i, g),
+                Action::GroupRemove(i) => self.group_remove_tab(i),
+                Action::Split(i, event) => match event {
+                    egui_chrome::SplitEvent::WithActive => self.split_with(i),
+                    egui_chrome::SplitEvent::Swap => self.swap_split(),
+                    egui_chrome::SplitEvent::Close => self.close_split(),
+                },
+                Action::SplitRatio(ratio) => {
+                    if let Some(s) = self.split.as_mut() {
+                        s.set_ratio(ratio);
+                    }
+                }
+                Action::FocusPeer => {
+                    if let Some(i) = self.split_partner().and_then(|id| self.tab_index(id)) {
+                        self.switch_tab(i);
+                    }
+                }
             }
         }
         if changed {
@@ -6081,7 +6285,8 @@ impl Browser {
             UserMessage::Notice(text) => self.set_notice_long(text),
             UserMessage::RecordingStopped(result) => self.recording_stopped(result),
             UserMessage::ChromeKey(key) => self.chrome_key(key),
-            UserMessage::PageClicked => {
+            UserMessage::PageClicked(tab) => {
+                self.page_clicked(tab);
                 self.chrome_keys.set(false);
                 if let Some(egui) = &self.egui {
                     egui.ctx().memory_mut(|m| {
@@ -6406,6 +6611,28 @@ mod tests {
         assert!(parse_session("garbage").0.is_empty());
         let long = format!(r#"{{"tabs":[{{"url":"https://a.example/{}"}}]}}"#, "x".repeat(MAX_SESSION_URL));
         assert!(parse_session(&long).0.is_empty());
+    }
+
+    #[test]
+    fn sessions_keep_groups_and_the_split() {
+        let text = r#"{"active":0,"tabs":[
+            {"url":"javascript:void 0"},
+            {"url":"https://a.example/","group":3},
+            {"url":"https://b.example/"},
+            {"url":"https://c.example/","group":3}],
+            "groups":[{"id":3,"name":"Work","color":"blue","collapsed":true},{"id":4,"color":"mauve"}],
+            "split":{"left":2,"right":3,"ratio":7.5}}"#;
+        let (tabs, _) = parse_session(text);
+        let kept: Vec<(usize, Option<u64>)> = tabs.iter().map(|t| (t.raw, t.group)).collect();
+        assert_eq!(kept, [(1, Some(3)), (2, None), (3, Some(3))]);
+        let layout = parse_session_layout(text);
+        // The broken group is skipped, the ratio clamped.
+        assert_eq!(layout.groups.len(), 1);
+        assert_eq!(layout.groups[0].color, crate::tab_groups::GroupColor::Blue);
+        assert_eq!(layout.split, Some((2, 3, crate::split::MAX_RATIO)));
+        let none = parse_session_layout(r#"{"tabs":[],"split":{"left":1,"right":1}}"#);
+        assert!(none.groups.is_empty() && none.split.is_none());
+        assert!(parse_session_layout("garbage").split.is_none());
     }
 
     #[test]

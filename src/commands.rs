@@ -24,6 +24,15 @@ pub enum CommandId {
     NextTab,
     PrevTab,
     ToggleTabsPosition,
+    // Tab groups and split view
+    NewTabGroup,
+    AddTabToGroup,
+    RemoveTabFromGroup,
+    ToggleGroupCollapsed,
+    SplitWithTab,
+    SwapSplitPanes,
+    FocusOtherPane,
+    CloseSplitView,
     // Navigation
     Back,
     Forward,
@@ -189,7 +198,7 @@ pub fn catalog() -> &'static [Command] {
     &CATALOG
 }
 
-static CATALOG: [Command; 47] = [
+static CATALOG: [Command; 55] = [
     cmd!(
         NewTab,
         "new-tab",
@@ -278,6 +287,78 @@ static CATALOG: [Command; 47] = [
         ["vertical", "horizontal", "sidebar", "layout"],
         None,
         ph::SIDEBAR_SIMPLE,
+        Tabs
+    ),
+    cmd!(
+        NewTabGroup,
+        "group-new",
+        "New tab group",
+        ["group", "folder", "organize", "add tab to new group"],
+        None,
+        ph::FOLDER_SIMPLE_PLUS,
+        Tabs
+    ),
+    cmd!(
+        AddTabToGroup,
+        "group-add",
+        "Add tab to group…",
+        ["group", "move", "folder"],
+        None,
+        ph::FOLDER_SIMPLE,
+        Tabs
+    ),
+    cmd!(
+        RemoveTabFromGroup,
+        "group-remove",
+        "Remove tab from group",
+        ["ungroup", "folder"],
+        None,
+        ph::FOLDER_SIMPLE_MINUS,
+        Tabs
+    ),
+    cmd!(
+        ToggleGroupCollapsed,
+        "group-collapse",
+        "Collapse or expand tab group",
+        ["fold", "hide", "show", "group"],
+        None,
+        ph::CARET_UP_DOWN,
+        Tabs
+    ),
+    cmd!(
+        SplitWithTab,
+        "split-with",
+        "Split view with tab…",
+        ["side by side", "two tabs", "split screen", "compare"],
+        None,
+        ph::COLUMNS,
+        Tabs
+    ),
+    cmd!(
+        SwapSplitPanes,
+        "split-swap",
+        "Swap split view panes",
+        ["side by side", "left right", "split screen"],
+        None,
+        ph::ARROWS_LEFT_RIGHT,
+        Tabs
+    ),
+    cmd!(
+        FocusOtherPane,
+        "split-focus-other",
+        "Focus the other split pane",
+        ["side by side", "switch pane", "split screen"],
+        None,
+        ph::ARROW_SQUARE_RIGHT,
+        Tabs
+    ),
+    cmd!(
+        CloseSplitView,
+        "split-close",
+        "Close split view",
+        ["side by side", "single", "split screen", "unsplit"],
+        None,
+        ph::SQUARE_SPLIT_HORIZONTAL,
         Tabs
     ),
     cmd!(

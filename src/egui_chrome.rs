@@ -17,6 +17,8 @@ use winit::window::Window;
 use crate::browser::ContainerChoice;
 use crate::containers::Container;
 use crate::flags::{self, Chrome};
+use crate::split::Side;
+use crate::tab_groups::{GroupColor, StripItem};
 
 /// The GPU-rendered chrome. Holds the egui context, the winit bridge and the
 /// wgpu painter. `Browser` owns one of these when the egui path is active.
@@ -385,6 +387,46 @@ pub struct TabInfo<'a> {
     pub favicon: Option<egui::TextureId>,
     /// Unloaded to save memory: drawn dimmed, it reloads when shown.
     pub unloaded: bool,
+    /// The tab's group (id) and its colour: an underline in the strip, a
+    /// bar and an indent in the sidebar.
+    pub group: Option<(u64, egui::Color32)>,
+    /// The tab is one of the split view's pair (which pane).
+    pub split: Option<Side>,
+    /// A split view exists and this tab is the focused pane's partner
+    /// candidate: "Open in split view with current tab" is offered.
+    pub can_split: bool,
+}
+
+/// A tab group as the strip and the sidebar draw it.
+pub struct GroupInfo<'a> {
+    pub id: u64,
+    pub name: &'a str,
+    pub color: GroupColor,
+    pub collapsed: bool,
+    /// How many tabs it has (shown on a collapsed chip).
+    pub tabs: usize,
+    /// Open the editor (name and colour) now: the group was just made.
+    pub edit: bool,
+}
+
+/// What the user did to a group (its chip, header row or editor).
+#[derive(Clone, Debug, PartialEq)]
+pub enum GroupEvent {
+    ToggleCollapsed,
+    Rename(String),
+    Color(GroupColor),
+    NewTab,
+    Ungroup,
+    Close,
+}
+
+/// What the user did to the split view from a tab's menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SplitEvent {
+    /// Pair this tab with the active one.
+    WithActive,
+    Swap,
+    Close,
 }
 
 /// Outcome of drawing one tab (strip chip or sidebar row).
@@ -400,6 +442,13 @@ pub struct TabRow {
     pub new_in: Option<ContainerChoice>,
     /// "Reopen in container": this tab's page in another container.
     pub reopen_in: Option<ContainerChoice>,
+    /// "Add tab to new group".
+    pub new_group: bool,
+    /// "Add tab to group" with an existing group.
+    pub add_to_group: Option<u64>,
+    /// "Remove from group".
+    pub remove_from_group: bool,
+    pub split: Option<SplitEvent>,
 }
 
 /// The menu of containers: no container, each container, a new temporary
@@ -432,11 +481,58 @@ pub fn container_menu(ui: &mut egui::Ui, c: &Colors, containers: &[Container], n
 }
 
 /// The right-click menu of a tab.
-fn tab_menu(ui: &mut egui::Ui, c: &Colors, containers: &[Container], out: &mut TabRow) {
+fn tab_menu(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Container], groups: &[GroupInfo], out: &mut TabRow) {
     if menu_item(ui, c, crate::icons::COPY, "Duplicate tab").clicked() {
         out.duplicate = true;
         ui.close();
     }
+    let current = tab.group.map(|g| g.0);
+    let others: Vec<&GroupInfo> = groups.iter().filter(|g| Some(g.id) != current).collect();
+    if others.is_empty() {
+        if menu_item(ui, c, egui_phosphor::regular::FOLDER_SIMPLE_PLUS, "Add tab to new group").clicked() {
+            out.new_group = true;
+            ui.close();
+        }
+    } else {
+        ui.menu_button(
+            egui::RichText::new(format!("{}  Add tab to group", egui_phosphor::regular::FOLDER_SIMPLE_PLUS)).size(13.0).color(c.text),
+            |ui| {
+                if menu_item(ui, c, ICON_PLUS, "New group").clicked() {
+                    out.new_group = true;
+                    ui.close();
+                }
+                ui.separator();
+                for g in others {
+                    let name = if g.name.is_empty() { "Unnamed group" } else { g.name };
+                    let text = egui::RichText::new(format!("{}  {name}", egui_phosphor::regular::CIRCLE)).size(13.0).color(c.group_color(g.color));
+                    if ui.add(egui::Button::new(text).frame(false).min_size(egui::vec2(180.0, 26.0))).clicked() {
+                        out.add_to_group = Some(g.id);
+                        ui.close();
+                    }
+                }
+            },
+        );
+    }
+    if current.is_some() && menu_item(ui, c, egui_phosphor::regular::FOLDER_SIMPLE_MINUS, "Remove from group").clicked() {
+        out.remove_from_group = true;
+        ui.close();
+    }
+    if tab.split.is_some() {
+        if menu_item(ui, c, egui_phosphor::regular::ARROWS_LEFT_RIGHT, "Swap split panes").clicked() {
+            out.split = Some(SplitEvent::Swap);
+            ui.close();
+        }
+        if menu_item(ui, c, egui_phosphor::regular::SQUARE_SPLIT_HORIZONTAL, "Close split view").clicked() {
+            out.split = Some(SplitEvent::Close);
+            ui.close();
+        }
+    } else if tab.can_split
+        && menu_item(ui, c, egui_phosphor::regular::COLUMNS, "Open in split view with current tab").clicked()
+    {
+        out.split = Some(SplitEvent::WithActive);
+        ui.close();
+    }
+    ui.separator();
     ui.menu_button(
         egui::RichText::new(format!("{}  New tab in container", egui_phosphor::regular::STACK)).size(13.0).color(c.text),
         |ui| {
@@ -460,6 +556,184 @@ fn tab_menu(ui: &mut egui::Ui, c: &Colors, containers: &[Container], out: &mut T
     }
 }
 
+/// The editor of a group (Chrome's bubble): name, colour and actions.
+fn group_editor(ui: &mut egui::Ui, c: &Colors, group: &GroupInfo, out: &mut Vec<GroupEvent>) {
+    ui.set_min_width(230.0);
+    let buffer_id = egui::Id::new(("bc-group-name", group.id));
+    let mut name = ui.data_mut(|d| d.get_temp::<String>(buffer_id)).unwrap_or_else(|| group.name.to_string());
+    let edit = ui.add(
+        egui::TextEdit::singleline(&mut name)
+            .id(egui::Id::new(("bc-group-name-field", group.id)))
+            .hint_text(egui::RichText::new("Name this group").color(c.muted))
+            .desired_width(f32::INFINITY),
+    );
+    if group.edit {
+        edit.request_focus();
+    }
+    if edit.changed() {
+        out.push(GroupEvent::Rename(name.clone()));
+    }
+    if edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+        ui.close();
+    }
+    ui.data_mut(|d| d.insert_temp(buffer_id, name));
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for color in GroupColor::ALL {
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(20.0, 20.0), egui::Sense::click());
+            let fill = c.group_color(color);
+            ui.painter().circle_filled(rect.center(), 8.0, fill);
+            if color == group.color {
+                ui.painter().circle_stroke(rect.center(), 9.5, egui::Stroke::new(1.5, c.text));
+            }
+            if resp.on_hover_text(color.name()).clicked() {
+                out.push(GroupEvent::Color(color));
+            }
+        }
+    });
+    ui.separator();
+    if menu_item(ui, c, ICON_PLUS, "New tab in group").clicked() {
+        out.push(GroupEvent::NewTab);
+        ui.close();
+    }
+    let (icon_code, label) = if group.collapsed {
+        (egui_phosphor::regular::CARET_DOWN, "Expand group")
+    } else {
+        (egui_phosphor::regular::CARET_RIGHT, "Collapse group")
+    };
+    if menu_item(ui, c, icon_code, label).clicked() {
+        out.push(GroupEvent::ToggleCollapsed);
+        ui.close();
+    }
+    if menu_item(ui, c, egui_phosphor::regular::FOLDER_SIMPLE_MINUS, "Ungroup").clicked() {
+        out.push(GroupEvent::Ungroup);
+        ui.close();
+    }
+    if menu_item(ui, c, crate::icons::TRASH, "Close group").clicked() {
+        out.push(GroupEvent::Close);
+        ui.close();
+    }
+}
+
+/// Attaches the group editor to a chip or header row: it opens on a
+/// right-click, and at once for a group just made.
+fn group_editor_popup(ui: &mut egui::Ui, c: &Colors, resp: &egui::Response, group: &GroupInfo) -> Vec<GroupEvent> {
+    let mut out = Vec::new();
+    let open = group.edit || resp.secondary_clicked();
+    if open {
+        // A fresh editor starts from the group's name.
+        ui.data_mut(|d| d.remove::<String>(egui::Id::new(("bc-group-name", group.id))));
+    }
+    egui::Popup::from_response(resp)
+        .id(egui::Id::new(("bc-group-editor", group.id)))
+        .kind(egui::PopupKind::Menu)
+        .open_memory(open.then_some(egui::SetOpenCommand::Bool(true)))
+        .align(egui::RectAlign::BOTTOM_START)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .width(240.0)
+        .show(|ui| group_editor(ui, c, group, &mut out));
+    out
+}
+
+/// The text drawn on a group's coloured chip: readable on the group colour
+/// in both themes.
+fn group_label_color(c: &Colors) -> egui::Color32 {
+    if c.is_dark() { c.sidebar_bg } else { c.field_bg }
+}
+
+/// A group's chip in the strip: its name on its colour (a dot when it has
+/// none, the tab count when collapsed). Click: collapse or expand;
+/// right-click: the editor.
+/// A group chip's text: its name, and the tab count when collapsed.
+fn group_chip_text(group: &GroupInfo) -> String {
+    let mut text = group.name.to_string();
+    if group.collapsed {
+        if !text.is_empty() {
+            text.push_str("  ");
+        }
+        text.push_str(&group.tabs.to_string());
+    }
+    text
+}
+
+/// The width of a group chip in the strip.
+fn group_chip_width(ui: &egui::Ui, group: &GroupInfo) -> f32 {
+    let text = group_chip_text(group);
+    if text.is_empty() {
+        return 22.0;
+    }
+    let w = ui.fonts_mut(|f| f.layout_no_wrap(text, egui::FontId::proportional(12.0), egui::Color32::WHITE).size().x);
+    w.min(140.0) + 20.0
+}
+
+fn group_chip(ui: &mut egui::Ui, c: &Colors, group: &GroupInfo) -> (egui::Rect, Vec<GroupEvent>) {
+    let fill = c.group_color(group.color);
+    let text = group_chip_text(group);
+    let font = egui::FontId::proportional(12.0);
+    let width = group_chip_width(ui, group);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
+    let pill = egui::Rect::from_center_size(rect.center(), egui::vec2(width - 4.0, 20.0));
+    let painter = ui.painter();
+    if text.is_empty() {
+        painter.circle_filled(rect.center(), 6.0, fill);
+    } else {
+        painter.rect_filled(pill, egui::CornerRadius::same(6), fill);
+        let galley = ui.fonts_mut(|f| f.layout_no_wrap(text, font, group_label_color(c)));
+        let clip = painter.with_clip_rect(pill.shrink2(egui::vec2(6.0, 0.0)));
+        clip.galley(egui::pos2(pill.min.x + 8.0, pill.center().y - galley.size().y / 2.0), galley, group_label_color(c));
+    }
+    if resp.hovered() {
+        painter.rect_stroke(pill.expand(1.5), egui::CornerRadius::same(7), egui::Stroke::new(1.0, fill), egui::StrokeKind::Outside);
+    }
+    // The group's underline starts under its chip.
+    if !group.collapsed {
+        let line = egui::Rect::from_min_max(egui::pos2(rect.center().x, rect.max.y - 2.0), egui::pos2(rect.max.x + 2.0, rect.max.y));
+        painter.rect_filled(line, 0.0, fill);
+    }
+    let tip = match (group.name.is_empty(), group.collapsed) {
+        (true, true) => "Expand group".to_string(),
+        (true, false) => "Collapse group".to_string(),
+        (false, true) => format!("{}: expand ({} tabs)", group.name, group.tabs),
+        (false, false) => format!("{}: collapse", group.name),
+    };
+    let resp = resp.on_hover_text(format!("{tip}\nRight-click to edit"));
+    let mut out = group_editor_popup(ui, c, &resp, group);
+    if resp.clicked() {
+        out.push(GroupEvent::ToggleCollapsed);
+    }
+    (rect, out)
+}
+
+/// A group's header row in the tab sidebar: caret, colour, name and count.
+pub fn group_header_row(ui: &mut egui::Ui, c: &Colors, group: &GroupInfo) -> Vec<GroupEvent> {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 28.0), egui::Sense::click());
+    let fill = c.group_color(group.color);
+    let painter = ui.painter();
+    if resp.hovered() {
+        painter.rect_filled(rect, egui::CornerRadius::same(7), c.hover.gamma_multiply(0.6));
+    }
+    let caret = if group.collapsed { egui_phosphor::regular::CARET_RIGHT } else { egui_phosphor::regular::CARET_DOWN };
+    let y = rect.center().y;
+    painter.text(egui::pos2(rect.min.x + 8.0, y), egui::Align2::LEFT_CENTER, caret, egui::FontId::new(12.0, crate::icons::family()), c.muted);
+    let name = if group.name.is_empty() { "Unnamed group" } else { group.name };
+    let font = egui::FontId::proportional(12.5);
+    let galley = ui.fonts_mut(|f| f.layout_no_wrap(name.to_string(), font.clone(), group_label_color(c)));
+    let pill_w = (galley.size().x + 16.0).min(rect.width() - 70.0).max(24.0);
+    let pill = egui::Rect::from_min_size(egui::pos2(rect.min.x + 26.0, y - 10.0), egui::vec2(pill_w, 20.0));
+    painter.rect_filled(pill, egui::CornerRadius::same(6), fill);
+    painter
+        .with_clip_rect(pill.shrink2(egui::vec2(6.0, 0.0)))
+        .galley(egui::pos2(pill.min.x + 8.0, y - galley.size().y / 2.0), galley, group_label_color(c));
+    painter.text(egui::pos2(rect.max.x - 10.0, y), egui::Align2::RIGHT_CENTER, group.tabs.to_string(), font, c.muted);
+    let resp = resp.on_hover_text(if group.collapsed { "Expand group (right-click to edit)" } else { "Collapse group (right-click to edit)" });
+    let mut out = group_editor_popup(ui, c, &resp, group);
+    if resp.clicked() {
+        out.push(GroupEvent::ToggleCollapsed);
+    }
+    out
+}
+
 /// The page icon of a tab: its favicon, or a globe.
 fn tab_icon(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo) {
     match tab.favicon {
@@ -480,15 +754,27 @@ fn tab_icon(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo) {
 
 /// One row in the tab sidebar: the page icon, the (truncated) title and a
 /// close button that appears on the active/hovered row; a container's tabs
-/// get its colour as the left bar. The whole row is clickable.
-pub fn tab_row(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Container]) -> TabRow {
-    let (rect, row) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
+/// get its colour as the left bar, a group's tabs are indented under its
+/// header with the group's colour, and the split pair is outlined. The
+/// whole row is clickable.
+pub fn tab_row(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Container], groups: &[GroupInfo]) -> TabRow {
+    let (full, row) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
     let hovered = row.hovered();
     let painter = ui.painter();
+    let rect = if let Some((_, color)) = tab.group {
+        let line = egui::Rect::from_min_size(egui::pos2(full.min.x + 8.0, full.min.y), egui::vec2(2.0, full.height()));
+        painter.rect_filled(line, 0.0, color);
+        full.with_min_x(full.min.x + 14.0)
+    } else {
+        full
+    };
     if tab.active {
         painter.rect_filled(rect, egui::CornerRadius::same(7), c.hover);
     } else if hovered {
         painter.rect_filled(rect, egui::CornerRadius::same(7), c.hover.gamma_multiply(0.6));
+    }
+    if tab.split.is_some() {
+        painter.rect_stroke(rect.shrink(1.0), egui::CornerRadius::same(7), egui::Stroke::new(1.0, c.accent), egui::StrokeKind::Inside);
     }
     let bar_color = match tab.container {
         Some(ctr) => Some(ctr.color32()),
@@ -510,7 +796,8 @@ pub fn tab_row(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Conta
     tab_icon(&mut child, c, tab);
 
     let show_close = tab.active || hovered;
-    let label_w = (child.available_width() - if show_close { 26.0 } else { 0.0 }).max(10.0);
+    let split_w = if tab.split.is_some() { 18.0 } else { 0.0 };
+    let label_w = (child.available_width() - if show_close { 26.0 } else { 0.0 } - split_w).max(10.0);
     let color = if tab.unloaded { c.muted } else { c.text };
     let label = egui::Label::new(egui::RichText::new(tab.title).size(13.0).color(color))
         .truncate()
@@ -522,6 +809,9 @@ pub fn tab_row(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Conta
             ui.add(label)
         })
         .inner;
+    if tab.split.is_some() {
+        child.label(icon(egui_phosphor::regular::COLUMNS, 12.0).color(c.accent)).on_hover_text("In split view");
+    }
 
     let mut out = TabRow::default();
     if show_close {
@@ -536,7 +826,7 @@ pub fn tab_row(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Conta
             }
         });
     }
-    row.context_menu(|ui| tab_menu(ui, c, containers, &mut out));
+    row.context_menu(|ui| tab_menu(ui, c, tab, containers, groups, &mut out));
     out.clicked = row.clicked() || label_resp.clicked();
     out.close |= row.middle_clicked();
     out
@@ -547,6 +837,8 @@ pub fn tab_row(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Conta
 pub struct TabStrip {
     /// Per tab (by index), what happened to it.
     pub tabs: Vec<(usize, TabRow)>,
+    /// Per group (by id), what happened to it.
+    pub groups: Vec<(u64, GroupEvent)>,
     /// "+" (no container) or a pick from the container menu.
     pub new_tab: Option<ContainerChoice>,
     /// "Manage containers" in the container menu.
@@ -563,29 +855,75 @@ pub fn tab_width(available: f32, count: usize) -> f32 {
     (available / count as f32 - 2.0).clamp(48.0, 220.0)
 }
 
-/// The horizontal tab strip (tabs on top): a chip per tab with its icon,
-/// title, close button and container colour; then "+" and the container
-/// picker.
-pub fn tab_strip(ui: &mut egui::Ui, c: &Colors, tabs: &[TabInfo], containers: &[Container]) -> TabStrip {
+/// The horizontal tab strip (tabs on top): `items` in order, a chip per
+/// group (coloured, with an underline along its tabs) and per visible tab
+/// (icon, title, close button, container colour); then "+" and the
+/// container picker. The split view's two tabs share an outline.
+pub fn tab_strip(
+    ui: &mut egui::Ui,
+    c: &Colors,
+    tabs: &[TabInfo],
+    items: &[StripItem],
+    groups: &[GroupInfo],
+    containers: &[Container],
+) -> TabStrip {
     let mut out = TabStrip::default();
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         ui.add_space(6.0);
         let buttons_w = 76.0;
+        let chips_w: f32 = items
+            .iter()
+            .filter_map(|i| match i {
+                StripItem::Group(id) => groups.iter().find(|g| g.id == *id),
+                StripItem::Tab(_) => None,
+            })
+            .map(|g| group_chip_width(ui, g) + 2.0)
+            .sum();
         let available = (ui.available_width() - buttons_w).max(48.0);
-        let width = tab_width(available, tabs.len());
+        let shown = items.iter().filter(|i| matches!(i, StripItem::Tab(_))).count();
+        let width = tab_width((available - chips_w).max(48.0), shown);
         egui::ScrollArea::horizontal()
             .max_width(available)
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    for (i, tab) in tabs.iter().enumerate() {
-                        let row = tab_chip(ui, c, tab, width, containers);
-                        if tab.active && !ui.is_rect_visible(ui.min_rect()) {
-                            ui.scroll_to_cursor(None);
+                    let mut split_rects: Vec<egui::Rect> = Vec::new();
+                    for item in items {
+                        match *item {
+                            StripItem::Group(id) => {
+                                if let Some(group) = groups.iter().find(|g| g.id == id) {
+                                    let (_, events) = group_chip(ui, c, group);
+                                    out.groups.extend(events.into_iter().map(|e| (id, e)));
+                                }
+                            }
+                            StripItem::Tab(i) => {
+                                let Some(tab) = tabs.get(i) else { continue };
+                                let (rect, row) = tab_chip(ui, c, tab, width, containers, groups);
+                                if tab.active && !ui.is_rect_visible(rect) {
+                                    ui.scroll_to_rect(rect, None);
+                                }
+                                if tab.split.is_some() {
+                                    split_rects.push(rect);
+                                }
+                                out.tabs.push((i, row));
+                            }
                         }
-                        out.tabs.push((i, row));
+                    }
+                    // The split pair: one outline round both chips when
+                    // they sit side by side, one each otherwise.
+                    let stroke = egui::Stroke::new(1.5, c.accent);
+                    let outline = |r: egui::Rect| r.shrink2(egui::vec2(0.5, 1.5));
+                    match split_rects.as_slice() {
+                        [a, b] if (b.min.x - a.max.x).abs() < 6.0 || (a.min.x - b.max.x).abs() < 6.0 => {
+                            ui.painter().rect_stroke(outline(a.union(*b)), egui::CornerRadius::same(8), stroke, egui::StrokeKind::Inside);
+                        }
+                        rects => {
+                            for r in rects {
+                                ui.painter().rect_stroke(outline(*r), egui::CornerRadius::same(8), stroke, egui::StrokeKind::Inside);
+                            }
+                        }
                     }
                 });
             });
@@ -615,8 +953,8 @@ pub fn tab_strip(ui: &mut egui::Ui, c: &Colors, tabs: &[TabInfo], containers: &[
     out
 }
 
-/// One tab in the strip.
-fn tab_chip(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, width: f32, containers: &[Container]) -> TabRow {
+/// One tab in the strip. Returns its rectangle and what happened.
+fn tab_chip(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, width: f32, containers: &[Container], groups: &[GroupInfo]) -> (egui::Rect, TabRow) {
     let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
     let hovered = resp.hovered();
     let painter = ui.painter();
@@ -625,7 +963,7 @@ fn tab_chip(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, width: f32, containers
         painter.rect_filled(rect, corners, c.bar_bg);
     } else if hovered {
         painter.rect_filled(rect.shrink2(egui::vec2(0.0, 2.0)), egui::CornerRadius::same(7), c.hover);
-    } else {
+    } else if tab.split.is_none() {
         // A thin divider between inactive tabs, as in Chrome.
         let x = rect.max.x + 1.0;
         painter.vline(x, (rect.min.y + 8.0)..=(rect.max.y - 8.0), egui::Stroke::new(1.0, c.line));
@@ -633,6 +971,11 @@ fn tab_chip(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, width: f32, containers
     if let Some(ctr) = tab.container {
         let line = egui::Rect::from_min_size(egui::pos2(rect.min.x + 8.0, rect.min.y), egui::vec2(rect.width() - 16.0, 3.0));
         painter.rect_filled(line, egui::CornerRadius::same(2), ctr.color32());
+    }
+    if let Some((_, color)) = tab.group {
+        // The group's underline runs along all its tabs.
+        let line = egui::Rect::from_min_max(egui::pos2(rect.min.x - 2.0, rect.max.y - 2.0), egui::pos2(rect.max.x + 2.0, rect.max.y));
+        painter.rect_filled(line, 0.0, color);
     }
     let narrow = width < 80.0;
     let show_close = tab.active || (hovered && !narrow);
@@ -667,15 +1010,23 @@ fn tab_chip(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, width: f32, containers
             }
         }
     }
-    let tip = match tab.container {
-        Some(ctr) => format!("{}\n{}", tab.title, ctr.name),
-        None => tab.title.to_string(),
-    };
+    let mut tip = tab.title.to_string();
+    if let Some(ctr) = tab.container {
+        tip.push('\n');
+        tip.push_str(&ctr.name);
+    }
+    if let Some(g) = tab.group.and_then(|(id, _)| groups.iter().find(|g| g.id == id)).filter(|g| !g.name.is_empty()) {
+        tip.push_str("\nGroup: ");
+        tip.push_str(g.name);
+    }
+    if tab.split.is_some() {
+        tip.push_str("\nIn split view");
+    }
     let resp = resp.on_hover_text(tip);
-    resp.context_menu(|ui| tab_menu(ui, c, containers, &mut out));
+    resp.context_menu(|ui| tab_menu(ui, c, tab, containers, groups, &mut out));
     out.clicked = resp.clicked() && !out.close;
     out.close |= resp.middle_clicked();
-    out
+    (rect, out)
 }
 
 /// The container badge at the start of the toolbar: the active tab's
@@ -820,6 +1171,21 @@ impl Colors {
                 accent: rgb(0x2f6fde),
             }
         }
+    }
+}
+
+// Tab groups take their colours from the theme, like the rest of the chrome.
+impl Colors {
+    /// A dark theme: light text on dark bars.
+    pub fn is_dark(&self) -> bool {
+        let lum = |c: egui::Color32| u32::from(c.r()) * 3 + u32::from(c.g()) * 6 + u32::from(c.b());
+        lum(self.text) > lum(self.bar_bg)
+    }
+
+    /// The shade of a tab group colour that reads on this theme.
+    pub fn group_color(&self, color: GroupColor) -> egui::Color32 {
+        let (light, dark) = color.shades();
+        rgb(if self.is_dark() { dark } else { light })
     }
 }
 
@@ -1219,7 +1585,25 @@ mod tests {
         let tabs: Vec<TabInfo> = titles
             .iter()
             .enumerate()
-            .map(|(i, t)| TabInfo { title: t, active: i == 0, container: (i % 2 == 1).then_some(&ctr), favicon: None, unloaded: i == 2 })
+            .map(|(i, t)| TabInfo {
+                title: t,
+                active: i == 0,
+                container: (i % 2 == 1).then_some(&ctr),
+                favicon: None,
+                unloaded: i == 2,
+                // Tabs 1 and 2 in a group; 0 and 1 in a split view.
+                group: (1..=2).contains(&i).then_some((5, c.group_color(GroupColor::Blue))),
+                split: match i {
+                    0 => Some(Side::Left),
+                    1 => Some(Side::Right),
+                    _ => None,
+                },
+                can_split: i != 0,
+            })
+            .collect();
+        let groups = [GroupInfo { id: 5, name: "Research", color: GroupColor::Blue, collapsed: false, tabs: 2, edit: false }];
+        let items: Vec<StripItem> = (0..count)
+            .flat_map(|i| if i == 1 { vec![StripItem::Group(5), StripItem::Tab(i)] } else { vec![StripItem::Tab(i)] })
             .collect();
         let mut right = 0.0f32;
         let input = egui::RawInput {
@@ -1228,7 +1612,7 @@ mod tests {
         };
         let mut output = ctx.run_ui(input, |ui| {
             egui::Panel::top("tabstrip").exact_size(38.0).show(ui, |ui| {
-                let strip = tab_strip(ui, &c, &tabs, std::slice::from_ref(&ctr));
+                let strip = tab_strip(ui, &c, &tabs, &items, &groups, std::slice::from_ref(&ctr));
                 assert_eq!(strip.tabs.len(), count);
                 right = ui.min_rect().max.x;
             });

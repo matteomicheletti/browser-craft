@@ -28,6 +28,12 @@ pub enum PaletteOutcome {
     OpenUrl(String),
     /// Open a new tab in a container; `url` is empty for a blank tab.
     OpenInContainer { url: String, container: String },
+    /// Show the tab at this index beside the current one (split view).
+    SplitWith(usize),
+    /// Put the current tab in this group (`None`: a new group).
+    AddToGroup(Option<u64>),
+    /// Go to this tab group (expanding it).
+    FocusGroup(u64),
 }
 
 /// A container's colour and name, shown as a dot next to a tab.
@@ -43,6 +49,16 @@ pub struct TabItem {
     pub title: String,
     pub url: String,
     pub container: Option<ContainerBadge>,
+}
+
+/// A tab group, for `@` (go to it) and `&` (add the tab to it).
+#[derive(Clone, Debug)]
+pub struct GroupItem {
+    pub id: u64,
+    pub name: String,
+    pub color: Color32,
+    pub tabs: usize,
+    pub collapsed: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -67,6 +83,9 @@ pub struct PaletteSources {
     /// Most recent first.
     pub history: Vec<LinkItem>,
     pub containers: Vec<ContainerItem>,
+    pub groups: Vec<GroupItem>,
+    /// The index of the current tab (left out of `|`, split with a tab).
+    pub active: Option<usize>,
     /// The current tab shows a web page (commands that need one are enabled).
     pub on_web_page: bool,
     /// A screen recording is running (shows Stop instead of Start).
@@ -223,6 +242,10 @@ pub enum Mode {
     Tabs,
     Links,
     Containers,
+    /// `|`: pick the tab to show beside the current one.
+    Split,
+    /// `&`: pick the group to add the current tab to.
+    Groups,
     Help,
 }
 
@@ -234,6 +257,8 @@ impl Mode {
             Mode::Tabs => "Tabs",
             Mode::Links => "Bookmarks and history",
             Mode::Containers => "Containers",
+            Mode::Split => "Split view with",
+            Mode::Groups => "Add tab to group",
             Mode::Help => "Help",
         }
     }
@@ -247,6 +272,8 @@ pub fn parse_query(raw: &str) -> (Mode, &str) {
         Some('@') => Mode::Tabs,
         Some('#') => Mode::Links,
         Some('~') => Mode::Containers,
+        Some('|') => Mode::Split,
+        Some('&') => Mode::Groups,
         Some('?') => Mode::Help,
         _ => return (Mode::All, raw.trim()),
     };
@@ -348,8 +375,12 @@ fn command_row(
     row.matches = matches;
     row.enabled = s.on_web_page || !c.needs_page();
     // "New tab in container" opens the container list instead of acting.
-    if c.id == CommandId::NewTabInContainer {
-        row.action = Action::SetQuery("~");
+    // Commands that need a pick open the matching list instead of acting.
+    match c.id {
+        CommandId::NewTabInContainer => row.action = Action::SetQuery("~"),
+        CommandId::SplitWithTab => row.action = Action::SetQuery("|"),
+        CommandId::AddTabToGroup => row.action = Action::SetQuery("&"),
+        _ => {}
     }
     row
 }
@@ -370,6 +401,8 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
             ("@ ", "Switch to an open tab", "@"),
             ("# ", "Bookmarks and history", "#"),
             ("~ ", "Open a tab in a container", "~"),
+            ("| ", "Split view with an open tab", "|"),
+            ("& ", "Add the tab to a group", "&"),
         ] {
             let mut r = Row::new(
                 "Prefixes",
@@ -482,6 +515,80 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
             r.matches = pos;
             r.dot = t.container.as_ref().map(|c| c.color);
             r.tag = t.container.as_ref().map(|_| "Container");
+            rows.push(r);
+        }
+    }
+
+    if matches!(mode, Mode::All | Mode::Tabs) && (mode == Mode::Tabs || !q.is_empty()) {
+        for g in &s.groups {
+            let label = if g.name.is_empty() { "Unnamed group".to_string() } else { g.name.clone() };
+            let Some(m) = score_terms(q, &label, &["group"]) else {
+                continue;
+            };
+            let mut r = Row::new(
+                "Tab groups",
+                Action::Outcome(PaletteOutcome::FocusGroup(g.id)),
+                egui_phosphor::regular::FOLDER_SIMPLE,
+                label,
+            );
+            r.detail = format!("{} tab{}{}", g.tabs, if g.tabs == 1 { "" } else { "s" }, if g.collapsed { ", collapsed" } else { "" });
+            r.matches = m.positions;
+            r.dot = Some(g.color);
+            r.tag = Some("Group");
+            rows.push(r);
+        }
+    }
+
+    if mode == Mode::Split {
+        let mut found: Vec<(i32, &TabItem, Vec<usize>)> = s
+            .tabs
+            .iter()
+            .filter(|t| Some(t.index) != s.active)
+            .filter_map(|t| {
+                let m = score_terms(q, &t.title, &[&t.url])?;
+                Some((m.score, t, m.positions))
+            })
+            .collect();
+        if !q.is_empty() {
+            found.sort_by_key(|f| std::cmp::Reverse(f.0));
+        }
+        for (_, t, pos) in found.into_iter().take(limit) {
+            let mut r = Row::new(
+                "Show beside this tab",
+                Action::Outcome(PaletteOutcome::SplitWith(t.index)),
+                egui_phosphor::regular::COLUMNS,
+                display_title(&t.title, &t.url),
+            );
+            r.detail = t.url.clone();
+            r.matches = pos;
+            r.dot = t.container.as_ref().map(|c| c.color);
+            rows.push(r);
+        }
+    }
+
+    if mode == Mode::Groups {
+        if score_terms(q, "New group", &[]).is_some() {
+            rows.push(Row::new(
+                "Tab groups",
+                Action::Outcome(PaletteOutcome::AddToGroup(None)),
+                egui_phosphor::regular::FOLDER_SIMPLE_PLUS,
+                "New group".to_string(),
+            ));
+        }
+        for g in &s.groups {
+            let label = if g.name.is_empty() { "Unnamed group".to_string() } else { g.name.clone() };
+            let Some(m) = score_terms(q, &label, &[]) else {
+                continue;
+            };
+            let mut r = Row::new(
+                "Tab groups",
+                Action::Outcome(PaletteOutcome::AddToGroup(Some(g.id))),
+                egui_phosphor::regular::FOLDER_SIMPLE,
+                label,
+            );
+            r.detail = format!("{} tab{}", g.tabs, if g.tabs == 1 { "" } else { "s" });
+            r.matches = m.positions;
+            r.dot = Some(g.color);
             rows.push(r);
         }
     }
@@ -1328,9 +1435,36 @@ mod tests {
                 color: Color32::BLUE,
                 temporary: false,
             }],
+            groups: vec![GroupItem {
+                id: 9,
+                name: "Research".into(),
+                color: Color32::GREEN,
+                tabs: 2,
+                collapsed: true,
+            }],
+            active: Some(0),
             on_web_page: true,
             recording: false,
         }
+    }
+
+    #[test]
+    fn split_and_group_pickers() {
+        let s = sources();
+        assert_eq!(parse_query("| rust"), (Mode::Split, "rust"));
+        assert_eq!(parse_query("&"), (Mode::Groups, ""));
+        // The current tab cannot be split with itself.
+        assert_eq!(actions(&build_rows("|", &s, &[])), vec![PaletteOutcome::SplitWith(3)]);
+        assert_eq!(
+            actions(&build_rows("&", &s, &[])),
+            vec![PaletteOutcome::AddToGroup(None), PaletteOutcome::AddToGroup(Some(9))]
+        );
+        assert_eq!(actions(&build_rows("& resea", &s, &[])), vec![PaletteOutcome::AddToGroup(Some(9))]);
+        // Groups are listed among the open tabs.
+        assert!(actions(&build_rows("@ research", &s, &[])).contains(&PaletteOutcome::FocusGroup(9)));
+        // The commands open the pickers.
+        let rows = build_rows("> split view with", &s, &[]);
+        assert!(rows.iter().any(|r| matches!(r.action, Action::SetQuery("|"))));
     }
 
     fn actions(rows: &[Row]) -> Vec<PaletteOutcome> {
@@ -1391,9 +1525,10 @@ mod tests {
         assert!(cmds.iter().all(|r| r.section == "Commands"));
         assert!(!cmds.is_empty());
         let tabs = build_rows("@", &s, &[]);
+        // Open tabs, then the tab groups.
         assert_eq!(
             actions(&tabs),
-            vec![PaletteOutcome::SwitchTab(0), PaletteOutcome::SwitchTab(3)]
+            vec![PaletteOutcome::SwitchTab(0), PaletteOutcome::SwitchTab(3), PaletteOutcome::FocusGroup(9)]
         );
         let tabs = build_rows("@ rust", &s, &[]);
         assert_eq!(actions(&tabs), vec![PaletteOutcome::SwitchTab(3)]);
@@ -1421,7 +1556,7 @@ mod tests {
             }]
         );
         let help = build_rows("?", &s, &[]);
-        assert_eq!(help.len(), 4);
+        assert_eq!(help.len(), 6);
     }
 
     #[test]
