@@ -571,7 +571,7 @@ fn login_url(text: &str) -> Option<String> {
         .map(|_| full)
 }
 
-fn copy_to_clipboard(text: &str) -> Result<(), String> {
+pub(crate) fn copy_to_clipboard(text: &str) -> Result<(), String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("No clipboard: {e}"))?;
     clipboard.set_text(text).map_err(|e| format!("Could not copy: {e}"))?;
     schedule_clear(text);

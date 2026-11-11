@@ -19,7 +19,7 @@ pub const MAX_MESSAGE: usize = 64 * 1024;
 const MAX_CALLS_PER_SECOND: u32 = 200;
 
 /// A well-formed request, not yet checked against permissions.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PageCall {
     pub nonce: String,
     pub plugin: String,

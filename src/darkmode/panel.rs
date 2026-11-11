@@ -43,6 +43,16 @@ impl DarkModePanel {
         &self.settings
     }
 
+    /// Changes the settings from outside the panel (toolbar button, command
+    /// palette) and saves them. The caller re-applies them on the tabs.
+    pub fn update(&mut self, change: impl FnOnce(&mut DarkSettings)) -> Result<(), String> {
+        change(&mut self.settings);
+        self.settings.normalize();
+        let saved = settings::save(&self.settings);
+        self.error = saved.clone().err();
+        saved
+    }
+
     /// Remembers a page's "natively dark" report to show it in the panel.
     pub fn note_native_dark(&mut self, host: &str, dark: bool) {
         self.native.insert(settings::normalize_host(host), dark);

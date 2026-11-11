@@ -372,7 +372,7 @@ fn page_info(wv: &WebView) -> Value {
 /// Runs `script` and passes its completion value as JSON, or an empty
 /// string when it threw or did not parse (as wry's
 /// `evaluate_script_with_callback` does).
-fn run_script(wv: &WebView, script: &str, done: impl FnOnce(String) + 'static) {
+pub fn run_script(wv: &WebView, script: &str, done: impl FnOnce(String) + 'static) {
     wv.run_javascript(script, None::<&gio::Cancellable>, move |r| {
         let json = r
             .ok()
