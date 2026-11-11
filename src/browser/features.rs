@@ -35,6 +35,8 @@ const PLUGIN_POLL: Duration = Duration::from_secs(1);
 const CLEAR_CONFIRM: Duration = Duration::from_secs(10);
 /// Recent history entries offered by the palette.
 const PALETTE_HISTORY: usize = 50;
+/// Bookmarks offered by the palette for one query.
+const PALETTE_BOOKMARKS: usize = 2000;
 
 #[cfg(unix)]
 type AutomationHandle = crate::automation::Handle;
@@ -101,6 +103,9 @@ pub(super) struct Features {
     pub clear_armed: Option<Instant>,
     /// Plugin pages, commands, clipboard history (`plugins_host.rs`).
     pub host: super::plugins_host::HostState,
+    /// The palette's bookmark and history candidates for (query,
+    /// bookmarks generation).
+    pub palette_links: Option<((String, u64), Vec<palette::LinkItem>, Vec<palette::LinkItem>)>,
 }
 
 impl Features {
@@ -132,6 +137,7 @@ impl Features {
             nav_waits: Vec::new(),
             clear_armed: None,
             host: super::plugins_host::HostState::new(),
+            palette_links: None,
         }
     }
 }
@@ -447,6 +453,8 @@ impl Browser {
             return;
         }
         self.feat.palette.toggle();
+        // History may have changed since the palette last looked.
+        self.feat.palette_links = None;
         if self.feat.palette.is_open()
             && let Some(wv) = &self.webview
         {
@@ -457,7 +465,36 @@ impl Browser {
         self.request_redraw();
     }
 
-    pub(super) fn palette_sources(&self) -> PaletteSources {
+    /// The bookmarks and history the palette searches for what is typed:
+    /// at most a few hundred candidates (the stores can hold tens of
+    /// thousands), looked up once per query and bookmarks change.
+    fn palette_links(&mut self) -> (Vec<palette::LinkItem>, Vec<palette::LinkItem>) {
+        let (mode, q) = palette::parse_query(self.feat.palette.query());
+        let q = q.trim().to_string();
+        if !matches!(mode, palette::Mode::All | palette::Mode::Links) || (mode == palette::Mode::All && q.is_empty()) {
+            return (Vec::new(), Vec::new());
+        }
+        let key = (q.clone(), bookmarks::generation());
+        if let Some((k, b, h)) = &self.feat.palette_links
+            && *k == key
+        {
+            return (b.clone(), h.clone());
+        }
+        // Few bookmarks: hand them all over so the palette's fuzzy match
+        // sees them; many: only those containing every word.
+        let all = bookmarks::snapshot().link_count() <= PALETTE_BOOKMARKS;
+        let list = bookmarks::search(if all { "" } else { &q }, PALETTE_BOOKMARKS);
+        let marks: Vec<palette::LinkItem> =
+            list.into_iter().map(|b| palette::LinkItem { title: b.title, url: b.url, folder: b.folder }).collect();
+        let hist: Vec<palette::LinkItem> = history::search(&q, PALETTE_HISTORY)
+            .into_iter()
+            .map(|h| palette::LinkItem { title: h.title, url: h.url, folder: String::new() })
+            .collect();
+        self.feat.palette_links = Some((key, marks.clone(), hist.clone()));
+        (marks, hist)
+    }
+
+    pub(super) fn palette_sources(&mut self) -> PaletteSources {
         let badge = |id: Option<String>| {
             id.and_then(|id| containers::get(&id))
                 .map(|c| palette::ContainerBadge { name: c.name.clone(), color: c.color32() })
@@ -470,14 +507,7 @@ impl Browser {
                 container: badge(self.tab_container(i)),
             })
             .collect();
-        let bookmarks = bookmarks::all()
-            .into_iter()
-            .map(|b| palette::LinkItem { title: b.title, url: b.url })
-            .collect();
-        let history = history::search("", PALETTE_HISTORY)
-            .into_iter()
-            .map(|(url, title)| palette::LinkItem { title, url })
-            .collect();
+        let (bookmarks, history) = self.palette_links();
         let containers = containers::all()
             .into_iter()
             .filter(|c| !c.temporary)
@@ -854,7 +884,7 @@ impl Browser {
             return;
         }
         self.feat.clear_armed = None;
-        history::clear();
+        let history_result = history::clear();
         let mut cleared = 0;
         for view in self.all_views() {
             if let WebPane::Wry(wv) = view
@@ -864,7 +894,9 @@ impl Browser {
             }
         }
         self.refresh_if_internal("browsecraft://history");
-        if cleared == 0 {
+        if let Err(e) = history_result {
+            self.set_notice_long(format!("Could not clear the history: {e}"));
+        } else if cleared == 0 {
             self.set_notice("History cleared (no open web page to clear site data from)");
         } else {
             self.set_notice("History, cookies, cache and site data cleared");

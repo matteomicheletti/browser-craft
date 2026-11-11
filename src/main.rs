@@ -64,6 +64,7 @@ fn main() {
 
     flags::load();
     bookmarks::load();
+    history::init();
     passwords::load();
     containers::load();
     internal::set_theme(flags::get().theme.resolve(true));

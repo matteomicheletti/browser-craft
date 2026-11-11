@@ -369,7 +369,7 @@ enum Action {
     ToggleBookmark,
     OpenBookmark(String),
     OpenInNewTab(String),
-    RemoveBookmark(String),
+    RemoveBookmark(u64),
     BookmarksPage,
     FillLogin(String),
     SuggestPassword,
@@ -1250,6 +1250,9 @@ fn background_web_event(st: &mut TabState, message: TabMessage) {
         TabMessage::Title(title) => {
             if !st.web_expect || st.web_committed {
                 st.title = clean_title(&title);
+                if !st.loading && !st.web_url.is_empty() {
+                    history::retitle(&st.web_url, &st.title, st.container.as_deref());
+                }
             }
         }
         TabMessage::Start(url) => {
@@ -1284,7 +1287,7 @@ fn background_web_event(st: &mut TabState, message: TabMessage) {
             }
             st.web_url = url.clone();
             st.web_document = url.clone();
-            history::record(&url, &st.title);
+            history::record(&url, &st.title, st.container.as_deref());
         }
         // Pop-ups, password reports and container hand-overs from a page
         // the user is not looking at are dropped.
@@ -3584,7 +3587,7 @@ impl Browser {
         }
         let title = self.live_title();
         let message = if bookmarks::toggle(&title, &url) {
-            "Bookmark added"
+            "Bookmark added to the bookmarks bar"
         } else {
             "Bookmark removed"
         };
@@ -3694,7 +3697,7 @@ impl Browser {
                     .get(self.index)
                     .is_some_and(|e| e.request.url().starts_with("about:blocked:"));
                 if !blocked && !url.starts_with("about:") {
-                    history::record(&url, &title);
+                    history::record(&url, &title, self.container.as_deref());
                 }
                 self.title = title;
                 self.tab = Some(Tab {
@@ -3785,7 +3788,7 @@ impl Browser {
         if !self.address_focused() {
             self.address.set(&url);
         }
-        history::record(&url, &self.title);
+        history::record(&url, &self.title, self.container.as_deref());
         self.schedule_thumbnail(self.tab_id);
     }
 
@@ -3797,7 +3800,7 @@ impl Browser {
         self.title = clean_title(&title);
         self.update_window_title();
         if !self.loading && !self.web_url.is_empty() {
-            history::record(&self.web_url, &self.title);
+            history::retitle(&self.web_url, &self.title, self.container.as_deref());
         }
     }
 
@@ -6190,19 +6193,22 @@ impl Browser {
 
         // Bookmarks bar, under the address bar.
         if bar_visible {
-            let items: Vec<(String, String)> = bookmarks::all().into_iter().map(|b| (b.title, b.url)).collect();
+            let tree = bookmarks::snapshot();
             egui::Panel::top("bookmarks")
                 .exact_size(BOOKMARKS_BAR_HEIGHT)
                 .resizable(false)
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.fill(c.bar_bg))
                 .show(ui, |ui| {
-                    for event in egui_chrome::bookmarks_bar(ui, &c, &items) {
+                    for event in egui_chrome::bookmarks_bar(ui, &c, &tree.bar.children) {
                         actions.push(match event {
                             egui_chrome::BarEvent::Open(url) => Action::OpenBookmark(url),
                             egui_chrome::BarEvent::OpenInNewTab(url) => Action::OpenInNewTab(url),
-                            egui_chrome::BarEvent::Remove(url) => Action::RemoveBookmark(url),
+                            egui_chrome::BarEvent::Remove(id) => Action::RemoveBookmark(id),
                             egui_chrome::BarEvent::Manage => Action::BookmarksPage,
+                            egui_chrome::BarEvent::ManageFolder(id) => {
+                                Action::OpenBookmark(format!("browsecraft://bookmarks?folder={id}"))
+                            }
                         });
                     }
                     let r = ui.max_rect();
@@ -6514,8 +6520,8 @@ impl Browser {
                 Action::ToggleBookmark => self.toggle_bookmark(),
                 Action::OpenBookmark(url) => self.load(Request::Get(url), true),
                 Action::OpenInNewTab(url) => self.open_in_new_tab(url),
-                Action::RemoveBookmark(url) => {
-                    bookmarks::remove(&url);
+                Action::RemoveBookmark(id) => {
+                    bookmarks::remove_id(id);
                     self.set_notice("Bookmark removed");
                     self.refresh_if_internal("browsecraft://bookmarks");
                 }

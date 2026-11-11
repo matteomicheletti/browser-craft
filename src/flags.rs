@@ -58,6 +58,10 @@ pub struct Flags {
     pub hover_card_images: bool,
     /// How long the pointer rests on a tab before the first card shows.
     pub hover_card_delay_ms: u32,
+    /// Days of browsing history kept (0: until cleared).
+    pub history_days: u32,
+    /// The most visits kept; the oldest go first (0: no cap).
+    pub history_max_visits: u32,
 }
 
 /// The choices offered for `suspend_after_min` and `max_live_tabs`.
@@ -65,6 +69,10 @@ pub const SUSPEND_CHOICES: [u32; 5] = [0, 5, 15, 30, 60];
 pub const LIVE_TAB_CHOICES: [u32; 4] = [4, 8, 16, 32];
 /// The choices offered for `hover_card_delay_ms` (Chrome waits about 0.5 s).
 pub const HOVER_DELAY_CHOICES: [u32; 5] = [0, 250, 500, 800, 1200];
+/// The choices offered for `history_days` (0: forever) and
+/// `history_max_visits`.
+pub const HISTORY_DAY_CHOICES: [u32; 5] = [30, 90, 365, 1825, 0];
+pub const HISTORY_MAX_CHOICES: [u32; 3] = [100_000, 500_000, 2_000_000];
 
 impl Default for Flags {
     fn default() -> Self {
@@ -84,6 +92,8 @@ const DEFAULT_FLAGS: Flags = Flags {
     hover_cards: true,
     hover_card_images: true,
     hover_card_delay_ms: 500,
+    history_days: 365,
+    history_max_visits: 500_000,
 };
 
 static FLAGS: RwLock<Flags> = RwLock::new(DEFAULT_FLAGS);
@@ -149,6 +159,18 @@ fn load_from_mut(flags: &mut Flags) {
                     flags.hover_card_delay_ms = n;
                 }
             }
+            ("history-days", v) => {
+                if let Ok(n) = v.parse::<u32>()
+                    && n <= 100 * 365
+                {
+                    flags.history_days = n;
+                }
+            }
+            ("history-max-visits", v) => {
+                if let Ok(n) = v.parse::<u32>() {
+                    flags.history_max_visits = n;
+                }
+            }
             _ => {}
         }
     }
@@ -180,6 +202,8 @@ fn save_to(path: &Path, flags: &Flags) -> std::io::Result<()> {
     text += if flags.hover_cards { "hover-cards=on\n" } else { "hover-cards=off\n" };
     text += if flags.hover_card_images { "hover-card-images=on\n" } else { "hover-card-images=off\n" };
     text += &format!("hover-card-delay={}\n", flags.hover_card_delay_ms);
+    text += &format!("history-days={}\n", flags.history_days);
+    text += &format!("history-max-visits={}\n", flags.history_max_visits);
     crate::storage::write_private(path, text.as_bytes())
 }
 
@@ -359,6 +383,18 @@ fn apply_query(pairs: impl Iterator<Item = (String, String)>) -> bool {
                     flags.hover_card_delay_ms = n;
                 }
             }
+            ("history-days", v) => {
+                if let Some(n) = v.parse::<u32>().ok().filter(|n| HISTORY_DAY_CHOICES.contains(n)) {
+                    changed |= flags.history_days != n;
+                    flags.history_days = n;
+                }
+            }
+            ("history-max-visits", v) => {
+                if let Some(n) = v.parse::<u32>().ok().filter(|n| HISTORY_MAX_CHOICES.contains(n)) {
+                    changed |= flags.history_max_visits != n;
+                    flags.history_max_visits = n;
+                }
+            }
             _ => {}
         }
     }
@@ -486,17 +522,44 @@ pub fn page_html() -> String {
         "How long the pointer rests on a tab before the first card shows; moving to the next tab is immediate.",
         &delays,
     );
+    let day_labels = ["30 days", "90 days", "1 year", "5 years", "Forever"];
+    let days: Vec<(&'static str, String, bool)> = HISTORY_DAY_CHOICES
+        .iter()
+        .zip(day_labels)
+        .map(|(n, label)| (label, to("history-days", &n.to_string()), flags.history_days == *n))
+        .collect();
+    let history_days = internal::segmented_row(
+        true,
+        "Keep history for",
+        "Older visits are deleted at start-up. Imported history follows the same rule.",
+        &days,
+    );
+    let max_labels = ["100k", "500k", "2M"];
+    let maxes: Vec<(&'static str, String, bool)> = HISTORY_MAX_CHOICES
+        .iter()
+        .zip(max_labels)
+        .map(|(n, label)| (label, to("history-max-visits", &n.to_string()), flags.history_max_visits == *n))
+        .collect();
+    let history_max = internal::segmented_row(
+        false,
+        "Most visits kept",
+        "Beyond this, the oldest visits are deleted at start-up.",
+        &maxes,
+    );
     let body = format!(
         "<h1>Settings</h1><p class=\"sub\">Changes apply immediately.</p>{error}\
          <div class=\"card\"><h2>Appearance</h2>{appearance}{titlebar}</div>\
          <div class=\"card\"><h2>Layout</h2>{layout}{bar}{hover}{hover_images}{hover_delay}</div>\
          <div class=\"card\"><h2>Tabs and memory</h2>{suspend}{live}{restore}</div>\
+         <div class=\"card\"><h2>History</h2>{history_days}{history_max}</div>\
          <div class=\"card\"><h2>Advanced</h2>{renderer}</div>\
          <div class=\"card\"><h2>Shortcuts to your data</h2>\
          <div class=\"row first\"><div class=\"grow\"><div class=\"t\">Bookmarks</div><div class=\"d\">Pages you saved.</div></div>\
          <a class=\"btn ghost\" href=\"browsecraft://bookmarks\">Open</a></div>\
          <div class=\"row\"><div class=\"grow\"><div class=\"t\">History</div><div class=\"d\">Pages you visited.</div></div>\
          <a class=\"btn ghost\" href=\"browsecraft://history\">Open</a></div>\
+         <div class=\"row\"><div class=\"grow\"><div class=\"t\">Import from another browser</div><div class=\"d\">Bookmarks and history from Firefox, Chrome and others.</div></div>\
+         <a class=\"btn ghost\" href=\"browsecraft://import\">Open</a></div>\
          <div class=\"row\"><div class=\"grow\"><div class=\"t\">Passwords</div><div class=\"d\">Your KeePass (.kdbx) vault.</div></div>\
          <a class=\"btn ghost\" href=\"browsecraft://passwords\">Open</a></div></div>"
     );
@@ -656,7 +719,7 @@ mod tests {
         let html = page_html();
         assert!(html.contains("tabs-position=right\">Right"), "unselected links have no class");
         assert!(html.contains("class=\"on\" href=\"browsecraft://flags?token="));
-        assert_eq!(html.matches("class=\"on\"").count(), 5, "one selected option per control");
+        assert_eq!(html.matches("class=\"on\"").count(), 7, "one selected option per control");
         assert_eq!(html.matches("class=\"theme on\"").count(), 1, "one theme selected");
         assert!(html.contains("theme=sand"), "every theme is offered");
         // The bookmarks-bar switch is off and offers to turn it on.
@@ -706,6 +769,22 @@ mod tests {
         load_from_mut(&mut flags);
         assert_eq!(flags.tabs_position, TabsPosition::Left);
         assert_eq!((flags.suspend_after_min, flags.max_live_tabs, flags.restore_tabs), (5, 4, false));
+        set(before).unwrap();
+    }
+
+    #[test]
+    fn history_retention_flags_round_trip_and_validate() {
+        let _guard = SERIAL.lock().unwrap();
+        let before = get();
+        set(Flags::default()).unwrap();
+        assert_eq!((get().history_days, get().history_max_visits), (365, 500_000));
+        let pairs = vec![("history-days".into(), "0".into()), ("history-max-visits".into(), "2000000".into())];
+        assert!(apply_query(pairs.into_iter()));
+        assert!(!apply_query(vec![("history-days".into(), "7".into())].into_iter()), "only the offered choices");
+        let mut flags = Flags::default();
+        load_from_mut(&mut flags);
+        assert_eq!((flags.history_days, flags.history_max_visits), (0, 2_000_000));
+        assert!(page_html().contains("Keep history for"));
         set(before).unwrap();
     }
 
