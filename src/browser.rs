@@ -248,6 +248,13 @@ pub enum TabMessage {
     Plugin { sender: String, call: crate::plugins::PageCall },
     /// The page logged to its console (`bc-console:`).
     Console { url: String, msg: crate::automation::console::PageConsoleMessage },
+    /// A site permission request started or stopped waiting for the user
+    /// (`permissions::prompt_for`).
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    PermissionPrompt,
+    /// A call site loaded, and this WebKitGTK has no WebRTC.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    WebRtcMissing,
 }
 
 /// A tab to open at start-up (command line): the URL and the container.
@@ -353,8 +360,22 @@ enum Hit {
     Control(NodeId),
 }
 
+/// What the bar under the toolbar shows for the active tab.
+enum SiteBar {
+    Prompt(crate::permissions::Prompt),
+    WebRtc,
+}
+
 /// Chrome actions collected while the egui frame is built and applied after.
 enum Action {
+    /// The permission prompt `id` was answered.
+    Permission { id: u64, allow: bool, remember: bool },
+    /// "Remember for this site" was ticked or unticked on prompt `id`.
+    PermissionRemember(u64, bool),
+    /// The WebRTC notice: open the page elsewhere (`true`) or close it.
+    WebRtcNotice(bool),
+    /// Tab `i`'s menu: open its page in the system's default browser.
+    OpenExternally(usize),
     Back,
     Forward,
     Reload,
@@ -571,6 +592,12 @@ pub struct Browser {
     containers_panel: crate::containers::ContainersPanel,
     /// The find bar: the text searched for, and the match count.
     find: Option<FindBar>,
+    /// The tab whose call site needs the WebRTC this WebKitGTK lacks: the
+    /// notice bar shows while it is the active tab.
+    webrtc_notice: Option<u64>,
+    /// Permission prompts (ids) whose "Remember for this site" the user
+    /// unticked.
+    perm_forget: std::collections::HashSet<u64>,
     favicons: HashMap<u64, egui::TextureHandle>,
     /// A snapshot of the page was requested and has not arrived yet.
     snapshot_pending: bool,
@@ -718,6 +745,8 @@ struct Bars {
     tab_strip: bool,
     bookmarks: bool,
     save: bool,
+    /// A site permission prompt or the WebRTC notice.
+    site: bool,
     find: bool,
 }
 
@@ -732,6 +761,7 @@ fn extra_bars_h(scale: f32, egui_chrome: bool, bars: Bars) -> f32 {
         (bars.tab_strip, TAB_STRIP_HEIGHT),
         (bars.bookmarks, BOOKMARKS_BAR_HEIGHT),
         (bars.save, SAVE_BAR_HEIGHT),
+        (bars.site, SAVE_BAR_HEIGHT),
         (bars.find, FIND_BAR_HEIGHT),
     ]
     .iter()
@@ -2309,6 +2339,8 @@ impl Browser {
             drawer: None,
             containers_panel: crate::containers::ContainersPanel::new(),
             find: None,
+            webrtc_notice: None,
+            perm_forget: Default::default(),
             favicons: HashMap::new(),
             snapshot_pending: false,
             extra_page_scripts: Vec::new(),
@@ -2415,6 +2447,7 @@ impl Browser {
                     tab_strip: self.gpu_chrome,
                     bookmarks: flags::get().bookmarks_bar,
                     save: save_bar,
+                    site: self.site_bar().is_some(),
                     find: self.find.is_some(),
                 },
             )
@@ -2441,6 +2474,26 @@ impl Browser {
             return 0.0;
         }
         (DRAWER_WIDTH * self.scale()).round()
+    }
+
+    /// The bar under the toolbar for the active tab: its oldest permission
+    /// prompt, else the WebRTC notice.
+    fn site_bar(&self) -> Option<SiteBar> {
+        if self.egui.is_none() || !self.web_page {
+            return None;
+        }
+        if let Some(prompt) = crate::permissions::prompt_for(self.tab_id) {
+            return Some(SiteBar::Prompt(prompt));
+        }
+        (self.webrtc_notice == Some(self.tab_id)).then_some(SiteBar::WebRtc)
+    }
+
+    /// Hands `url` to the system's default browser.
+    fn open_externally(&mut self, url: String) {
+        match crate::external::open_in_default_browser(&url) {
+            Ok(()) => self.set_notice(format!("Opened in {}", crate::external::default_browser_name())),
+            Err(error) => self.set_notice(error),
+        }
     }
 
     fn notice_active(&self) -> bool {
@@ -3168,6 +3221,18 @@ impl Browser {
             TabMessage::Console { url, msg } => return self.console_message(id, &url, msg),
             TabMessage::Plugin { sender, call } => return self.plugin_call(id, sender, call),
             TabMessage::Dark(m) => return self.dark_message(m),
+            TabMessage::PermissionPrompt => return self.request_redraw(),
+            TabMessage::WebRtcMissing => {
+                if crate::permissions::take_webrtc_notice() {
+                    // Looks up the button's browser name off the UI thread.
+                    std::thread::spawn(|| {
+                        crate::external::default_browser_name();
+                    });
+                    self.webrtc_notice = Some(id);
+                    self.request_redraw();
+                }
+                return;
+            }
             other => other,
         };
         // Loads that automation clients wait for.
@@ -3205,7 +3270,11 @@ impl Browser {
                     self.web_bounds = None;
                     self.sync_webview();
                 }
-                TabMessage::Dark(_) | TabMessage::Plugin { .. } | TabMessage::Console { .. } => {}
+                TabMessage::Dark(_)
+                | TabMessage::Plugin { .. }
+                | TabMessage::Console { .. }
+                | TabMessage::PermissionPrompt
+                | TabMessage::WebRtcMissing => {}
             }
             return;
         }
@@ -4244,6 +4313,7 @@ impl Browser {
                     {
                         use wry::WebViewExtUnix as _;
                         crate::useragent::webkit::attach(&wv.webview(), navigation);
+                        crate::permissions::webkit::attach(&wv.webview(), tab, self.proxy.clone());
                     }
                     let key = container.unwrap_or("");
                     if let Some(dir) = shared.contexts.get_mut(key).and_then(|c| c.favicons.take()) {
@@ -6418,6 +6488,35 @@ impl Browser {
                 });
         }
 
+        // A site's permission prompt, or the WebRTC notice.
+        if let Some(bar) = self.site_bar().filter(|_| !fullscreen) {
+            egui::Panel::top("site_bar")
+                .exact_size(SAVE_BAR_HEIGHT)
+                .resizable(false)
+                .show_separator_line(false)
+                .frame(egui::Frame::NONE.fill(c.hover))
+                .show(ui, |ui| {
+                    match &bar {
+                        SiteBar::Prompt(prompt) => {
+                            let mut remember = !self.perm_forget.contains(&prompt.id);
+                            let was = remember;
+                            if let Some(allow) = egui_chrome::permission_bar(ui, &c, prompt, &mut remember) {
+                                actions.push(Action::Permission { id: prompt.id, allow, remember });
+                            } else if remember != was {
+                                actions.push(Action::PermissionRemember(prompt.id, remember));
+                            }
+                        }
+                        SiteBar::WebRtc => {
+                            if let Some(open) = egui_chrome::webrtc_bar(ui, &c, crate::external::default_browser_name()) {
+                                actions.push(Action::WebRtcNotice(open));
+                            }
+                        }
+                    }
+                    let r = ui.max_rect();
+                    ui.painter().hline(r.x_range(), r.max.y - 0.5, egui::Stroke::new(1.0, c.line));
+                });
+        }
+
         // Find bar.
         if let Some(bar) = self.find.as_mut()
             && !fullscreen
@@ -6534,6 +6633,8 @@ impl Browser {
                 actions.push(Action::CloseTab(i));
             } else if row.duplicate {
                 actions.push(Action::DuplicateTab(i));
+            } else if row.open_externally {
+                actions.push(Action::OpenExternally(i));
             } else if row.close_others {
                 actions.push(Action::CloseOtherTabs(i));
             } else if let Some(pick) = row.new_in {
@@ -6678,6 +6779,26 @@ impl Browser {
                     }
                 }
                 Action::CloseOtherTabs(i) => self.close_other_tabs(i),
+                Action::Permission { id, allow, remember } => {
+                    self.perm_forget.remove(&id);
+                    if let Err(error) = crate::permissions::answer(id, allow, remember) {
+                        self.set_notice(error);
+                    }
+                }
+                Action::PermissionRemember(id, on) => {
+                    if on {
+                        self.perm_forget.remove(&id);
+                    } else {
+                        self.perm_forget.insert(id);
+                    }
+                }
+                Action::WebRtcNotice(open) => {
+                    self.webrtc_notice = None;
+                    if open {
+                        self.open_externally(self.current_url());
+                    }
+                }
+                Action::OpenExternally(i) => self.open_externally(self.tab_url(i)),
                 Action::ToggleBookmark => self.toggle_bookmark(),
                 Action::OpenBookmark(url) => self.load(Request::Get(url), true),
                 Action::OpenInNewTab(url) => self.open_in_new_tab(url),
@@ -7394,8 +7515,8 @@ mod tests {
         assert_eq!(extra_bars_h(1.5, true, bars(true, false)), 51.0);
         assert_eq!(extra_bars_h(1.0, true, bars(false, false)), 0.0);
         assert_eq!(extra_bars_h(2.0, false, bars(true, true)), 0.0, "the engine chrome has neither bar");
-        let all = Bars { tab_strip: true, bookmarks: true, save: true, find: true };
-        assert_eq!(extra_bars_h(1.0, true, all), 38.0 + 34.0 + 42.0 + 40.0);
+        let all = Bars { tab_strip: true, bookmarks: true, save: true, site: true, find: true };
+        assert_eq!(extra_bars_h(1.0, true, all), 38.0 + 34.0 + 42.0 + 42.0 + 40.0);
         assert_eq!(extra_bars_h(1.25, true, Bars { tab_strip: true, ..Bars::default() }), 48.0);
     }
 

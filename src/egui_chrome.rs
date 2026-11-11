@@ -594,6 +594,8 @@ pub struct TabRow {
     pub duplicate: bool,
     /// The user picked "Close other tabs" from the context menu.
     pub close_others: bool,
+    /// "Open page in another browser" (the system's default one).
+    pub open_externally: bool,
     /// "New tab in container" from the context menu.
     pub new_in: Option<ContainerChoice>,
     /// "Reopen in container": this tab's page in another container.
@@ -649,6 +651,10 @@ pub fn container_menu(ui: &mut egui::Ui, c: &Colors, containers: &[Container], n
 fn tab_menu(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Container], groups: &[GroupInfo], windows: WindowList, out: &mut TabRow) {
     if menu_item(ui, c, crate::icons::COPY, "Duplicate tab").clicked() {
         out.duplicate = true;
+        ui.close();
+    }
+    if menu_item(ui, c, egui_phosphor::regular::COMPASS, "Open page in another browser").clicked() {
+        out.open_externally = true;
         ui.close();
     }
     if menu_item(ui, c, egui_phosphor::regular::ARROW_SQUARE_OUT, "Move to new window").clicked() {
@@ -1595,6 +1601,81 @@ pub fn save_login_bar(
             }
         });
     });
+}
+
+/// A site's permission prompt: "<host> wants to use your microphone and
+/// camera" with Allow / Block and "Remember for this site". Returns the
+/// answer (`true`: allow).
+pub fn permission_bar(ui: &mut egui::Ui, c: &Colors, prompt: &crate::permissions::Prompt, remember: &mut bool) -> Option<bool> {
+    use crate::permissions::Kind;
+    use egui_phosphor::regular as ph;
+    let glyph = match prompt.kinds.first() {
+        Some(Kind::Camera) => ph::VIDEO_CAMERA,
+        Some(Kind::Microphone) => ph::MICROPHONE,
+        Some(Kind::Screen) => ph::MONITOR,
+        Some(Kind::Location) => ph::MAP_PIN,
+        Some(Kind::Notifications) => ph::BELL,
+        Some(Kind::Clipboard) => ph::CLIPBOARD,
+        _ => ph::SHIELD_CHECK,
+    };
+    let mut answer = None;
+    ui.horizontal_centered(|ui| {
+        ui.add_space(12.0);
+        ui.label(icon(glyph, 16.0).color(c.accent));
+        ui.label(egui::RichText::new(prompt.text()).size(13.0).color(c.text));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(10.0);
+            let block = egui::Button::new(egui::RichText::new("Block").size(12.5).color(c.text))
+                .fill(c.bar_bg)
+                .corner_radius(egui::CornerRadius::same(8));
+            if ui.add(block).clicked() {
+                answer = Some(false);
+            }
+            let allow = egui::Button::new(egui::RichText::new("Allow").size(12.5).color(c.accent_text))
+                .fill(c.accent)
+                .corner_radius(egui::CornerRadius::same(8));
+            if ui.add(allow).clicked() {
+                answer = Some(true);
+            }
+            if prompt.rememberable() {
+                ui.checkbox(remember, egui::RichText::new("Remember for this site").size(12.5).color(c.text));
+            } else {
+                ui.label(egui::RichText::new("Asked every time").size(12.0).color(c.muted))
+                    .on_hover_text("A block is remembered; screen sharing is never allowed without asking");
+                ui.checkbox(remember, egui::RichText::new("Remember a block").size(12.5).color(c.text));
+            }
+        });
+    });
+    answer
+}
+
+/// The one-time notice on call sites when WebKitGTK has no WebRTC.
+/// Returns `Some(true)` to open the page in the default browser,
+/// `Some(false)` to close the notice.
+pub fn webrtc_bar(ui: &mut egui::Ui, c: &Colors, browser: &str) -> Option<bool> {
+    let mut answer = None;
+    ui.horizontal_centered(|ui| {
+        ui.add_space(12.0);
+        ui.label(icon(egui_phosphor::regular::PHONE_X, 16.0).color(c.accent));
+        ui.label(
+            egui::RichText::new("Calls need WebRTC, which this system's WebKitGTK doesn't include")
+                .size(13.0)
+                .color(c.text),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(10.0);
+            if ui.add(egui::Button::new(icon(crate::icons::CLOSE, 13.0).color(c.muted)).frame(false)).clicked() {
+                answer = Some(false);
+            }
+            let open = egui::Button::new(egui::RichText::new(format!("Open in {browser}")).size(12.5).color(c.accent_text))
+                .fill(c.accent)
+                .corner_radius(egui::CornerRadius::same(8));
+            if ui.add(open).clicked() {
+                answer = Some(true);
+            }
+        });
+    });
+    answer
 }
 
 #[cfg(test)]

@@ -322,7 +322,14 @@ pub fn apply_form(query: &str) -> bool {
             false
         }
     };
-    apply_query(pairs.into_iter()) || agents
+    let permissions = match crate::permissions::apply_form_pairs(&pairs) {
+        Ok(changed) => changed,
+        Err(error) => {
+            *SAVE_ERROR.lock().unwrap_or_else(|e| e.into_inner()) = Some(error);
+            false
+        }
+    };
+    apply_query(pairs.into_iter()) || agents || permissions
 }
 
 fn apply_query(pairs: impl Iterator<Item = (String, String)>) -> bool {
@@ -528,6 +535,7 @@ pub fn page_html() -> String {
         &delays,
     );
     let agents = crate::useragent::settings_card(&to, &token);
+    let permissions = crate::permissions::settings_card(&to);
     let day_labels = ["30 days", "90 days", "1 year", "5 years", "Forever"];
     let days: Vec<(&'static str, String, bool)> = HISTORY_DAY_CHOICES
         .iter()
@@ -558,7 +566,7 @@ pub fn page_html() -> String {
          <div class=\"card\"><h2>Layout</h2>{bar}{hover}{hover_images}{hover_delay}</div>\
          <div class=\"card\"><h2>Tabs and memory</h2>{suspend}{live}{restore}</div>\
          <div class=\"card\"><h2>History</h2>{history_days}{history_max}</div>\
-         <div class=\"card\"><h2>Advanced</h2>{renderer}</div>{agents}\
+         <div class=\"card\"><h2>Advanced</h2>{renderer}</div>{agents}{permissions}\
          <div class=\"card\"><h2>Shortcuts to your data</h2>\
          <div class=\"row first\"><div class=\"grow\"><div class=\"t\">Bookmarks</div><div class=\"d\">Pages you saved.</div></div>\
          <a class=\"btn ghost\" href=\"browsecraft://bookmarks\">Open</a></div>\

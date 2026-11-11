@@ -47,6 +47,8 @@ mod thumbnails;
 mod theme;
 mod titlebar;
 mod useragent;
+mod external;
+mod permissions;
 #[cfg(test)]
 mod test_http;
 mod vault;

@@ -40,6 +40,15 @@ pub enum PaletteOutcome {
     PluginCommand { plugin: String, command: String },
     /// Give the site `host` this User-Agent (`None`: back to automatic).
     SetUserAgent { host: String, choice: Option<crate::useragent::Choice> },
+    /// Save this site permission for `host` (`None`: ask again).
+    SetPermission { host: String, kind: crate::permissions::Kind, decision: Option<crate::permissions::Decision> },
+}
+
+/// The current page's site and its saved permissions, for `!`.
+#[derive(Clone, Debug)]
+pub struct PermissionSite {
+    pub host: String,
+    pub saved: Vec<(crate::permissions::Kind, crate::permissions::Decision)>,
 }
 
 /// The current page's site and its User-Agent, for `^`.
@@ -123,6 +132,8 @@ pub struct PaletteSources {
     pub plugin_commands: Vec<PluginCommandItem>,
     /// The current web page's site (`None` on other pages).
     pub user_agent: Option<UserAgentSite>,
+    /// The current web page's site and its permissions (`None` elsewhere).
+    pub permissions: Option<PermissionSite>,
 }
 
 // ---- fuzzy matching --------------------------------------------------------
@@ -282,6 +293,8 @@ pub enum Mode {
     Themes,
     /// `^`: the User-Agent for the current site.
     UserAgents,
+    /// `!`: the permissions of the current site.
+    Permissions,
     Help,
 }
 
@@ -297,6 +310,7 @@ impl Mode {
             Mode::Groups => "Add tab to group",
             Mode::Themes => "Themes",
             Mode::UserAgents => "User agent for this site",
+            Mode::Permissions => "Site permissions",
             Mode::Help => "Help",
         }
     }
@@ -314,6 +328,7 @@ pub fn parse_query(raw: &str) -> (Mode, &str) {
         Some('&') => Mode::Groups,
         Some('%') => Mode::Themes,
         Some('^') => Mode::UserAgents,
+        Some('!') => Mode::Permissions,
         Some('?') => Mode::Help,
         _ => return (Mode::All, raw.trim()),
     };
@@ -424,6 +439,7 @@ fn command_row(
         CommandId::SplitWithTab => row.action = Action::SetQuery("|"),
         CommandId::AddTabToGroup => row.action = Action::SetQuery("&"),
         CommandId::SiteUserAgent => row.action = Action::SetQuery("^"),
+        CommandId::SitePermissions => row.action = Action::SetQuery("!"),
         _ => {}
     }
     // "Change theme…" lists the themes.
@@ -453,6 +469,7 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
             ("& ", "Add the tab to a group", "&"),
             ("% ", "Change the theme", "%"),
             ("^ ", "User agent for this site", "^"),
+            ("! ", "Site permissions for this site", "!"),
         ] {
             let mut r = Row::new(
                 "Prefixes",
@@ -736,6 +753,9 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
     if mode == Mode::UserAgents {
         rows.extend(user_agent_rows(q, s));
     }
+    if mode == Mode::Permissions {
+        rows.extend(permission_rows(q, s));
+    }
 
     if mode == Mode::Themes || (mode == Mode::All && q.chars().count() >= 3) {
         let mut found = theme_rows(q, s);
@@ -778,6 +798,48 @@ fn theme_rows(q: &str, s: &PaletteSources) -> Vec<Row> {
             r.tag = Some("Current");
         }
         rows.push(r);
+    }
+    rows
+}
+
+/// Allow / Block / Ask for each permission of the current site, the one in
+/// effect tagged. Screen sharing has no saved allow.
+fn permission_rows(q: &str, s: &PaletteSources) -> Vec<Row> {
+    use crate::permissions::{Decision, Kind};
+    use egui_phosphor::regular as ph;
+    let Some(site) = &s.permissions else {
+        let mut r = Row::new("Site permissions", Action::SetQuery(""), crate::icons::GLOBE, "Open a web page first".to_string());
+        r.enabled = false;
+        return vec![r];
+    };
+    let mut rows = Vec::new();
+    for kind in Kind::ALL {
+        let current = site.saved.iter().find(|(k, _)| *k == kind).map(|(_, d)| *d);
+        for (decision, word, icon) in [
+            (Some(Decision::Allow), "Allow", ph::CHECK_CIRCLE),
+            (Some(Decision::Block), "Block", ph::PROHIBIT),
+            (None, "Ask", ph::QUESTION),
+        ] {
+            if decision == Some(Decision::Allow) && !kind.allow_rememberable() {
+                continue;
+            }
+            let label = format!("{}: {word}", kind.label());
+            let Some(m) = score_terms(q, &label, &[kind.key()]) else {
+                continue;
+            };
+            let mut r = Row::new(
+                "Site permissions",
+                Action::Outcome(PaletteOutcome::SetPermission { host: site.host.clone(), kind, decision }),
+                icon,
+                label,
+            );
+            r.matches = m.positions;
+            r.detail = site.host.clone();
+            if current == decision {
+                r.tag = Some("Current");
+            }
+            rows.push(r);
+        }
     }
     rows
 }
@@ -1636,6 +1698,7 @@ mod tests {
                 shortcut: Some("Ctrl+V".into()),
             }],
             user_agent: None,
+            permissions: None,
         }
     }
 
@@ -1709,6 +1772,31 @@ mod tests {
         assert_eq!(rows[0].label, "Custom");
         assert!(rows.iter().any(|r| matches!(&r.action, Action::Outcome(PaletteOutcome::SetUserAgent { choice: None, .. }))), "Automatic removes the override");
         assert_eq!(parse_query("^ fire"), (Mode::UserAgents, "fire"));
+    }
+
+    #[test]
+    fn site_permissions_list_allow_block_ask_and_mark_the_saved_one() {
+        use crate::permissions::{Decision, Kind};
+        let mut s = sources();
+        let rows = build_rows("site permissions", &s, &[]);
+        let cmd = rows.iter().find(|r| r.label == "Site permissions for this site…").expect("the command is found");
+        assert!(matches!(cmd.action, Action::SetQuery("!")));
+        assert!(build_rows("open page in another", &s, &[]).iter().any(|r| r.label == "Open page in another browser"));
+        let rows = build_rows("!", &s, &[]);
+        assert!(rows.len() == 1 && !rows[0].enabled, "no web page: nothing to set");
+
+        s.permissions = Some(PermissionSite { host: "teams.microsoft.com".into(), saved: vec![(Kind::Microphone, Decision::Allow)] });
+        let rows = build_rows("!", &s, &[]);
+        assert_eq!(rows.len(), Kind::ALL.len() * 3 - 1, "no saved allow for screen sharing");
+        assert!(!rows.iter().any(|r| r.label == "Screen sharing: Allow"));
+        let tagged: Vec<&str> = rows.iter().filter(|r| r.tag.is_some()).map(|r| r.label.as_str()).collect();
+        assert!(tagged.contains(&"Microphone: Allow") && tagged.contains(&"Camera: Ask"), "{tagged:?}");
+        let rows = build_rows("! camera block", &s, &[]);
+        assert!(matches!(
+            &rows[0].action,
+            Action::Outcome(PaletteOutcome::SetPermission { host, kind: Kind::Camera, decision: Some(Decision::Block) }) if host == "teams.microsoft.com"
+        ));
+        assert_eq!(parse_query("! mic"), (Mode::Permissions, "mic"));
     }
 
     fn actions(rows: &[Row]) -> Vec<PaletteOutcome> {
@@ -1809,7 +1897,7 @@ mod tests {
             }]
         );
         let help = build_rows("?", &s, &[]);
-        assert_eq!(help.len(), 8);
+        assert_eq!(help.len(), 9);
     }
 
     #[test]

@@ -533,6 +533,11 @@ impl Browser {
                 let (current, origin) = crate::useragent::choice_for_host(&host);
                 palette::UserAgentSite { host, current, origin }
             }),
+            permissions: self.web_page.then(|| crate::useragent::url_host(&self.current_url())).flatten().map(|host| {
+                let store = crate::permissions::store();
+                let saved = crate::permissions::Kind::ALL.into_iter().filter_map(|k| store.get(&host, k).map(|d| (k, d))).collect();
+                palette::PermissionSite { host, saved }
+            }),
         }
     }
 
@@ -565,6 +570,16 @@ impl Browser {
                 self.run_plugin_command(&plugin, &command, target);
             }
             PaletteOutcome::SetUserAgent { host, choice } => self.set_site_user_agent(&host, choice),
+            PaletteOutcome::SetPermission { host, kind, decision } => {
+                let word = match decision {
+                    Some(d) => d.label().to_lowercase(),
+                    None => "asked again".to_string(),
+                };
+                match crate::permissions::set(&host, kind, decision) {
+                    Ok(_) => self.set_notice(format!("{}: {word} on {host}", kind.label())),
+                    Err(error) => self.set_notice(error),
+                }
+            }
         }
     }
 
@@ -612,6 +627,16 @@ impl Browser {
             NewTabGroup => self.group_new_from_tab(self.active),
             AddTabToGroup => self.feat.palette.open_with("& "),
             SiteUserAgent => self.feat.palette.open_with("^ "),
+            SitePermissions => self.feat.palette.open_with("! "),
+            ResetSitePermissions => match crate::useragent::url_host(&self.current_url()) {
+                Some(host) => match crate::permissions::reset_host(&host) {
+                    Ok(true) => self.set_notice(format!("{host} will ask again for its permissions")),
+                    Ok(false) => self.set_notice(format!("{host} has no saved permissions")),
+                    Err(error) => self.set_notice(error),
+                },
+                None => self.set_notice("Site permissions are for web pages"),
+            },
+            OpenInOtherBrowser => self.open_externally(self.current_url()),
             ToggleSidebar => self.toggle_sidebar(),
             RemoveTabFromGroup => {
                 if self.groups.group_of(self.tab_id).is_some() {
