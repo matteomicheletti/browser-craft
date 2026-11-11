@@ -7,7 +7,11 @@ browsecraft                 # opens Startpage (the home page)
 browsecraft example.com     # opens a URL
 browsecraft "rust browser"  # runs a search
 browsecraft --screenshot out.png example.com 1200   # renders to a PNG
+browsecraft --container Work mail.example.com example.org   # two tabs, the first in "Work"
+browsecraft --temporary-container example.com              # a tab in a new temporary container
 ```
+
+Each address on the command line opens in its own tab; `--container <name>` (a container's name or id) or `--temporary-container` applies to the address that follows it (alone, to a start-page tab). An unknown container name is an error (exit code 2). Without an address, BrowseCraft reopens the previous session's tabs (see *Tabs*) or the home page.
 
 The command-line argument is read the same way as text typed into the address bar. `--screenshot <out.png> <url> [width]` renders the page with BrowseCraft's own engine (never WebView2) and exits; the width defaults to 1200 pixels.
 
@@ -60,6 +64,8 @@ BrowseCraft drops a user name and password written into an address (`https://use
 | ↻ / ✕   | Reload, or stop while a page is loading |
 | ⌂       | Home (Startpage)                        |
 | ☀ / ☾   | Toggle light / dark theme               |
+| Work    | The active tab's container, in its colour (only for container tabs); click to manage containers |
+| ≋       | Containers panel (right-hand drawer)    |
 | ⚙       | Open settings (`browsecraft://flags`)         |
 | 🔑      | Password manager menu (top right)       |
 
@@ -69,13 +75,94 @@ A bar along the bottom of the toolbar shows that a page is loading. On engine pa
 
 ## Tabs
 
-The vertical sidebar on the left lists the open tabs; the active one is
-highlighted. Click a tab to switch to it, click its ✕ to close it, and click the
-`+` (New tab) button at the top to open a new one. New tabs open `about:home`
-with the address bar focused. With the GPU interface, right-clicking a tab
-offers *Duplicate tab*, *Close tab* and *Close other tabs*. With the engine
-chrome, middle-clicking a tab also closes it. Closing the last tab quits BrowseCraft. The sidebar position (left,
-right or hidden) is set on `browsecraft://flags`.
+Tabs sit in a strip above the address bar, as in Chrome and Firefox: each shows
+the site's icon, the title and a ✕ (on the active or hovered tab), and tabs in a
+container carry the container's colour along their top edge. Tabs shrink as you
+open more and the strip scrolls when they no longer fit. Click a tab to switch to
+it, middle-click or click its ✕ to close it, `+` opens a new tab, and the `⌄`
+next to it opens a new tab in a container (or a new temporary container).
+Right-clicking a tab offers *Duplicate tab*, *New tab in container*, *Reopen in
+container* (the page moves to another container), *Close tab* and *Close other
+tabs*. New tabs open `about:home` with the address bar focused. Closing the last
+tab quits BrowseCraft. On `browsecraft://flags` the tabs can instead be a
+vertical sidebar on the left or right (with the container colour as the bar at
+the start of each row), or hidden. The software interface (`chrome=engine`)
+always uses the sidebar.
+
+Each tab keeps its own web page alive, so switching tabs does not reload it and
+its state (scroll position, forms, media) stays as you left it. To save memory,
+background tabs are unloaded after a while (30 minutes by default) and the least
+recently used ones are unloaded when more than 16 web pages are open; a tab
+playing sound is never unloaded (Linux). An unloaded tab is shown dimmed and
+loads its page again when you switch to it. Both limits are on
+`browsecraft://flags` (*Tabs and memory*).
+
+BrowseCraft remembers the open tabs and reopens them at the next start, each in
+its container; only the tab you were on loads at once, the others when you first
+open them. Tabs of temporary containers are not remembered. Turn this off with
+*Reopen tabs at start-up* on `browsecraft://flags` (the session file,
+`session.json` in the [per-user settings folder](../README.md#settings), is then
+deleted). `Ctrl+Shift+T` reopens the last closed tabs (up to 25), with their
+history and container.
+
+## Containers
+
+Containers keep sites apart: each container has its own cookies, logins,
+`localStorage`, IndexedDB, cache and service workers, so you can be signed in to
+two accounts of the same site in two tabs, or keep a shopping site away from
+everything else. A tab with no container uses the default profile.
+
+- **Create, edit, delete**: the containers button in the toolbar (or *Manage
+  containers* in the `⌄` menu) opens the Containers panel on the right. Give a
+  container a name, one of nine colours and an icon. Deleting a container closes
+  its tabs and deletes its cookies and site data.
+- **Open a tab in a container**: the `⌄` next to `+`, the `+` beside a container
+  in the panel, a tab's right-click menu, or `--container <name>` on the command
+  line.
+- **Always open in**: in the panel's *Always open in* section, add a site (it
+  suggests the current one) and pick a container. The site and its subdomains
+  then always open in that container: typing its address, a bookmark or a link
+  in another container's page opens it in a new tab of the right container (in
+  the same tab when it is a fresh, empty one). The most specific rule wins
+  (`mail.example.com` over `example.com`).
+- **Temporary containers**: `Ctrl+Shift+N`, *Temporary* in the panel or *New
+  temporary container* in the `⌄` menu open a tab in a new, empty container
+  ("Temporary 1", orange). Its data lives in a private folder under
+  `$XDG_RUNTIME_DIR` that is deleted when its last tab closes (and at the next
+  start if BrowseCraft crashed).
+- **Import / export**: the panel writes or reads a JSON file (the path field,
+  `~/browsecraft-containers.json` by default), or copies / pastes the same JSON
+  through the clipboard. Importing updates containers with the same id and adds
+  the others; rules for the same site are replaced. Temporary containers are
+  never exported.
+
+Containers and rules are saved in `containers.json` in the
+[per-user settings folder](../README.md#settings); each container's web data is
+in `~/.local/share/BrowseCraft/profiles/container-<id>`. Isolation is done by
+the web engine (WebKitGTK's website data manager, one per container), on Linux.
+On Windows each container gets its own WebView2 profile folder (untested); on
+macOS containers are not isolated yet.
+
+## Drawer
+
+Panels such as Containers open in a drawer on the right of the page; the page
+narrows to make room (it is never covered). Click the panel's ✕ or its toolbar
+button again to close it.
+
+## Find in page
+
+`Ctrl+F` opens the find bar under the toolbar on web pages: type to search
+(case-insensitive, wrapping), `Enter` / `Shift+Enter` or the arrows for the
+next / previous match, `Esc` or ✕ to close. On Linux every match is highlighted
+and the bar shows how many there are.
+
+## Developer tools
+
+`F12`, `Ctrl+Shift+I` or `Ctrl+Shift+J` open WebKit's web inspector (elements,
+console, sources, network, storage...) docked at the bottom of the page on
+Linux. Its ✕ closes it. Detaching it into its own window from its toolbar does
+not work in this embedding yet. `BROWSECRAFT_DEVTOOLS=1` opens it for every new
+tab.
 
 ## Bookmarks
 
@@ -100,7 +187,7 @@ On a page with a login form the key menu lists the logins saved for that site: c
 
 ## Settings (`browsecraft://flags`)
 
-`browsecraft://flags` is an engine-rendered settings page with switches and segmented controls. It sets the theme (system, light or dark; dark by default), the tab sidebar position, whether the bookmarks bar shows, and the interface renderer (auto, GPU or software). Changes are stored in the [per-user settings folder](../README.md#settings) and apply immediately after a successful save; save errors are shown on the page or in the status notice. System follows the OS for the theme; Auto uses the GPU path when one is available. The renderer choice is made at startup, so restart to apply a change to it.
+`browsecraft://flags` is an engine-rendered settings page with switches and segmented controls. It sets the theme (system, light or dark; dark by default), where the tabs are (top, left, right or hidden; top by default), when background tabs are unloaded and how many stay in memory, whether tabs are reopened at start-up, whether the bookmarks bar shows, and the interface renderer (auto, GPU or software). Changes are stored in the [per-user settings folder](../README.md#settings) and apply immediately after a successful save; save errors are shown on the page or in the status notice. System follows the OS for the theme; Auto uses the GPU path when one is available. The renderer choice is made at startup, so restart to apply a change to it.
 
 ## Ad blocking
 
@@ -119,7 +206,14 @@ blocked pop-up shows a short notice under the page.
 | `Ctrl+L` / `F6` / `Ctrl+S`            | Focus address bar and select its text |
 | `Ctrl+T`                              | New tab                   |
 | `Ctrl+W`                              | Close tab                 |
-| `Ctrl+Tab` / `Ctrl+Shift+Tab`         | Next / previous tab       |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab`, `Ctrl+PageDown` / `Ctrl+PageUp` | Next / previous tab |
+| `Ctrl+1` … `Ctrl+8`                   | Go to that tab            |
+| `Ctrl+9`                              | Go to the last tab        |
+| `Ctrl+Shift+T`                        | Reopen the last closed tab |
+| `Ctrl+Shift+N`                        | New tab in a temporary container |
+| `Ctrl+F`                              | Find in page              |
+| `Ctrl+P` / `F1`                       | Command palette (reserved; not available yet) |
+| `F12` / `Ctrl+Shift+I` / `Ctrl+Shift+J` | Developer tools         |
 | `F5` / `Ctrl+R`                       | Reload                    |
 | `Esc` (page focused, while loading)   | Stop loading              |
 | `Alt+Left` / `Alt+Right`, mouse back/forward buttons | Back / forward |

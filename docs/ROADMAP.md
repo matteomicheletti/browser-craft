@@ -47,8 +47,8 @@ first-class requirements:
   bubblewrap sandbox, in-page shortcuts, `--version`, X11 window class.
 - Tests: probe 17/17, GitHub/GitLab/React/Vue rendered, sandbox verified on
   the process tree, unit tests 193/193 (+F12/Ctrl+Shift+I assertions).
-- Open: dev-tools window not yet seen opening; logged-in flows and
-  Microsoft 365 / Google Workspace not tested; one web view for all tabs.
+- Open: logged-in flows and Microsoft 365 / Google Workspace not tested.
+  (Dev tools and one web view per tab: done in wave 1 core, see M2/M3.)
 
 ### M1b: AI-first automation (planned, next)
 
@@ -75,8 +75,18 @@ first-class requirements:
 - **Dev console** (inspector) working on Linux; JS error console.
 - **F1 command palette**; **tabs on top** + bookmarks bar; full Chrome
   shortcut table (doc in `docs/usage.md`).
+- Status (core, 2026-11-11): **done** for the inspector (F12 / Ctrl+Shift+I
+  dock it at the bottom of the page; it was attached but never laid out
+  because wry sizes the GTK window by hand), the tab strip on top (default;
+  sidebar left/right/hidden on `browsecraft://flags`), the drawer
+  (`Drawer` enum, Containers implemented, other panels placeholders), find in
+  page (Ctrl+F, WebKit find controller with match count) and the Chrome
+  shortcuts (Ctrl+1..9, Ctrl+PageUp/Down, Ctrl+Shift+T, Ctrl+Shift+N; Ctrl+P
+  and F1 reserved, `open_palette` stub). Overlays show a WebKit snapshot of
+  the page on Linux. Detached inspector window: not working (WebKit closes
+  it). Palette, plugins, JS error console: other wave-1 work.
 
-### M3: Multi-Account Containers (planned)
+### M3: Multi-Account Containers (in progress: Linux implemented and verified live)
 
 - One web view per live tab; per-container `WebContext` (own data
   directory, or ephemeral for temporary containers): cookies, storage,
@@ -86,6 +96,20 @@ first-class requirements:
   coloured tab indicators.
 - Isolation tests: same origin, different containers, cookie/storage not
   shared; persistence across restarts; temporary container wiped on close.
+- Status (2026-11-11): one wry web view per live tab (switching keeps the
+  page, no reload); `src/containers.rs` (CRUD, colours, icons, rules with
+  subdomains, import/export JSON, temporary containers in a 0700 folder under
+  `$XDG_RUNTIME_DIR`, deleted with the last tab and swept after a crash);
+  one WebKit `WebContext` per container (`profiles/container-<id>`); tab
+  strip and sidebar colours, toolbar badge, container picker, tab menu,
+  Containers drawer, `--container` / `--temporary-container`. Unit tests for
+  the model, rules, import/export (hostile input) and temporary cleanup.
+  Verified live on a local page: cookie, localStorage and IndexedDB differ
+  between Work, Personal, no container and a temporary container in one
+  window, persist per container across restarts, and the temporary folder
+  is gone after its tab closes. Open: an automated (headless) WebKit
+  isolation test; Windows (per-container WebView2 folder, untested) and
+  macOS (not isolated).
 
 ### M4: Authenticator (planned)
 
@@ -102,10 +126,17 @@ first-class requirements:
   native dark detection, no white flash. Dark Reader is MIT: reuse with
   attribution is possible and will be evaluated before writing our own.
 
-### M6: Performance (planned)
+### M6: Performance (in progress)
 
 - Tab suspension/unload/restore, lazy tab loading, plugin lazy loading,
   cache limits, process count control, GLib pump cost.
+- Status (2026-11-11): tab suspension done: background tabs unload after a
+  configurable idle time (default 30 min) and beyond a cap of live web views
+  (default 16, least recently used first, never a tab playing audio); an
+  unloaded tab shows dimmed and reloads its address when shown; the session
+  is restored lazily (only the active tab loads). Unit test for the policy,
+  verified live (1-minute setting). Benchmarks, cache limits, process count
+  and GLib pump cost: not started.
 - Benchmarks vs Firefox (PSS via smem, CPU, start-up, load time) with 1/5/20
   tabs, containers, plugins on/off: `docs/BENCHMARKS.md` with method and raw
   numbers. No numbers are published before they are measured.

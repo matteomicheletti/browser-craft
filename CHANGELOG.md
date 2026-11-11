@@ -11,7 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fork `matteomicheletti/browser-craft`: web pages on Linux render with **WebKitGTK** through wry (full JavaScript, IndexedDB, workers, WebSocket, service workers), with the web processes in WebKit's bubblewrap sandbox and a persistent profile in `~/.local/share/BrowseCraft/profiles/default`. The window runs on X11 (XWayland under Wayland). `BROWSECRAFT_NO_WEBKIT=1` keeps the own engine. See `docs/ARCHITECTURE_DECISION.md`.
 - Browser shortcuts work while a WebKitGTK page has the keyboard.
-- Developer tools shortcut: `F12`, `Ctrl+Shift+I`, `Ctrl+Shift+J` (WebKit inspector; on Linux the inspector window is not yet shown, see ROADMAP).
+- Developer tools: `F12`, `Ctrl+Shift+I`, `Ctrl+Shift+J` open the WebKit inspector, docked at the bottom of the page on Linux (it used to stay invisible: wry lays the web view out by hand, so it is laid out again when the inspector docks or closes).
+- One web view per tab: switching tabs no longer reloads the page or loses its state. Background tabs are unloaded after an idle time and beyond a cap of live web views (`browsecraft://flags`, *Tabs and memory*; tabs playing audio are kept), and reload when shown.
+- Multi-Account Containers (`src/containers.rs`): containers with a name, colour and icon, each with its own cookies, storage, IndexedDB, cache and service workers (one WebKit data store per container); "always open in" site rules; temporary containers deleted with their last tab (`Ctrl+Shift+N`); import/export as JSON; a Containers panel in a new right-hand drawer; container colours on tabs and a badge in the toolbar; `--container <name>` and `--temporary-container` on the command line.
+- Tabs on top: a Chrome-like tab strip above the address bar with site icons, titles, close buttons and container colours is the new default; the vertical sidebar stays available on `browsecraft://flags`.
+- Session restore: the previous session's tabs reopen at start-up, in their containers, loading only when first shown (`session.json`; can be turned off).
+- Find in page (`Ctrl+F`) with match highlighting and count.
+- Chrome shortcuts: `Ctrl+1`…`Ctrl+8`, `Ctrl+9`, `Ctrl+PageUp`/`Ctrl+PageDown`, `Ctrl+Shift+T` (reopen closed tab), `Ctrl+Shift+N` (temporary container tab); `Ctrl+P` and `F1` are reserved for the command palette. They also work while a web page has the keyboard.
+- On Linux, menus over a web page show a snapshot of the page instead of a blank area, and keys typed while the pointer is over the page reach the address bar or find bar when one of them is focused.
 - `browsecraft --version` prints `browsecraft <version>`.
 - New app icon (`assets/icon/`, CC-BY-4.0), desktop entry `io.github.matteomicheletti.browsecraft.desktop`, X11 window class of the same name, and `scripts/install-local.sh` for a per-user install with a GNOME menu entry.
 - `tests/web/features.html`: web platform probe (17 checks).
