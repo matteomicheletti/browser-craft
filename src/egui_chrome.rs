@@ -152,8 +152,8 @@ pub fn resolve(gpu_available: bool) -> Choice {
 pub use crate::icons::{
     BACK as ICON_BACK, BOOKMARKS as ICON_BOOKMARKS, CLOSE as ICON_STOP, CLOSE as ICON_XMARK,
     FORWARD as ICON_FORWARD, GEAR as ICON_GEAR, GLOBE as ICON_GLOBE, HOME as ICON_HOME,
-    KEY as ICON_KEY, LOCK as ICON_LOCK, MOON as ICON_MOON, PLUS as ICON_PLUS,
-    RELOAD as ICON_RELOAD, STAR as ICON_STAR, SUN as ICON_SUN,
+    KEY as ICON_KEY, LOCK as ICON_LOCK, PLUS as ICON_PLUS, RELOAD as ICON_RELOAD,
+    STAR as ICON_STAR,
 };
 
 /// Icon text at `size` points, in the Phosphor family.
@@ -241,6 +241,71 @@ pub fn address_bar(
         })
         .inner;
     (response, star_clicked)
+}
+
+/// A theme's swatch: its background with its surface and accent as dots.
+pub fn theme_swatch(ui: &mut egui::Ui, theme: &crate::theme::Theme, size: egui::Vec2) -> egui::Rect {
+    let (rect, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let p = ui.painter();
+    let t = &theme.t;
+    p.rect_filled(rect, egui::CornerRadius::same(5), rgb(t.background));
+    p.rect_stroke(rect, egui::CornerRadius::same(5), egui::Stroke::new(1.0, rgb(t.border)), egui::StrokeKind::Inside);
+    let r = (rect.height() * 0.22).max(2.0);
+    let y = rect.center().y;
+    p.circle_filled(egui::pos2(rect.min.x + rect.width() * 0.33, y), r, rgb(t.surface2));
+    p.circle_filled(egui::pos2(rect.min.x + rect.width() * 0.67, y), r, rgb(t.accent));
+    rect
+}
+
+/// One row of a theme list: its swatch, its name and a check on the current
+/// one. "Follow system" shows the light and dark halves.
+pub fn theme_item(ui: &mut egui::Ui, c: &Colors, id: crate::theme::ThemeId, current: bool) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(ui.available_width().max(200.0), 28.0), egui::Sense::click());
+    if resp.hovered() {
+        ui.painter().rect_filled(rect, egui::CornerRadius::same(6), c.hover);
+    }
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect.shrink2(egui::vec2(8.0, 0.0)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    child.spacing_mut().item_spacing.x = 8.0;
+    match id {
+        crate::theme::ThemeId::System => {
+            let swatch = egui::vec2(15.0, 18.0);
+            child.spacing_mut().item_spacing.x = 0.0;
+            theme_swatch(&mut child, &crate::theme::LIGHT, swatch);
+            theme_swatch(&mut child, &crate::theme::DARK, swatch);
+            child.add_space(8.0);
+        }
+        other => {
+            theme_swatch(&mut child, crate::theme::get(other), egui::vec2(30.0, 18.0));
+        }
+    }
+    let weight = egui::RichText::new(id.label()).size(13.0).color(c.text);
+    child.label(if current { weight.strong() } else { weight });
+    if current {
+        child.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(icon(crate::icons::CHECK, 13.0).color(c.accent));
+        });
+    }
+    resp
+}
+
+/// The theme button of the toolbar and its menu. Returns the theme picked.
+pub fn theme_button(ui: &mut egui::Ui, c: &Colors, current: crate::theme::ThemeId) -> Option<crate::theme::ThemeId> {
+    let button = icon_button(ui, true, crate::icons::THEME, "Theme", 16.0);
+    let mut pick = None;
+    egui::Popup::menu(&button).align(egui::RectAlign::BOTTOM_END).width(230.0).show(|ui| {
+        ui.label(egui::RichText::new("Theme").size(12.0).color(c.muted));
+        for id in crate::theme::ThemeId::ALL {
+            if theme_item(ui, c, id, id == current).clicked() {
+                pick = Some(id);
+                ui.close();
+            }
+        }
+    });
+    pick
 }
 
 /// What the user did in the bookmarks bar.
@@ -350,6 +415,7 @@ pub fn bookmarks_bar(ui: &mut egui::Ui, c: &Colors, items: &[(String, String)]) 
             });
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(6.0);
             let label = egui::RichText::new(format!("{}  All bookmarks", ICON_BOOKMARKS))
                 .size(12.5)
                 .color(c.muted);
@@ -360,7 +426,6 @@ pub fn bookmarks_bar(ui: &mut egui::Ui, c: &Colors, items: &[(String, String)]) 
             if ui.add(button).on_hover_text("Open the bookmarks page (Ctrl+Shift+O)").clicked() {
                 events.push(BarEvent::Manage);
             }
-            ui.add_space(6.0);
         });
     });
     events
@@ -964,7 +1029,7 @@ fn tab_chip(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, width: f32, containers
     let painter = ui.painter();
     let corners = egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 };
     if tab.active {
-        painter.rect_filled(rect, corners, c.bar_bg);
+        painter.rect_filled(rect, corners, c.tab_active);
     } else if hovered {
         painter.rect_filled(rect.shrink2(egui::vec2(0.0, 2.0)), egui::CornerRadius::same(7), c.hover);
     } else if tab.split.is_none() {
@@ -1138,7 +1203,11 @@ fn install_icon_font(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// The chrome palette, matching the engine-drawn toolbar/sidebar.
+/// The chrome's colours, from the current [`Theme`](crate::theme::Theme).
+/// The historical names map to theme tokens: `bar_bg` is the surface,
+/// `sidebar_bg` the window background, `line` the border, `field_bg` the
+/// address bar, `hover` the second surface.
+#[derive(Clone, Copy, Debug)]
 pub struct Colors {
     pub bar_bg: egui::Color32,
     pub sidebar_bg: egui::Color32,
@@ -1148,33 +1217,54 @@ pub struct Colors {
     pub muted: egui::Color32,
     pub hover: egui::Color32,
     pub accent: egui::Color32,
+    pub accent_text: egui::Color32,
+    pub danger: egui::Color32,
+    pub danger_text: egui::Color32,
+    pub warning: egui::Color32,
+    pub success: egui::Color32,
+    pub tab_active: egui::Color32,
+    pub tab_inactive: egui::Color32,
+    pub drawer: egui::Color32,
+    /// The dimmed backdrop behind the palette.
+    pub scrim: egui::Color32,
+    /// Drop shadows of floating panels.
+    pub shadow: egui::Color32,
+    pub dark: bool,
 }
 
 impl Colors {
-    pub fn for_dark(dark: bool) -> Self {
-        if dark {
-            Self {
-                bar_bg: rgb(0x1b1e24),
-                sidebar_bg: rgb(0x16181d),
-                line: rgb(0x2c313a),
-                field_bg: rgb(0x14161a),
-                text: rgb(0xe8eaee),
-                muted: rgb(0x8b93a1),
-                hover: rgb(0x2a2f38),
-                accent: rgb(0x5b8def),
-            }
-        } else {
-            Self {
-                bar_bg: rgb(0xf6f7f9),
-                sidebar_bg: rgb(0xeceef2),
-                line: rgb(0xdde1e7),
-                field_bg: rgb(0xffffff),
-                text: rgb(0x1c1f24),
-                muted: rgb(0x667085),
-                hover: rgb(0xe3e6ec),
-                accent: rgb(0x2f6fde),
-            }
+    pub fn from_theme(theme: &crate::theme::Theme) -> Self {
+        let t = &theme.t;
+        // Shadows and the scrim darken: black at an opacity that reads on
+        // either kind of theme.
+        let (scrim, shadow) = if theme.dark { (110, 160) } else { (70, 60) };
+        Self {
+            bar_bg: rgb(t.surface),
+            sidebar_bg: rgb(t.background),
+            line: rgb(t.border),
+            field_bg: rgb(t.address_bar),
+            text: rgb(t.text),
+            muted: rgb(t.text_muted),
+            hover: rgb(t.surface2),
+            accent: rgb(t.accent),
+            accent_text: rgb(t.accent_text),
+            danger: rgb(t.danger),
+            danger_text: rgb(t.danger_text),
+            warning: rgb(t.warning),
+            success: rgb(t.success),
+            tab_active: rgb(t.tab_active),
+            tab_inactive: rgb(t.tab_inactive),
+            drawer: rgb(t.drawer),
+            scrim: egui::Color32::from_black_alpha(scrim),
+            shadow: egui::Color32::from_black_alpha(shadow),
+            dark: theme.dark,
         }
+    }
+
+    /// The default dark (Late Night) or light theme.
+    #[cfg(test)]
+    pub fn for_dark(dark: bool) -> Self {
+        Self::from_theme(if dark { &crate::theme::DARK } else { &crate::theme::LIGHT })
     }
 }
 
@@ -1197,41 +1287,57 @@ pub fn rgb(hex: u32) -> egui::Color32 {
     egui::Color32::from_rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 
-/// Installs the chrome visuals and spacing for the current theme. Called once
-/// per frame before the panels are built.
-pub fn apply_style(ctx: &egui::Context, dark: bool) {
-    let c = Colors::for_dark(dark);
-    let mut v = if dark {
+/// Installs the chrome visuals and spacing for `c`. Called once per frame
+/// before the panels are built.
+pub fn apply_style(ctx: &egui::Context, c: &Colors) {
+    let mut v = if c.dark {
         egui::Visuals::dark()
     } else {
         egui::Visuals::light()
     };
     v.panel_fill = c.bar_bg;
     v.window_fill = c.bar_bg;
+    v.window_stroke = egui::Stroke::new(1.0, c.line);
+    v.window_shadow.color = c.shadow;
+    v.popup_shadow.color = c.shadow;
     v.extreme_bg_color = c.field_bg;
     v.faint_bg_color = c.sidebar_bg;
+    v.code_bg_color = c.hover;
     v.hyperlink_color = c.accent;
+    v.warn_fg_color = c.warning;
+    v.error_fg_color = c.danger;
     v.selection.bg_fill = c.accent.gamma_multiply(0.40);
     v.selection.stroke = egui::Stroke::new(1.0, c.text);
+    v.override_text_color = None;
 
     let radius = egui::CornerRadius::same(9);
     v.widgets.noninteractive.corner_radius = radius;
     v.widgets.noninteractive.fg_stroke = egui::Stroke::new(1.0, c.text);
+    v.widgets.noninteractive.bg_stroke = egui::Stroke::new(1.0, c.line);
+    v.widgets.noninteractive.bg_fill = c.bar_bg;
+    v.widgets.noninteractive.weak_bg_fill = c.bar_bg;
 
     v.widgets.inactive.weak_bg_fill = egui::Color32::TRANSPARENT;
+    v.widgets.inactive.bg_fill = c.hover;
     v.widgets.inactive.bg_stroke = egui::Stroke::NONE;
     v.widgets.inactive.corner_radius = radius;
     v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, c.text);
 
     v.widgets.hovered.weak_bg_fill = c.hover;
+    v.widgets.hovered.bg_fill = c.hover;
     v.widgets.hovered.bg_stroke = egui::Stroke::NONE;
     v.widgets.hovered.corner_radius = radius;
     v.widgets.hovered.fg_stroke = egui::Stroke::new(1.0, c.text);
 
     v.widgets.active.weak_bg_fill = c.accent;
+    v.widgets.active.bg_fill = c.accent;
     v.widgets.active.bg_stroke = egui::Stroke::NONE;
     v.widgets.active.corner_radius = radius;
-    v.widgets.active.fg_stroke = egui::Stroke::new(1.0, egui::Color32::WHITE);
+    v.widgets.active.fg_stroke = egui::Stroke::new(1.0, c.accent_text);
+
+    v.widgets.open.weak_bg_fill = c.hover;
+    v.widgets.open.bg_fill = c.hover;
+    v.widgets.open.fg_stroke = egui::Stroke::new(1.0, c.text);
 
     ctx.set_visuals(v);
     ctx.all_styles_mut(|s| {
@@ -1439,7 +1545,7 @@ pub fn save_login_bar(
             {
                 emit(SaveBarEvent::NotNow);
             }
-            let primary = egui::Button::new(egui::RichText::new(action_label).size(12.5).color(egui::Color32::WHITE))
+            let primary = egui::Button::new(egui::RichText::new(action_label).size(12.5).color(c.accent_text))
                 .fill(c.accent)
                 .corner_radius(egui::CornerRadius::same(8));
             if ui.add(primary).clicked() {
@@ -1534,7 +1640,7 @@ mod tests {
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.add_space(8.0);
-                        for code in [ICON_KEY, ICON_GEAR, ICON_MOON] {
+                        for code in [ICON_KEY, ICON_GEAR, crate::icons::THEME] {
                             buttons.push(icon_button(ui, true, code, "x", 16.0).rect);
                         }
                         let width = (ui.available_width() - 4.0).max(60.0);

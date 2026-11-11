@@ -63,12 +63,12 @@ BrowseCraft drops a user name and password written into an address (`https://use
 | ▶       | Forward                                 |
 | ↻ / ✕   | Reload, or stop while a page is loading |
 | ⌂       | Home (Startpage)                        |
-| ☀ / ☾   | Toggle light / dark theme of the browser |
+| Palette | Theme menu: pick one of the themes (see *Themes*) |
 | Work    | The active tab's container, in its colour (only for container tabs); click to manage containers |
 | ≋       | Containers panel (right-hand drawer)    |
 | ◐       | Dark mode for this site: click to turn it on or off (tinted while the site is dark); right-click for the dark mode panel |
 | Puzzle  | Plugins panel                           |
-| Shield  | Authenticator panel; a shield with a check, tinted, while the authenticator is unlocked |
+| QR code | Authenticator panel; tinted, with an open padlock in its corner, while the authenticator is unlocked (a closed padlock while locked) |
 | ● Stop  | Shown while a screen recording runs: stops it |
 | ⚙       | Open settings (`browsecraft://flags`)         |
 | 🔑      | Password manager menu (top right)       |
@@ -81,6 +81,50 @@ authenticator) loses its button.
 The star inside the address bar bookmarks the page you are on (click it again to remove the bookmark); it is also `Ctrl+D`.
 
 A bar along the bottom of the toolbar shows that a page is loading. On engine pages, hovering a link shows its address in the bottom-left corner.
+
+## Window and title bar
+
+BrowseCraft draws its own window frame, as Chrome does. With the tabs on top,
+the tab strip is the title bar: the window buttons (minimize, maximize or
+restore, close) sit at its right end, and the empty part of the strip (there is
+always a free stretch after the `+`) moves the window when you drag it.
+Double-click it to maximize or restore the window; right-click it for a small
+window menu (Minimize, Maximize / Restore, Close). With the tabs in a sidebar
+or hidden, the toolbar is the title bar instead, with the window buttons after
+the password key. Resize the window from any edge or corner: a thin border
+(5 pixels) round the page is the grip, and the pointer changes shape over it.
+A maximized window has no border. In full screen (`F11`, or a page's video in
+full screen) the window buttons and the border go away.
+
+To use the desktop's own title bar and frame instead, turn on *Use system
+title bar* on `browsecraft://flags`; it applies at once. The software
+interface (`chrome=engine`) always uses the desktop's frame.
+
+## Themes
+
+The theme sets the colours of the whole browser: title bar, tabs, toolbar,
+address bar, bookmarks bar, menus, notices, the drawer panels, the command
+palette and BrowseCraft's own pages (the new-tab page, settings, history,
+bookmarks, passwords). There are eight:
+
+| Theme | Kind | Look |
+| --- | --- | --- |
+| Late Night (default) | Dark | Deep navy and black, blue accent |
+| Slate Gray | Dark | Cool grey, steel-blue accent |
+| Olive | Dark | Dark olive, leaf-green accent |
+| Frost | Dark | Nord-like blue-grey, ice-blue accent |
+| Rosé | Dark | Deep purple, rose accent |
+| Forest | Dark | Deep green, teal accent |
+| Light | Light | White and light grey, blue accent |
+| Sand | Light | Warm beige, burnt-orange accent |
+
+*Follow system* uses Light or Late Night as the desktop is set (GNOME's
+*Appearance* setting on Linux; it is checked again when the window gets the
+focus). Pick a theme from the palette button in the toolbar, from the command
+palette (*Change theme…*, or type `%` followed by part of a name) or on
+`browsecraft://flags`; the change applies at once, without a restart, and is
+saved. Web pages that follow the system preference, and dark mode for pages
+set to follow the browser, use the theme's kind (light or dark).
 
 ## Tabs
 
@@ -206,10 +250,17 @@ the same key, `Esc` or a click outside closes it. Type to search every browser
 action (with its shortcut), the open tabs (with their container colour), your
 bookmarks and recent history, or type an address or search terms to open them
 in a new tab. `Up` / `Down` choose, `Enter` runs, `Tab` jumps to the next
+<<<<<<< HEAD
 section. Prefixes narrow the search: `>` commands only, `@` open tabs and tab
 groups, `#` bookmarks and history, `~` open a tab in a container, `|` split view
 with an open tab, `&` add the tab to a group, `?` lists them. Recently run
 commands come first.
+=======
+section. Prefixes narrow the search: `>` commands only, `@` open tabs, `#`
+bookmarks and history, `~` open a tab in a container, `%` themes, `?` lists
+them. Recently
+run commands come first.
+>>>>>>> wave3/chrome
 
 Commands include: new tab (also in a container or a temporary container),
 duplicate, close, close others, reopen, next / previous tab, move the tabs to
@@ -221,8 +272,9 @@ the page (an `.mhtml` file in `~/Downloads`), view source; screenshot of the
 visible page or the whole page (PNG in Pictures), start / stop a screen
 recording (MP4 in `~/Videos`, needs `ffmpeg`); developer tools, JavaScript
 console, automation server on / off; bookmark, bookmarks bar, bookmarks page,
-history, clear browsing data; containers, authenticator, passwords; dark mode
-for pages / this site / settings; plugins, reload plugins; settings; quit.
+history, clear browsing data; containers, authenticator, passwords; change
+theme; dark mode for pages / this site / settings; plugins, reload plugins;
+settings; quit.
 
 *Clear browsing data* asks you to run it a second time within 10 seconds, then
 deletes the history and the cookies, cache and site data of the default profile
@@ -230,15 +282,16 @@ and of every container with an open tab.
 
 ## Authenticator
 
-The shield button opens the authenticator: two-factor codes (TOTP and HOTP)
+The QR-code button opens the authenticator: two-factor codes (TOTP and HOTP)
 for your accounts, in a vault encrypted with its own master password, separate
 from the password manager. Create the vault the first time, then *Add account*
 with the setup key, an `otpauth://` link (or a Google Authenticator export
 link) or a QR image. Each account shows its current code with a countdown;
 click the copy button to put it on the clipboard (it is taken off after 30
 seconds). The vault locks itself after 5 minutes without use (change it in the
-panel's settings), also while the panel is closed; the toolbar shield shows
-whether it is unlocked. Pages, plugins and the automation API can never read
+panel's settings), also while the panel is closed; the toolbar button shows
+whether it is unlocked (accent colour and an open padlock) or locked (a closed
+padlock). Pages, plugins and the automation API can never read
 it. Formats and security: [AUTHENTICATOR.md](AUTHENTICATOR.md).
 
 ## Dark mode
@@ -321,7 +374,7 @@ On a page with a login form the key menu lists the logins saved for that site: c
 
 ## Settings (`browsecraft://flags`)
 
-`browsecraft://flags` is an engine-rendered settings page with switches and segmented controls. It sets the theme (system, light or dark; dark by default), where the tabs are (top, left, right or hidden; top by default), when background tabs are unloaded and how many stay in memory, whether tabs are reopened at start-up, whether the bookmarks bar shows, and the interface renderer (auto, GPU or software). Changes are stored in the [per-user settings folder](../README.md#settings) and apply immediately after a successful save; save errors are shown on the page or in the status notice. System follows the OS for the theme; Auto uses the GPU path when one is available. The renderer choice is made at startup, so restart to apply a change to it.
+`browsecraft://flags` is an engine-rendered settings page with switches and segmented controls. It sets the theme (one of eight, or Follow system; Late Night by default), whether the desktop's own title bar is used, where the tabs are (top, left, right or hidden; top by default), when background tabs are unloaded and how many stay in memory, whether tabs are reopened at start-up, whether the bookmarks bar shows, and the interface renderer (auto, GPU or software). Changes are stored in the [per-user settings folder](../README.md#settings) and apply immediately after a successful save; save errors are shown on the page or in the status notice. Follow system picks Light or Late Night from the desktop's setting; Auto uses the GPU path when one is available. The renderer choice is made at startup, so restart to apply a change to it.
 
 ## Ad blocking
 

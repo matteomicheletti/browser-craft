@@ -3,25 +3,30 @@
 //! have in common: HTML escaping and one-time form tokens.
 //!
 //! The pages are drawn by BrowseCraft's own engine, which does not know the
-//! `prefers-color-scheme` media feature for the browser's dark mode, so each
-//! page is generated for the current theme (`set_dark` is called whenever the
-//! chrome theme changes) and reloaded when it flips.
+//! `prefers-color-scheme` media feature or CSS variables, so each page is
+//! generated with the current theme's colours (`set_theme` is called whenever
+//! the chrome theme changes) and reloaded when it changes.
 
 use std::collections::VecDeque;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use zeroize::Zeroizing;
 
-static DARK: AtomicBool = AtomicBool::new(true);
+use crate::theme::{self, Theme, ThemeId};
 
-/// Records the effective theme. Returns `true` when it changed.
-pub fn set_dark(dark: bool) -> bool {
-    DARK.swap(dark, Ordering::SeqCst) != dark
+static CURRENT: Mutex<ThemeId> = Mutex::new(ThemeId::LateNight);
+
+/// Records the effective (resolved) theme. Returns `true` when it changed.
+pub fn set_theme(theme: &Theme) -> bool {
+    let mut current = CURRENT.lock().unwrap_or_else(|e| e.into_inner());
+    let changed = *current != theme.id;
+    *current = theme.id;
+    changed
 }
 
-pub fn dark() -> bool {
-    DARK.load(Ordering::SeqCst)
+/// The theme internal pages are drawn with.
+pub fn current() -> &'static Theme {
+    theme::get(*CURRENT.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
 /// Escapes text for HTML element content and double-quoted attributes.
@@ -40,18 +45,24 @@ pub fn escape(text: &str) -> String {
     out
 }
 
-/// The palette of the internal pages as `(token, light, dark)`.
-const PALETTE: &[(&str, &str, &str)] = &[
-    ("@bg@", "#f5f6f8", "#14161a"),
-    ("@surface@", "#ffffff", "#1d2026"),
-    ("@surface2@", "#eef0f3", "#262a32"),
-    ("@line@", "#dde1e7", "#2c313a"),
-    ("@text@", "#1c1f24", "#e8eaee"),
-    ("@muted@", "#667085", "#8b93a1"),
-    ("@accent@", "#2f6fde", "#5b8def"),
-    ("@off@", "#b8bec9", "#3a404b"),
-    ("@danger@", "#d92d20", "#f0584d"),
-];
+/// The `@token@` colours of the internal pages for `theme`.
+fn palette(theme: &Theme) -> [(&'static str, u32); 12] {
+    let t = &theme.t;
+    [
+        ("@bg@", t.page),
+        ("@surface@", t.card),
+        ("@surface2@", t.surface2),
+        ("@line@", t.border),
+        ("@text@", t.text),
+        ("@muted@", t.text_muted),
+        ("@accenttext@", t.accent_text),
+        ("@accent@", t.accent),
+        ("@off@", theme::mix(t.border, t.text_muted, 0.45)),
+        ("@dangertext@", t.danger_text),
+        ("@danger@", t.danger),
+        ("@ok@", t.success),
+    ]
+}
 
 const BASE_CSS: &str = r#"
 body { margin: 0; background: @bg@; color: @text@; font-family: system-ui, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.5 }
@@ -68,13 +79,13 @@ a { color: @accent@ }
 .d { color: @muted@; font-size: 13px; margin-top: 1px }
 .seg { display: flex; gap: 2px; background: @bg@; border: 1px solid @line@; border-radius: 10px; padding: 3px }
 .seg a { display: block; padding: 6px 14px; border-radius: 7px; color: @muted@; text-decoration: none; font-size: 13px }
-.seg a.on { background: @accent@; color: #ffffff; font-weight: 600 }
+.seg a.on { background: @accent@; color: @accenttext@; font-weight: 600 }
 .sw { display: flex; width: 46px; height: 26px; border-radius: 13px; padding: 3px; background: @off@; justify-content: flex-start; text-decoration: none }
 .sw.on { background: @accent@; justify-content: flex-end }
-.sw span { display: block; width: 20px; height: 20px; border-radius: 10px; background: #ffffff }
-.btn { display: inline-block; padding: 8px 16px; border: 0; border-radius: 9px; background: @accent@; color: #ffffff; text-decoration: none; font-size: 13px; font-weight: 600 }
+.sw span { display: block; width: 20px; height: 20px; border-radius: 10px; background: @surface@ }
+.btn { display: inline-block; padding: 8px 16px; border: 0; border-radius: 9px; background: @accent@; color: @accenttext@; text-decoration: none; font-size: 13px; font-weight: 600 }
 .btn.ghost { background: @surface2@; color: @text@ }
-.btn.danger { background: @danger@; color: #ffffff }
+.btn.danger { background: @danger@; color: @dangertext@ }
 .item { display: flex; align-items: center; gap: 14px; padding: 12px 0; border-top: 1px solid @line@ }
 .item.first { border-top: 0 }
 .item .ico { width: 34px; height: 34px; border-radius: 9px; background: @surface2@; color: @accent@; text-align: center; font-weight: 700; line-height: 34px }
@@ -85,24 +96,29 @@ a { color: @accent@ }
 .field { display: block; box-sizing: border-box; width: 100%; padding: 9px 12px; border: 1px solid @line@; border-radius: 9px; background: @bg@; color: @text@; font-size: 14px; margin: 4px 0 12px }
 label.l { display: block; color: @muted@; font-size: 12px; font-weight: 600; margin-top: 8px }
 .note { color: @muted@; font-size: 13px; padding: 0 0 14px }
-.ok { color: #12a150 }
+.ok { color: @ok@ }
+.themes { margin-top: 10px }
+.theme { display: inline-block; width: 104px; margin: 0 8px 8px 0; padding: 8px; border: 1px solid @line@; border-radius: 10px; color: @text@; text-decoration: none; font-size: 12px; text-align: center }
+.theme.on { border: 2px solid @accent@; padding: 7px; font-weight: 600 }
+.sw3 { display: block; height: 30px; margin-bottom: 6px; border: 1px solid; border-radius: 6px; padding: 7px 8px; box-sizing: border-box; text-align: left }
+.sw3 i { display: inline-block; width: 14px; height: 14px; border-radius: 7px; margin-right: 4px }
 .bad { color: @danger@ }
 "#;
 
 /// The shared stylesheet for the current theme.
 pub fn css() -> String {
-    css_for(dark())
+    css_for(current())
 }
 
-pub fn css_for(dark: bool) -> String {
-    themed(BASE_CSS, dark)
+pub fn css_for(theme: &Theme) -> String {
+    themed(BASE_CSS, theme)
 }
 
-/// Replaces the `@token@` colours in `text` with the palette of one theme.
-pub fn themed(text: &str, dark: bool) -> String {
+/// Replaces the `@token@` colours in `text` with the colours of `theme`.
+pub fn themed(text: &str, theme: &Theme) -> String {
     let mut out = text.to_string();
-    for (token, light, dark_value) in PALETTE {
-        out = out.replace(token, if dark { dark_value } else { light });
+    for (token, color) in palette(theme) {
+        out = out.replace(token, &theme::css_hex(color));
     }
     out
 }
@@ -238,13 +254,14 @@ mod tests {
     }
 
     #[test]
-    fn css_replaces_every_token_for_both_themes() {
-        for dark in [false, true] {
-            let css = css_for(dark);
-            assert!(!css.contains('@'), "unreplaced token in {dark}: {css}");
+    fn css_replaces_every_token_for_every_theme() {
+        for t in theme::THEMES {
+            let css = css_for(t);
+            assert!(!css.contains('@'), "unreplaced token in {}: {css}", t.name);
+            assert!(css.contains(&theme::css_hex(t.t.page)), "{} page background", t.name);
         }
-        assert!(css_for(true).contains("#14161a"));
-        assert!(css_for(false).contains("#f5f6f8"));
+        let home = themed(include_str!("home.html"), &theme::LIGHT);
+        assert!(!home.contains('@'), "the new-tab page uses known tokens only");
     }
 
     #[test]

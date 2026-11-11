@@ -70,6 +70,7 @@ pub enum CommandId {
     Authenticator,
     Passwords,
     // Appearance and extensions
+    Theme,
     DarkModeToggle,
     DarkModeSiteToggle,
     DarkModeSettings,
@@ -198,7 +199,7 @@ pub fn catalog() -> &'static [Command] {
     &CATALOG
 }
 
-static CATALOG: [Command; 55] = [
+static CATALOG: [Command; 56] = [
     cmd!(
         NewTab,
         "new-tab",
@@ -619,7 +620,7 @@ static CATALOG: [Command; 55] = [
         "Authenticator (2FA codes)",
         ["totp", "otp", "two factor", "2fa", "code"],
         None,
-        ph::SHIELD_CHECK,
+        crate::icons::AUTHENTICATOR,
         Privacy
     ),
     cmd!(
@@ -630,6 +631,15 @@ static CATALOG: [Command; 55] = [
         None,
         crate::icons::KEY,
         Privacy
+    ),
+    cmd!(
+        Theme,
+        "theme",
+        "Change theme…",
+        ["appearance", "colors", "colours", "dark", "light", "skin", "late night", "slate", "olive", "frost", "rose", "forest", "sand"],
+        None,
+        crate::icons::THEME,
+        Appearance
     ),
     cmd!(
         DarkModeToggle,

@@ -541,7 +541,7 @@ fn home_html() -> String {
     let page = HOME_HTML
         .replace("{{CSS}}", &crate::internal::css())
         .replace("{{LINKS}}", &links);
-    crate::internal::themed(&page, crate::internal::dark())
+    crate::internal::themed(&page, crate::internal::current())
 }
 
 #[allow(clippy::expect_used, reason = "a constant, valid URL")]

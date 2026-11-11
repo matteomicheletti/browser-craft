@@ -42,6 +42,8 @@ mod storage;
 mod style;
 mod tab_groups;
 mod textfield;
+mod theme;
+mod titlebar;
 #[cfg(test)]
 mod test_http;
 mod vault;
@@ -63,7 +65,7 @@ fn main() {
     bookmarks::load();
     passwords::load();
     containers::load();
-    internal::set_dark(flags::get().theme != flags::Theme::Light);
+    internal::set_theme(flags::get().theme.resolve(true));
     let fonts = match font::Fonts::new() {
         Ok(fonts) => fonts,
         Err(e) => {

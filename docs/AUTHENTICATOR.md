@@ -99,8 +99,10 @@ file is not encrypted" checkbox and warns to delete the file after use.
 
 ## Panel and integration
 
-Wired in `src/browser/features.rs`: a toolbar shield (a tinted check while
-unlocked), the drawer, the palette's *Authenticator* command, `tick()` from
+Wired in `src/browser/features.rs`: a toolbar QR-code button (Phosphor
+`QR_CODE`, in the theme's accent with an open padlock badge while unlocked, a
+closed padlock while locked; the same glyph heads the drawer and the palette
+entry), the drawer, the palette's *Authenticator* command, `tick()` from
 the event loop, and `AuthEvent::Copy` through the password manager's
 clipboard helper (cleared after 30 s). Turning off the `builtin.authenticator`
 plugin entry hides the button and locks the vault.

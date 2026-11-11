@@ -49,6 +49,7 @@ use crate::paint::{self, Canvas, Image};
 use crate::passwords::{self, FormKind, PageMessage};
 use crate::style::{self, Style, StyleContext};
 use crate::textfield::TextField;
+use crate::titlebar::{self, WindowOp};
 use crate::vault;
 
 mod automation_rpc;
@@ -281,7 +282,7 @@ impl Drawer {
     pub fn icon(self) -> &'static str {
         match self {
             Drawer::Containers => egui_phosphor::regular::STACK,
-            Drawer::Authenticator => egui_phosphor::regular::SHIELD_CHECK,
+            Drawer::Authenticator => icons::AUTHENTICATOR,
             Drawer::DarkMode => egui_phosphor::regular::CIRCLE_HALF,
             Drawer::Plugins => egui_phosphor::regular::PUZZLE_PIECE,
             Drawer::Automation => egui_phosphor::regular::ROBOT,
@@ -339,7 +340,7 @@ enum Action {
     Reload,
     Stop,
     Home,
-    Theme,
+    SetTheme(flags::Theme),
     Flags,
     Navigate(String),
     RestoreAddress,
@@ -557,7 +558,17 @@ pub struct Browser {
     drag: Drag,
     quit: bool,
     epoch: Instant,
-    last_dark: Option<bool>,
+    last_theme: Option<crate::theme::ThemeId>,
+    /// The window is maximized / fullscreen (F11 or a page), as last seen.
+    maximized: bool,
+    window_fullscreen: bool,
+    /// Whether the window has the system's decorations now.
+    decorations: Option<bool>,
+    /// Window operations queued by the debug test hook, with when to run them.
+    #[cfg(debug_assertions)]
+    window_script: Vec<(Instant, &'static str)>,
+    /// The desktop prefers a dark theme (for "Follow system").
+    system_dark: bool,
     /// A WebView2 navigation we started ourselves is in flight, so its final
     /// URL replaces the history entry instead of adding one.
     web_expect: bool,
@@ -2009,7 +2020,7 @@ fn with_alpha(c: Color, a: u8) -> Color {
     Color { a, ..c }
 }
 
-/// The engine chrome's colours (the same palette as `egui_chrome::Colors`).
+/// The engine chrome's colours (the same theme tokens as `egui_chrome::Colors`).
 #[derive(Clone, Copy)]
 struct Palette {
     bar_bg: Color,
@@ -2023,31 +2034,18 @@ struct Palette {
     page_bg: Color,
 }
 
-fn palette(dark: bool) -> Palette {
-    if dark {
-        Palette {
-            bar_bg: rgb(0x2b2b2b),
-            sidebar_bg: rgb(0x202020),
-            line: rgb(0x3c3c3c),
-            field_bg: rgb(0x1e1e1e),
-            text: rgb(0xe8e8e8),
-            muted: rgb(0x8a8a8a),
-            hover: rgb(0x3d3d3d),
-            accent: rgb(0x5b9cff),
-            page_bg: rgb(0x1e1e1e),
-        }
-    } else {
-        Palette {
-            bar_bg: rgb(0xf3f3f3),
-            sidebar_bg: rgb(0xececec),
-            line: rgb(0xd6d6d6),
-            field_bg: rgb(0xffffff),
-            text: rgb(0x1f1f1f),
-            muted: rgb(0x8a8a8a),
-            hover: rgb(0xe1e1e1),
-            accent: rgb(0x2f6fde),
-            page_bg: rgb(0xffffff),
-        }
+fn palette(theme: &crate::theme::Theme) -> Palette {
+    let t = &theme.t;
+    Palette {
+        bar_bg: rgb(t.surface),
+        sidebar_bg: rgb(t.background),
+        line: rgb(t.border),
+        field_bg: rgb(t.address_bar),
+        text: rgb(t.text),
+        muted: rgb(t.text_muted),
+        hover: rgb(t.surface2),
+        accent: rgb(t.accent),
+        page_bg: rgb(t.page),
     }
 }
 
@@ -2127,7 +2125,13 @@ impl Browser {
             drag: Drag::None,
             quit: false,
             epoch: Instant::now(),
-            last_dark: None,
+            last_theme: None,
+            maximized: false,
+            window_fullscreen: false,
+            decorations: None,
+            #[cfg(debug_assertions)]
+            window_script: Vec::new(),
+            system_dark: true,
             web_expect: false,
             web_leaving: String::new(),
             web_document: String::new(),
@@ -2247,17 +2251,39 @@ impl Browser {
         self.request_redraw();
     }
 
+    /// The browser draws its own title bar and window frame (GPU chrome,
+    /// "Use system title bar" off).
+    fn custom_frame(&self) -> bool {
+        self.gpu_chrome && !flags::get().system_titlebar
+    }
+
+    /// The window buttons and the draggable title bar are shown: the custom
+    /// frame, except in full screen.
+    fn titlebar_shown(&self) -> bool {
+        self.custom_frame() && !self.window_fullscreen && !self.web_fullscreen
+    }
+
+    /// The width of the resize band round the window, in physical pixels
+    /// (none when maximized). The page sits inside it.
+    fn frame_edge(&self) -> f32 {
+        if self.titlebar_shown() && !self.maximized {
+            (titlebar::RESIZE_EDGE * self.scale()).round()
+        } else {
+            0.0
+        }
+    }
+
     /// The area the page (engine raster or WebView2 pane) occupies: the
     /// focused pane in a split view.
     fn page_rect(&self) -> Rect {
         let (w, h) = self.window_size();
-        let (th, sw) = (self.top_h(), self.sidebar_w());
+        let (th, sw, e) = (self.top_h(), self.sidebar_w(), self.frame_edge());
         let left = self.tabs_position() == TabsPosition::Left;
         self.focused_pane(Rect {
-            x: if left { sw } else { 0.0 },
+            x: if left { sw } else { 0.0 } + e,
             y: th,
-            w: (w - sw - self.drawer_w()).max(1.0),
-            h: (h - th - self.notice_h()).max(1.0),
+            w: (w - sw - self.drawer_w() - 2.0 * e).max(1.0),
+            h: (h - th - self.notice_h() - e).max(1.0),
         })
     }
 
@@ -2267,12 +2293,12 @@ impl Browser {
             return None;
         }
         let (w, h) = self.window_size();
-        let (th, sw) = (self.top_h(), self.sidebar_w());
+        let (th, sw, e) = (self.top_h(), self.sidebar_w(), self.frame_edge());
         Some(Rect {
-            x: if pos == TabsPosition::Left { 0.0 } else { w - sw },
+            x: if pos == TabsPosition::Left { e } else { w - sw - e },
             y: th,
             w: sw,
-            h: (h - th).max(1.0),
+            h: (h - th - e).max(1.0),
         })
     }
 
@@ -2291,13 +2317,14 @@ impl Browser {
         }
     }
 
+    /// The theme in effect: the user's choice, or the desktop's light or
+    /// dark one for "Follow system".
+    fn theme(&self) -> &'static crate::theme::Theme {
+        flags::effective_theme(self.system_dark)
+    }
+
     fn dark(&self) -> bool {
-        let window_dark = self
-            .gfx
-            .as_ref()
-            .and_then(|g| g.window.theme())
-            .is_some_and(|t| t == Theme::Dark);
-        flags::effective_dark(window_dark)
+        self.theme().dark
     }
 
     fn address_focused(&self) -> bool {
@@ -3346,14 +3373,18 @@ impl Browser {
         }
     }
 
+    /// Switches between a light and a dark theme: Light, or the default
+    /// dark one (Late Night).
     fn toggle_theme(&mut self) {
-        let mut f = flags::get();
-        f.theme = if self.dark() {
-            flags::Theme::Light
-        } else {
-            flags::Theme::Dark
-        };
-        if let Err(error) = flags::set(f) { self.set_notice(&error); }
+        let next = if self.dark() { flags::Theme::Light } else { flags::Theme::LateNight };
+        self.set_theme(next);
+    }
+
+    /// Applies and saves a theme choice; the chrome repaints with it at once.
+    pub(super) fn set_theme(&mut self, id: flags::Theme) {
+        if let Err(error) = flags::set_theme(id) {
+            self.set_notice(&error);
+        }
         self.request_redraw();
     }
 
@@ -3876,6 +3907,10 @@ impl Browser {
                 }
                 #[cfg(target_os = "linux")]
                 {
+                    // `with_visible(false)` only hides the GTK widget: wry's
+                    // X11 container (a black window over the initial bounds)
+                    // stays mapped and covers engine pages until it is hidden.
+                    let _ = wv.set_visible(false);
                     attach_webview_shortcuts_gtk(&wv, self.proxy.clone(), self.chrome_keys.clone(), tab);
                     attach_webview_extras_gtk(&wv, self.proxy.clone(), tab);
                     let key = container.unwrap_or("");
@@ -4055,24 +4090,116 @@ impl Browser {
         }
     }
 
+    /// Gives the window the system's decorations or not, following the
+    /// "Use system title bar" setting (live).
+    fn sync_decorations(&mut self) {
+        let Some(g) = &self.gfx else {
+            return;
+        };
+        let want = !self.custom_frame();
+        if self.decorations != Some(want) {
+            g.window.set_decorations(want);
+            self.decorations = Some(want);
+            self.web_bounds = None;
+        }
+    }
+
+    /// Carries out what the user did on the browser's own window frame.
+    fn window_op(&mut self, op: WindowOp) {
+        if op == WindowOp::Close {
+            self.quit = true;
+            return;
+        }
+        let Some(g) = &self.gfx else {
+            return;
+        };
+        if titlebar::apply(&g.window, op) {
+            // The window manager owns the pointer until the move or resize
+            // ends, and the button release never reaches the window: tell
+            // egui, or it would think the button is still down.
+            let scale = self.scale();
+            let pos = egui::pos2(self.mouse.0 / scale, self.mouse.1 / scale);
+            self.pending_egui_events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            });
+            self.drag = Drag::None;
+        }
+        self.request_redraw();
+    }
+
+    /// Runs the debug test hook's window operations that are due.
+    #[cfg(debug_assertions)]
+    fn run_window_script(&mut self, now: Instant) -> Option<Instant> {
+        let due: Vec<&'static str> = self.window_script.iter().filter(|(at, _)| *at <= now).map(|(_, op)| *op).collect();
+        self.window_script.retain(|(at, _)| *at > now);
+        for op in due {
+            eprintln!("browsecraft: window test hook: {op}");
+            match op {
+                "maximize" if !self.maximized => self.window_op(WindowOp::ToggleMaximize),
+                "restore" if self.maximized => self.window_op(WindowOp::ToggleMaximize),
+                "minimize" => self.window_op(WindowOp::Minimize),
+                "unminimize" => {
+                    if let Some(g) = &self.gfx {
+                        g.window.set_minimized(false);
+                    }
+                }
+                "fullscreen" => self.toggle_window_fullscreen(),
+                "system-titlebar" | "custom-titlebar" => {
+                    if let Err(error) = flags::set_system_titlebar(op == "system-titlebar") {
+                        self.set_notice(error);
+                    }
+                    self.request_redraw();
+                }
+                "close" => self.window_op(WindowOp::Close),
+                // Screenshots of the overlays, which otherwise need input.
+                "palette" => self.toggle_palette(),
+                "themes" => self.run_command(crate::commands::CommandId::Theme),
+                "authenticator" => self.toggle_drawer(Drawer::Authenticator),
+                "containers" => self.toggle_drawer(Drawer::Containers),
+                "theme-next" => {
+                    let ids = flags::Theme::ALL;
+                    let at = ids.iter().position(|t| *t == flags::get().theme).unwrap_or(0);
+                    self.set_theme(ids[(at + 1) % ids.len()]);
+                }
+                _ => {}
+            }
+            if let Some(g) = &self.gfx {
+                eprintln!(
+                    "browsecraft: window test hook: maximized={} minimized={:?} decorated={} size={:?}",
+                    g.window.is_maximized(),
+                    g.window.is_minimized(),
+                    g.window.is_decorated(),
+                    g.window.inner_size()
+                );
+            }
+        }
+        self.window_script.iter().map(|(at, _)| *at).min()
+    }
+
     /// Pushes the effective theme to the window and the web view.
-    fn apply_theme(&mut self, dark: bool) {
-        self.last_dark = Some(dark);
+    fn apply_theme(&mut self, theme: &'static crate::theme::Theme) {
+        let dark = theme.dark;
+        self.last_theme = Some(theme.id);
         // Pages whose dark mode follows the system follow the browser theme.
         self.dark_theme_changed();
         // Internal pages are generated for one theme: rebuild the open one.
-        if internal::set_dark(dark) && !self.web_page {
+        if internal::set_theme(theme) && !self.web_page {
             let url = self.current_url();
             if url.starts_with("browsecraft://") || url == NEW_TAB_URL {
                 self.reload();
             }
         }
-        let setting = flags::get().theme;
+        let follow = flags::get().theme == flags::Theme::System;
         if let Some(g) = &self.gfx {
-            g.window.set_theme(match setting {
-                flags::Theme::Auto => None,
-                flags::Theme::Light => Some(Theme::Light),
-                flags::Theme::Dark => Some(Theme::Dark),
+            // "Follow system" leaves the window on the desktop's theme, so
+            // `ThemeChanged` keeps reporting it.
+            g.window.set_theme(match (follow, dark) {
+                (true, _) => None,
+                (false, false) => Some(Theme::Light),
+                (false, true) => Some(Theme::Dark),
             });
         }
         if let Some(WebPane::Servo(pane)) = &self.webview {
@@ -4082,10 +4209,10 @@ impl Browser {
         for view in self.all_views() {
             if let WebPane::Wry(wv) = view {
                 use wry::WebViewExtWindows;
-                let _ = wv.set_theme(match setting {
-                    flags::Theme::Auto => wry::Theme::Auto,
-                    flags::Theme::Light => wry::Theme::Light,
-                    flags::Theme::Dark => wry::Theme::Dark,
+                let _ = wv.set_theme(match (follow, dark) {
+                    (true, _) => wry::Theme::Auto,
+                    (false, false) => wry::Theme::Light,
+                    (false, true) => wry::Theme::Dark,
                 });
             }
         }
@@ -5486,7 +5613,7 @@ impl Browser {
         self.fix_tabs_scroll();
         self.update_address_scroll();
         self.ensure_layout(page.w, page.h);
-        let pal = palette(self.dark());
+        let pal = palette(self.theme());
 
         let mut frame = std::mem::take(&mut self.frame);
         frame.clear();
@@ -5599,10 +5726,11 @@ impl Browser {
 
 impl Browser {
     fn render(&mut self) {
-        let dark = self.dark();
-        if self.last_dark != Some(dark) {
-            self.apply_theme(dark);
+        let theme = self.theme();
+        if self.last_theme != Some(theme.id) {
+            self.apply_theme(theme);
         }
+        self.sync_decorations();
         if self.egui.is_some() {
             self.render_egui();
         } else {
@@ -5621,7 +5749,7 @@ impl Browser {
             return;
         }
         self.ensure_layout(page.w, page.h);
-        let pal = palette(self.dark());
+        let pal = palette(self.theme());
 
         // The page alone is rasterised; egui draws everything around it.
         let mut frame = std::mem::take(&mut self.frame);
@@ -5657,7 +5785,7 @@ impl Browser {
             }
         }
         let tex = self.page_tex.as_ref().map(|t| (t.id(), t.size()));
-        egui_chrome::apply_style(egui.ctx(), self.dark());
+        egui_chrome::apply_style(egui.ctx(), &egui_chrome::Colors::from_theme(self.theme()));
         let mut raw = egui.take_raw_input(&window);
         raw.events.append(&mut self.pending_egui_events);
         egui.frame(&window, raw, |ui| self.build_egui_chrome(ui, tex));
@@ -5669,15 +5797,20 @@ impl Browser {
 
     fn build_egui_chrome(&mut self, ui: &mut egui::Ui, tex: Option<(egui::TextureId, [usize; 2])>) {
         use egui_chrome::{ICON_BACK, ICON_FORWARD, ICON_GEAR, ICON_GLOBE, ICON_HOME, ICON_KEY, ICON_LOCK};
-        let dark = self.dark();
-        let c = egui_chrome::Colors::for_dark(dark);
+        let theme = self.theme();
+        let c = egui_chrome::Colors::from_theme(theme);
         let ctx = ui.ctx().clone();
+        // The browser's own title bar: window buttons, a draggable row and
+        // resize bands round the window.
+        let titlebar = self.titlebar_shown();
+        let maximized = self.maximized;
+        let edge = if titlebar && !maximized { titlebar::RESIZE_EDGE } else { 0.0 };
+        let mut win_ops: Vec<WindowOp> = Vec::new();
         let ppp = ctx.pixels_per_point();
         let mut actions: Vec<Action> = Vec::new();
         let (can_back, can_forward) = (self.button_enabled(Button::Back), self.button_enabled(Button::Forward));
         let loading = self.loading;
         let leading = if self.page_secure() { ICON_LOCK } else { ICON_GLOBE };
-        let theme_icon = if dark { egui_chrome::ICON_SUN } else { egui_chrome::ICON_MOON };
         let reload_icon = if loading { egui_chrome::ICON_STOP } else { egui_chrome::ICON_RELOAD };
 
         let fullscreen = self.web_fullscreen;
@@ -5742,14 +5875,36 @@ impl Browser {
         let position = self.tabs_position();
         let mut tab_events: Vec<(usize, egui_chrome::TabRow)> = Vec::new();
 
-        // Tab strip (tabs on top), above the toolbar.
+        // Tab strip (tabs on top), above the toolbar. With the browser's own
+        // frame it is the title bar: the window buttons sit at its right end
+        // and its empty part moves the window.
         if position == TabsPosition::Top && !fullscreen {
             egui::Panel::top("tabstrip")
                 .exact_size(TAB_STRIP_HEIGHT)
                 .resizable(false)
                 .show_separator_line(false)
-                .frame(egui::Frame::NONE.fill(c.sidebar_bg))
+                .frame(egui::Frame::NONE.fill(c.tab_inactive))
                 .show(ui, |ui| {
+                    let full = ui.max_rect();
+                    let mut strip_rect = full;
+                    if titlebar {
+                        titlebar::drag_area(ui, full, &c, maximized, &mut win_ops);
+                        strip_rect.max.x -= titlebar::BUTTONS_W + titlebar::DRAG_GAP;
+                        let controls = full.with_min_x(full.max.x - titlebar::BUTTONS_W);
+                        let mut ctl = ui.new_child(
+                            egui::UiBuilder::new()
+                                .max_rect(controls)
+                                .layout(egui::Layout::right_to_left(egui::Align::Center)),
+                        );
+                        ctl.spacing_mut().item_spacing.x = 0.0;
+                        titlebar::window_buttons(&mut ctl, &c, full.height(), maximized, edge, &mut win_ops);
+                    }
+                    let mut strip_ui = ui.new_child(
+                        egui::UiBuilder::new()
+                            .max_rect(strip_rect)
+                            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+                    );
+                    let ui = &mut strip_ui;
                     let strip = egui_chrome::tab_strip(ui, &c, &tab_infos, &strip_items, &group_infos, &containers_list);
                     tab_events.extend(strip.tabs);
                     group_events.extend(strip.groups);
@@ -5770,6 +5925,11 @@ impl Browser {
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.fill(c.bar_bg))
                 .show(ui, |ui| {
+                    // Without tabs on top the toolbar is the title bar.
+                    let toolbar_is_titlebar = titlebar && position != TabsPosition::Top;
+                    if toolbar_is_titlebar {
+                        titlebar::drag_area(ui, ui.max_rect(), &c, maximized, &mut win_ops);
+                    }
                     ui.horizontal_centered(|ui| {
                         ui.add_space(8.0);
                         if egui_chrome::icon_button(ui, can_back, ICON_BACK, "Back", 16.0).clicked() {
@@ -5794,7 +5954,14 @@ impl Browser {
                         // the address bar takes whatever room is left. Nothing can be
                         // pushed past the window edge, at any window width.
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.add_space(8.0);
+                            if toolbar_is_titlebar {
+                                let spacing = std::mem::replace(&mut ui.spacing_mut().item_spacing.x, 0.0);
+                                titlebar::window_buttons(ui, &c, TOOLBAR_HEIGHT, maximized, edge, &mut win_ops);
+                                ui.spacing_mut().item_spacing.x = spacing;
+                                ui.add_space(4.0);
+                            } else {
+                                ui.add_space(8.0);
+                            }
                             let key_tip = match &pw_status {
                                 passwords::Status::Unlocked { .. } => "Passwords (unlocked)",
                                 passwords::Status::Locked => "Passwords (locked)",
@@ -5836,8 +6003,8 @@ impl Browser {
                             // Authenticator, plugins, dark mode, containers
                             // (an overflow menu on a narrow window).
                             self.feature_toolbar(ui, &c, &mut actions);
-                            if egui_chrome::icon_button(ui, true, theme_icon, "Toggle light / dark", 16.0).clicked() {
-                                actions.push(Action::Theme);
+                            if let Some(id) = egui_chrome::theme_button(ui, &c, flags::get().theme) {
+                                actions.push(Action::SetTheme(id));
                             }
                             let width = (ui.available_width() - 4.0).max(60.0);
                             if self.egui_focus_address {
@@ -5948,6 +6115,15 @@ impl Browser {
                 });
         }
 
+        // The window frame: resize bands left, right and below the page,
+        // where the native web view never is (`page_rect` leaves them out).
+        if edge > 0.0 {
+            let band = egui::Frame::NONE.fill(c.sidebar_bg);
+            for panel in [egui::Panel::left("frame-left"), egui::Panel::right("frame-right"), egui::Panel::bottom("frame-bottom")] {
+                panel.exact_size(edge).resizable(false).show_separator_line(false).frame(band).show(ui, |_| {});
+            }
+        }
+
         // Tab sidebar.
         if matches!(position, TabsPosition::Left | TabsPosition::Right) && !fullscreen {
             let panel = if position == TabsPosition::Left {
@@ -6053,7 +6229,7 @@ impl Browser {
                 .show_separator_line(false)
                 .frame(
                     egui::Frame::NONE
-                        .fill(c.sidebar_bg)
+                        .fill(c.drawer)
                         .inner_margin(egui::Margin::symmetric(14, 10))
                         .stroke(egui::Stroke::new(1.0, c.line)),
                 )
@@ -6077,6 +6253,9 @@ impl Browser {
         // The palette is an overlay too: the page's native window hides
         // behind its snapshot while it is open.
         self.feature_palette(&ctx, &c, &mut actions);
+        if titlebar {
+            titlebar::window_edges(&ctx, &c, edge, &mut win_ops);
+        }
         let popup_now = egui::Popup::is_any_open(&ctx) || self.feat.palette.is_open();
         if popup_now != self.egui_popup_open {
             self.egui_popup_open = popup_now;
@@ -6131,7 +6310,10 @@ impl Browser {
             h: (r.height() * ppp).round().max(1.0),
         });
 
-        let changed = !actions.is_empty();
+        let changed = !actions.is_empty() || !win_ops.is_empty();
+        for op in win_ops {
+            self.window_op(op);
+        }
         for action in actions {
             match action {
                 Action::Back => self.go(-1),
@@ -6139,7 +6321,7 @@ impl Browser {
                 Action::Reload => self.reload(),
                 Action::Stop => self.stop(),
                 Action::Home => self.home(),
-                Action::Theme => self.toggle_theme(),
+                Action::SetTheme(id) => self.set_theme(id),
                 Action::Flags => self.load(Request::Get("browsecraft://flags".into()), true),
                 Action::Navigate(text) => {
                     ctx.memory_mut(|m| m.surrender_focus(egui_chrome::address_id()));
@@ -6324,7 +6506,10 @@ impl ApplicationHandler<UserMessage> for Browser {
             .with_title("BrowseCraft")
             .with_window_icon(window_icon)
             .with_inner_size(LogicalSize::new(1280.0, 800.0))
-            .with_min_inner_size(LogicalSize::new(480.0, 320.0));
+            .with_min_inner_size(LogicalSize::new(480.0, 320.0))
+            // The browser's own title bar unless the system's is asked for
+            // (the software chrome always has the system's).
+            .with_decorations(flags::get().system_titlebar || flags::get().chrome == Chrome::Engine);
         // The desktop entry's StartupWMClass, so the dock groups the window
         // under the launcher icon.
         #[cfg(target_os = "linux")]
@@ -6371,7 +6556,14 @@ impl ApplicationHandler<UserMessage> for Browser {
             surface,
             _context: context,
         });
-        self.apply_theme(self.dark());
+        self.system_dark = system_prefers_dark(Some(&window));
+        self.sync_decorations();
+        #[cfg(debug_assertions)]
+        {
+            let start = Instant::now();
+            self.window_script = titlebar::test_script().into_iter().map(|(after, op)| (start + after, op)).collect();
+        }
+        self.apply_theme(self.theme());
         self.open_start_tabs();
         // The control API, when enabled in settings or with --automation.
         self.start_automation();
@@ -6390,12 +6582,26 @@ impl ApplicationHandler<UserMessage> for Browser {
                 if let Some(egui) = &mut self.egui {
                     egui.on_resized(size.width, size.height);
                 }
+                // Maximizing and full screen arrive as a resize.
+                if let Some(g) = &self.gfx {
+                    self.maximized = g.window.is_maximized();
+                    self.window_fullscreen = g.window.fullscreen().is_some();
+                }
                 self.request_redraw();
             }
-            WindowEvent::ScaleFactorChanged { .. } | WindowEvent::ThemeChanged(_) => {
+            WindowEvent::ThemeChanged(theme) => {
+                self.system_dark = theme == Theme::Dark;
+                self.request_redraw();
+            }
+            WindowEvent::ScaleFactorChanged { .. } => {
                 self.request_redraw();
             }
             WindowEvent::Focused(focused) => {
+                if focused && flags::get().theme == flags::Theme::System {
+                    // X11 sends no theme change: look again when the user
+                    // comes back (they may have switched it meanwhile).
+                    self.system_dark = system_prefers_dark(self.gfx.as_ref().map(|g| &*g.window));
+                }
                 if !focused {
                     self.release_servo_buttons();
                 }
@@ -6488,6 +6694,10 @@ impl ApplicationHandler<UserMessage> for Browser {
         if let Some(t) = self.tick_features() {
             sooner(t);
         }
+        #[cfg(debug_assertions)]
+        if let Some(t) = self.run_window_script(now) {
+            sooner(t);
+        }
         if self.loading {
             // Animate the loading bar.
             self.request_redraw();
@@ -6504,6 +6714,27 @@ impl ApplicationHandler<UserMessage> for Browser {
             None => ControlFlow::Wait,
         });
     }
+}
+
+/// Whether the desktop prefers a dark theme. winit knows it on Windows and
+/// macOS; on X11 it does not, so GNOME's `color-scheme` setting is read.
+fn system_prefers_dark(window: Option<&Window>) -> bool {
+    if let Some(theme) = window.and_then(Window::theme) {
+        return theme == Theme::Dark;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let out = std::process::Command::new("gsettings")
+            .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+            .stderr(std::process::Stdio::null())
+            .output();
+        if let Ok(out) = out
+            && out.status.success()
+        {
+            return String::from_utf8_lossy(&out.stdout).contains("dark");
+        }
+    }
+    true
 }
 
 /// The reverse-DNS application id (desktop file name and window class).

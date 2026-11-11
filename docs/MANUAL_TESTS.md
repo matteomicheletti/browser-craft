@@ -63,7 +63,7 @@ Build under test: `browsecraft --version`, installed by
 
 | # | Check | Result |
 | --- | --- | --- |
-| 4.0 | Shield button opens the drawer; create a vault; shield turns to a tinted check while unlocked | OK 2026-11-11 (nested X) |
+| 4.0 | QR-code button opens the drawer; create a vault; the button turns accent-coloured with an open padlock while unlocked | OK 2026-11-11 (nested X) |
 | 4.1 | Add a test account from an `otpauth://` URI; code matches another app (e.g. phone authenticator) for the same secret | OK 2026-11-11 (nested X): matched an independent TOTP computation; phone app not tried |
 | 4.6 | Copy a code; paste within 30 s, then after 30 s | Code, then nothing | OK 2026-11-11 (nested X, xclip) |
 | 4.7 | Leave the vault unlocked with the drawer closed past the auto-lock time | Shield shows locked | |
@@ -138,3 +138,24 @@ Serve the probes first: `python3 -m http.server -d tests/web 8000`.
 | 6.9 | `ls -l $XDG_RUNTIME_DIR/browsecraft` while the browser runs | `drwx------` dir, `srw-------` socket | Socket `srw-------` OK 2026-11-11 (custom path) |
 | 6.10 | Automation drawer: tick *Allow running JavaScript*, `ctl page.eval '{"script":"6*7"}'`; untick, again | `42`, then permission denied | OK 2026-11-11 |
 | 6.11 | Palette → *Toggle automation* twice | `ctl` fails (socket gone), then works | OK 2026-11-11 |
+
+## 7. Window frame and themes (wave 3)
+
+Rows marked "hook" were checked on the GNOME session through the debug-build
+test hook (`BROWSECRAFT_WINDOW_SCRIPT`, see `docs/egui.md`), which runs the
+same code as the buttons; moving and resizing need a real pointer press.
+
+| # | Action | Expected | Result |
+| --- | --- | --- | --- |
+| 7.1 | Start with default settings | No system title bar; tabs and window buttons in one row; a thin border round the page | OK 2026-11-11 (GNOME, screenshot) |
+| 7.2 | Drag the empty part of the tab strip (after `+`), and the toolbar with tabs in the sidebar | The window follows the pointer; on release, clicks in the page work at once | |
+| 7.3 | Double-click the empty tab strip; again | Maximizes; restores | |
+| 7.4 | Maximize / restore / minimize / close buttons | Each does what it says; the maximize glyph turns into restore | OK 2026-11-11 (hook: maximize 1920×1039, restore, minimize, close) |
+| 7.5 | Right-click the empty title bar | Window menu: Minimize, Maximize (Restore), Close, each works | |
+| 7.6 | Hover each edge and corner, drag | Resize cursor; the window resizes from that side; also next to a web page (left, right, bottom) | |
+| 7.7 | Maximized: hover the top-right corner, click | No resize cursor; the close button closes the window | |
+| 7.8 | `F11`, then a video's fullscreen button | No window buttons, no border, page fills the screen | OK 2026-11-11 (hook, `F11`) |
+| 7.9 | `browsecraft://flags` → *Use system title bar* on, then off | The GNOME title bar appears; then the browser's frame comes back, without restart | OK 2026-11-11 (hook) |
+| 7.10 | Toolbar theme menu, palette *Change theme…* (`%`), settings swatches: pick each theme | Chrome, open drawer, palette and internal pages change at once; the choice survives a restart | OK 2026-11-11 (hook + screenshots of all eight) |
+| 7.11 | *Follow system*, switch GNOME Settings → Appearance light/dark, focus the window again | Light / Late Night follow | |
+

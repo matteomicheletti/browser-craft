@@ -117,7 +117,8 @@ claim. Track the work in [the engine roadmap](https://github.com/freewright-dev/
 - Bookmarks: a star in the address bar (`Ctrl+D`), a bookmarks bar under it, and a manager at `browsecraft://bookmarks`
 - Password manager backed by a KeePass `.kdbx` vault (password or key file), with sign-up/login detection, autofill and a save prompt
 - Real page fullscreen: a video's fullscreen button makes the whole window fullscreen, not just the viewport (`F11` for the window)
-- Dark theme by default; light or automatic on request, toggled from the toolbar
+- Eight themes (Late Night by default, Slate Gray, Olive, Frost, Rosé, Forest, Light, Sand) or *Follow system*, switched live from the toolbar, the command palette or the settings page
+- Its own window frame: tabs in the title bar with the window buttons, resizing from every edge (the system title bar is one setting away)
 - A modern settings page at `browsecraft://flags` with toggle switches, saved in the per-user configuration folder (see [Settings](#settings))
 - Zoom, view source, link previews on hover and HiDPI support
 - Screenshots of the visible page (`Ctrl+Shift+S`), plus a headless `--screenshot` mode
@@ -208,7 +209,8 @@ The full list is in [docs/usage.md](docs/usage.md).
 
 Open `browsecraft://flags` to change:
 
-- **Theme:** system (follows the OS), light or dark (the default)
+- **Theme:** one of eight themes (Late Night, the default, Slate Gray, Olive, Frost, Rosé, Forest, Light, Sand) or *Follow system*
+- **Use system title bar:** the desktop's own window frame instead of BrowseCraft's
 - **Tab sidebar:** left, right or hidden
 - **Bookmarks bar:** shown or hidden (`Ctrl+Shift+B`)
 - **Interface renderer:** auto, GPU (egui) or software (engine). This one takes effect after a restart.
