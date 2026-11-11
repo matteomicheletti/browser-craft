@@ -17,6 +17,7 @@
 
 pub mod otp;
 pub mod uri;
+pub mod vault;
 
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
