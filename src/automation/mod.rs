@@ -110,6 +110,13 @@ pub fn run_cli(args: &[String]) -> Option<i32> {
     match args.get(1).map(String::as_str)? {
         "ctl" => Some(ctl::main(rest)),
         "mcp" => Some(mcp::main(rest)),
+        #[cfg(target_os = "linux")]
+        "headless" => Some(crate::headless_webkit::main(rest)),
+        #[cfg(not(target_os = "linux"))]
+        "headless" => {
+            eprintln!("browsecraft: headless WebKit is only available on Linux for now");
+            Some(2)
+        }
         _ => None,
     }
 }

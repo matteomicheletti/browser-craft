@@ -18,6 +18,8 @@ mod egui_chrome;
 mod flags;
 mod font;
 mod headless;
+#[cfg(target_os = "linux")]
+mod headless_webkit;
 mod history;
 mod html;
 mod icons;
