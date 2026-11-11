@@ -669,6 +669,8 @@ pub struct Browser {
     egui_popup_open: bool,
     /// The page as it looked when the menu opened (see `egui_popup_open`).
     popup_snapshot: Option<egui::TextureHandle>,
+    /// When egui wants its next frame (see `EguiChrome::frame`).
+    egui_repaint_at: Option<Instant>,
     /// The window was already fullscreen (F11 / the OS) when the page asked,
     /// so leaving page fullscreen must keep it that way.
     fullscreen_restore: bool,
@@ -2366,6 +2368,7 @@ impl Browser {
             page_forms: None,
             egui_popup_open: false,
             popup_snapshot: None,
+            egui_repaint_at: None,
             fullscreen_restore: false,
             feat,
             groups: crate::tab_groups::TabGroups::default(),
@@ -6085,7 +6088,11 @@ impl Browser {
         egui_chrome::apply_style(egui.ctx(), &egui_chrome::Colors::from_theme(self.theme()));
         let mut raw = egui.take_raw_input(&window);
         raw.events.append(&mut self.pending_egui_events);
-        egui.frame(&window, raw, |ui| self.build_egui_chrome(ui, tex));
+        let repaint = egui.frame(&window, raw, |ui| self.build_egui_chrome(ui, tex));
+        // Drawn again only when egui asks (an animation, a tooltip's delay),
+        // from `tick`: never straight from a frame, which would keep the
+        // GPU and the main loop busy.
+        self.egui_repaint_at = repaint.map(|d| Instant::now() + d.max(Duration::from_millis(8)));
         // While a chrome text field has the focus, keys typed with the
         // pointer over the page go to it. The flag is shared by the windows:
         // the one in use sets it.
@@ -7068,6 +7075,14 @@ impl Browser {
         }
         if let Some(t) = self.hover.due(hover_delay()) {
             if t <= now {
+                self.request_redraw();
+            } else {
+                sooner(t);
+            }
+        }
+        if let Some(t) = self.egui_repaint_at {
+            if t <= now {
+                self.egui_repaint_at = None;
                 self.request_redraw();
             } else {
                 sooner(t);

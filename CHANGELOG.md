@@ -104,6 +104,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Scrolling and idle CPU with the GPU chrome: every egui frame asked for the next one (egui-winit flags `RedrawRequested` itself as needing a repaint), so the chrome redrew forever. On NVIDIA + XWayland each Vulkan frame blocks 50 ms–1 s in `acquire_next_image` on the main thread, which also pumps GLib, so WebKit pages scrolled at ~19 fps and the browser used a full core at idle. Now egui redraws only on input or when it asks (its repaint delay, via `tick`): scroll test 19 → 60–72 fps, idle CPU 100% → 1–11%.
 - Linux: engine pages (the new-tab page, settings, history…) shown before any web page were covered by a black rectangle: wry's X11 container window stayed mapped while the web view was hidden. Every new web view now starts hidden.
 - The bookmarks bar's *All bookmarks* button no longer touches the window's right edge.
 

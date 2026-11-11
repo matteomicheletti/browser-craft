@@ -66,7 +66,11 @@ impl EguiChrome {
     /// Feeds a winit event into egui. Returns `true` when egui consumed it.
     pub fn on_window_event(&mut self, window: &Window, event: &WindowEvent) -> bool {
         let response = self.state.on_window_event(window, event);
-        if response.repaint {
+        // egui-winit asks for a repaint on `RedrawRequested` itself (it
+        // means "paint now", which the caller is about to do): asking for
+        // another one here would redraw every frame forever. Animations
+        // ask through `frame`'s repaint delay instead.
+        if response.repaint && !matches!(event, WindowEvent::RedrawRequested) {
             window.request_redraw();
         }
         response.consumed
@@ -88,11 +92,19 @@ impl EguiChrome {
     /// mutate browser state directly. The engine raster `frame`
     /// (`w × h` physical pixels, `0x00RRGGBB`) is uploaded as the page texture
     /// shown in the central panel (when `show_page` is true).
-    pub fn frame<R>(&mut self, window: &Arc<Window>, raw_input: egui::RawInput, build: R)
+    ///
+    /// Returns when egui wants the next frame (animations, tooltips), or
+    /// `None` when nothing changes until the next input.
+    pub fn frame<R>(&mut self, window: &Arc<Window>, raw_input: egui::RawInput, build: R) -> Option<std::time::Duration>
     where
         R: FnMut(&mut egui::Ui),
     {
         let mut full_output = self.ctx.run_ui(raw_input, build);
+        let repaint = full_output
+            .viewport_output
+            .get(&self.viewport_id)
+            .map(|v| v.repaint_delay)
+            .filter(|d| *d < std::time::Duration::from_secs(3600));
         let ppp = self.ctx.pixels_per_point();
         self.state
             .handle_platform_output(window, full_output.platform_output.clone());
@@ -108,6 +120,7 @@ impl EguiChrome {
             Vec::new(),
             window,
         );
+        repaint
     }
 
     pub fn ctx(&self) -> &egui::Context {
