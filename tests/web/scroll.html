@@ -1,0 +1,73 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>scroll: ready</title>
+<meta name="viewport" content="width=device-width">
+<style>
+body{font:16px/1.5 system-ui,sans-serif;margin:0;background:#f4f4f6;color:#222}
+main{max-width:1100px;margin:0 auto;padding:16px}
+.card{background:#fff;border-radius:12px;margin:18px 0;padding:18px;display:flex;gap:18px;
+  box-shadow:0 2px 6px rgba(0,0,0,.12),0 12px 32px rgba(0,0,0,.18)}
+.pic{flex:0 0 260px;height:170px;border-radius:8px;box-shadow:inset 0 0 24px rgba(0,0,0,.35)}
+.card h2{margin:0 0 8px;font-size:20px;text-shadow:0 1px 2px rgba(0,0,0,.25)}
+.card p{margin:0 0 8px}
+.badge{display:inline-block;padding:2px 10px;border-radius:99px;background:linear-gradient(90deg,#6a5acd,#20b2aa);color:#fff;
+  box-shadow:0 2px 8px rgba(106,90,205,.5)}
+#hud{position:fixed;top:8px;right:8px;background:rgba(0,0,0,.75);color:#fff;padding:6px 10px;border-radius:8px;font:13px monospace;z-index:9}
+</style></head>
+<body><div id="hud">scroll test: call startScroll(5000) or open with #run</div><main id="m"></main>
+<script>
+// A long page (text, gradient "images", SVG images, box and text shadows) and
+// a requestAnimationFrame auto-scroll that records frame intervals.
+// Results: document.title "scroll: median=… p95=… gt20=…% gt33=…% n=…" and
+// window.scrollResult (JSON) / console.log.
+const words = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore et dolore magna aliqua".split(" ");
+const svg = i => "data:image/svg+xml," + encodeURIComponent(
+  `<svg xmlns='http://www.w3.org/2000/svg' width='260' height='170'><defs><radialGradient id='g'><stop offset='0' stop-color='hsl(${i*37%360},80%,70%)'/><stop offset='1' stop-color='hsl(${i*91%360},60%,30%)'/></radialGradient></defs><rect width='260' height='170' fill='url(#g)'/>` +
+  Array.from({length: 12}, (_, k) => `<circle cx='${(k*53+i*17)%260}' cy='${(k*31+i*7)%170}' r='${8+k%5*4}' fill='hsla(${k*30},90%,60%,.6)'/>`).join("") + `</svg>`);
+const m = document.getElementById("m");
+let html = "";
+for (let i = 0; i < 400; i++) {
+  let text = "";
+  for (let p = 0; p < 2; p++) {
+    let s = "";
+    for (let w = 0; w < 60; w++) s += words[(i * 7 + p * 13 + w * 3) % words.length] + " ";
+    text += `<p>${s}</p>`;
+  }
+  const pic = i % 2
+    ? `<img class="pic" width="260" height="170" alt="" src="${svg(i)}">`
+    : `<div class="pic" style="background:linear-gradient(${i*29%360}deg,hsl(${i*37%360},70%,60%),hsl(${i*53%360},70%,35%))"></div>`;
+  html += `<section class="card">${pic}<div><h2>Card ${i} <span class="badge">#${i}</span></h2>${text}</div></section>`;
+}
+m.innerHTML = html;
+
+function startScroll(ms = 5000, step = 0) {
+  window.scrollTo(0, 0);
+  const pxPerFrame = step || Math.max(8, Math.round(innerHeight / 60));
+  const intervals = [];
+  let last = 0, t0 = 0;
+  document.title = "scroll: running";
+  return new Promise(resolve => {
+    function frame(t) {
+      if (!t0) t0 = t;
+      if (last) intervals.push(t - last);
+      last = t;
+      window.scrollBy(0, pxPerFrame);
+      if (window.scrollY + innerHeight >= document.documentElement.scrollHeight - 2) window.scrollTo(0, 0);
+      if (t - t0 < ms) return requestAnimationFrame(frame);
+      const s = intervals.slice().sort((a, b) => a - b);
+      const q = p => s[Math.min(s.length - 1, Math.floor(p * s.length))];
+      const pct = lim => (100 * intervals.filter(x => x > lim).length / intervals.length);
+      const r = { n: intervals.length, median: +q(0.5).toFixed(1), p95: +q(0.95).toFixed(1),
+        gt20: +pct(20).toFixed(1), gt33: +pct(33.4).toFixed(1), max: +s[s.length - 1].toFixed(1),
+        fps: +(1000 * intervals.length / (t - t0)).toFixed(1), w: innerWidth, h: innerHeight };
+      window.scrollResult = r;
+      const line = `scroll: median=${r.median} p95=${r.p95} gt20=${r.gt20}% gt33=${r.gt33}% max=${r.max} fps=${r.fps} n=${r.n} ${r.w}x${r.h}`;
+      document.title = line;
+      document.getElementById("hud").textContent = line;
+      console.log(line);
+      resolve(line);
+    }
+    requestAnimationFrame(frame);
+  });
+}
+if (location.hash.startsWith("#run")) setTimeout(() => startScroll(5000), 1500);
+</script></body></html>

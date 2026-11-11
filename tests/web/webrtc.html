@@ -1,0 +1,41 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>webrtc: running</title>
+<style>body{font:16px system-ui;margin:24px} pre{background:#eee;padding:8px}</style></head>
+<body><h1>WebRTC loopback</h1>
+<p>Two RTCPeerConnections in this page exchange offer/answer and ICE in-page,
+then send a message on a data channel. The title ends in "connected" or
+"failed: …". Open with <code>#gum</code> to also ask for the microphone and
+camera (the permission prompt).</p>
+<pre id="log"></pre>
+<script>
+const log = s => { document.getElementById("log").textContent += s + "\n"; console.log("webrtc: " + s); };
+const done = s => { document.title = "webrtc: " + s; log(s); };
+async function run() {
+  if (typeof RTCPeerConnection === "undefined") return done("failed: RTCPeerConnection is undefined");
+  const a = new RTCPeerConnection(), b = new RTCPeerConnection();
+  a.onicecandidate = e => e.candidate && b.addIceCandidate(e.candidate).catch(err => log("b.addIce " + err));
+  b.onicecandidate = e => e.candidate && a.addIceCandidate(e.candidate).catch(err => log("a.addIce " + err));
+  a.onconnectionstatechange = () => log("a: " + a.connectionState);
+  const dc = a.createDataChannel("probe");
+  const got = new Promise(r => b.ondatachannel = e => e.channel.onmessage = m => r(m.data));
+  dc.onopen = () => dc.send("hello");
+  await a.setLocalDescription(await a.createOffer());
+  await b.setRemoteDescription(a.localDescription);
+  await b.setLocalDescription(await b.createAnswer());
+  await a.setRemoteDescription(b.localDescription);
+  const timeout = new Promise(r => setTimeout(() => r(null), 10000));
+  const msg = await Promise.race([got, timeout]);
+  if (msg === "hello" && a.connectionState === "connected") done("connected");
+  else done(`failed: state=${a.connectionState} ice=${a.iceConnectionState} msg=${msg}`);
+}
+async function gum() {
+  try {
+    const s = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+    log("getUserMedia: " + s.getTracks().map(t => t.kind + ":" + t.label).join(", "));
+  } catch (e) { log("getUserMedia: " + e.name + " " + e.message); }
+}
+(async () => {
+  if (location.hash === "#gum") gum();
+  try { await run(); } catch (e) { done("failed: " + e); }
+})();
+</script></body></html>
