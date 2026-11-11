@@ -6,7 +6,7 @@ measures, over the whole process tree (bwrap/WebKit helpers and Firefox
 content processes included):
 
   * window_s   - launch until the first visible X11 window
-  * title_s    - launch until the window title contains the first page's title
+  * title_s    - launch until the window title shows one of the opened pages
   * pss_mib    - total PSS (smaps_rollup) after the settle time
   * cpu_avg    - average CPU % (one core = 100) during the idle window
   * cpu_peak   - highest 1 s CPU sample from launch to the end
@@ -56,6 +56,7 @@ SITES = [
 SETTLE_S = 25     # after launch, before the idle measurement
 IDLE_S = 20       # idle window for the average CPU
 HZ = os.sysconf("SC_CLK_TCK")
+REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 def tree(root):
@@ -147,9 +148,21 @@ def one_run(args, urls, expect):
         env["MOZ_ENABLE_WAYLAND"] = "0"
         cmd = [args.bin or "firefox", "--new-instance", "--profile", prof] + urls
     else:
+        cfg = os.path.join(env["XDG_CONFIG_HOME"], "BrowseCraft")
+        os.makedirs(cfg, exist_ok=True)
+        state = {}
         if args.no_plugins:
-            os.makedirs(env["XDG_CONFIG_HOME"] + "/BrowseCraft", exist_ok=True)
-        cmd = [args.bin or "browsecraft"]
+            state["disabled"] = ["builtin.containers", "builtin.authenticator", "builtin.darkmode"]
+        if args.example_plugins:
+            state["dev_folders"] = [os.path.join(REPO, "examples", "plugins")]
+        if args.dark:
+            with open(os.path.join(cfg, "darkmode.json"), "w") as f:
+                json.dump({"enabled": True}, f)
+        if state:
+            with open(os.path.join(cfg, "plugins.json"), "w") as f:
+                json.dump(state, f)
+        env["BROWSECRAFT_CONTROL_SOCKET"] = os.path.join(home, "control.sock")
+        cmd = [args.bin or "browsecraft"] + (["--automation"] if args.activate_all else [])
         for u in urls:
             if args.containers:
                 cmd.append("--temporary-container")
@@ -172,8 +185,18 @@ def one_run(args, urls, expect):
             wins = windows(pids)
             if wins and window_s is None:
                 window_s = now - t0
-            if wins and title_s is None and any(expect.lower() in title_of(w).lower() for w in wins):
+            if wins and title_s is None and any(e.lower() in title_of(w).lower() for w in wins for e in expect):
                 title_s = now - t0
+        if args.activate_all and args.browser == "browsecraft":
+            ctl = [args.bin or "browsecraft", "ctl"]
+            listing = subprocess.run(ctl + ["tabs.list"], env=env, capture_output=True, text=True, timeout=30)
+            tabs = json.loads(listing.stdout or "[]")
+            tabs = tabs.get("tabs", tabs) if isinstance(tabs, dict) else tabs
+            for t in tabs:
+                subprocess.run(ctl + ["tabs.activate", json.dumps({"tab": t["id"]})], env=env,
+                               capture_output=True, timeout=30)
+                time.sleep(2)
+            time.sleep(SETTLE_S)
         pids = tree(proc.pid)
         c0, s0 = cpu_ticks(pids), time.monotonic()
         samples = []
@@ -213,16 +236,21 @@ def main():
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--bin")
     ap.add_argument("--containers", action="store_true", help="BrowseCraft: each tab in its own temporary container")
-    ap.add_argument("--no-plugins", action="store_true")
+    ap.add_argument("--no-plugins", action="store_true", help="BrowseCraft: built-in components disabled")
+    ap.add_argument("--example-plugins", action="store_true", help="BrowseCraft: examples/plugins as dev folder")
+    ap.add_argument("--dark", action="store_true", help="BrowseCraft: dark mode on for every site")
+    ap.add_argument("--activate-all", action="store_true",
+                    help="BrowseCraft: visit every tab through the control socket so all are loaded (Firefox loads all command-line tabs)")
     ap.add_argument("--json")
     args = ap.parse_args()
     urls = [u for u, _ in SITES[: args.tabs]]
-    runs = [one_run(args, urls, SITES[0][1]) for _ in range(args.runs)]
+    runs = [one_run(args, urls, [t for _, t in SITES[: args.tabs]]) for _ in range(args.runs)]
     keys = runs[0].keys()
     med = {k: (statistics.median([r[k] for r in runs if r[k] is not None])
                if any(r[k] is not None for r in runs) else None) for k in keys}
     result = {"browser": args.browser, "tabs": args.tabs, "containers": args.containers,
-              "no_plugins": args.no_plugins, "runs": runs, "median": med}
+              "no_plugins": args.no_plugins, "example_plugins": args.example_plugins,
+              "dark": args.dark, "activate_all": args.activate_all, "runs": runs, "median": med}
     print(json.dumps(result))
     if args.json:
         with open(args.json, "a") as f:
