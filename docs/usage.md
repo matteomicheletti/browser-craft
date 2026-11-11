@@ -338,17 +338,10 @@ the same key, `Esc` or a click outside closes it. Type to search every browser
 action (with its shortcut), the open tabs (with their container colour), your
 bookmarks and recent history, or type an address or search terms to open them
 in a new tab. `Up` / `Down` choose, `Enter` runs, `Tab` jumps to the next
-<<<<<<< HEAD
 section. Prefixes narrow the search: `>` commands only, `@` open tabs and tab
 groups, `#` bookmarks and history, `~` open a tab in a container, `|` split view
-with an open tab, `&` add the tab to a group, `?` lists them. Recently run
-commands come first.
-=======
-section. Prefixes narrow the search: `>` commands only, `@` open tabs, `#`
-bookmarks and history, `~` open a tab in a container, `%` themes, `?` lists
-them. Recently
-run commands come first.
->>>>>>> wave3/chrome
+with an open tab, `&` add the tab to a group, `%` themes, `?` lists them.
+Recently run commands come first.
 
 Commands include: new tab (also in a container or a temporary container),
 duplicate, close, close others, reopen, next / previous tab, move the tabs to

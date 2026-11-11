@@ -27,12 +27,9 @@ Prefixes narrow the search:
 | `@`    | open tabs, then tab groups (picking a group expands it and goes to it) |
 | `#`    | bookmarks and history                 |
 | `~`    | containers (`~ example.com` opens the address in the chosen one) |
-<<<<<<< HEAD
 | `\|`   | open tabs to show beside the current one (split view) |
 | `&`    | tab groups to add the current tab to, and "New group" |
-=======
 | `%`    | themes (*Change theme…* opens this list; the current one is tagged) |
->>>>>>> wave3/chrome
 | `?`    | lists the prefixes                    |
 
 Text that looks like an address (`example.com`, `localhost:3000`) or a search
