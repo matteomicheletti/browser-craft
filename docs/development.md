@@ -1,5 +1,45 @@
 # Development
 
+> This fork's primary platform is **Manjaro Linux**; see
+> [Manjaro / Arch Linux](#manjaro--arch-linux) first. The Windows notes below
+> are upstream's and still apply to Windows builds.
+
+## Manjaro / Arch Linux
+
+```sh
+sudo pacman -S --needed rustup base-devel webkit2gtk-4.1 gtk3 bubblewrap xdg-dbus-proxy ttf-dejavu
+rustup default stable
+cargo build --release --locked
+cargo test --release --locked
+./target/release/browsecraft https://github.com      # run from the tree
+scripts/install-local.sh                             # install for this user + GNOME menu entry
+scripts/install-local.sh --uninstall                 # remove (profile and settings are kept)
+```
+
+Web pages render with **WebKitGTK** (`webkit2gtk-4.1`) through `wry`
+(see [ARCHITECTURE_DECISION.md](ARCHITECTURE_DECISION.md)). The browser
+window is an X11 client (XWayland under Wayland sessions).
+
+Environment variables:
+
+| Variable | Effect |
+| --- | --- |
+| `BROWSECRAFT_NO_WEBKIT=1` | Do not start GTK/WebKit; every page uses the own engine (no JavaScript) |
+| `BROWSECRAFT_NO_SANDBOX=1` | Run web processes **without** bubblewrap (debugging only; prints a warning) |
+| `BROWSECRAFT_DEVTOOLS=1` | Ask WebKit to open the inspector when the web view starts (not yet working, see ROADMAP) |
+| `WEBKIT_DISABLE_DMABUF_RENDERER=0` | Re-enable WebKit's DMA-BUF renderer (disabled by default: it crashes under XWayland on hybrid Intel/NVIDIA) |
+
+Data locations: settings in `~/.config/BrowseCraft/`, web profile (cookies,
+storage, IndexedDB, cache) in `~/.local/share/BrowseCraft/profiles/default/`.
+
+`tests/web/features.html` is a manual probe of the web platform: serve it
+with `python3 -m http.server -d tests/web 8799` and open
+`http://127.0.0.1:8799/features.html`; the tab title shows `probe N/17`.
+
+Checks run locally (no cloud CI on this fork): `cargo build --locked`,
+`cargo test --locked`, `cargo clippy`.
+
+
 ## Requirements
 
 - Rust 1.95 or newer with the MSVC toolchain (the crate uses the 2024 edition,

@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Fork `matteomicheletti/browser-craft`: web pages on Linux render with **WebKitGTK** through wry (full JavaScript, IndexedDB, workers, WebSocket, service workers), with the web processes in WebKit's bubblewrap sandbox and a persistent profile in `~/.local/share/BrowseCraft/profiles/default`. The window runs on X11 (XWayland under Wayland). `BROWSECRAFT_NO_WEBKIT=1` keeps the own engine. See `docs/ARCHITECTURE_DECISION.md`.
+- Browser shortcuts work while a WebKitGTK page has the keyboard.
+- Developer tools shortcut: `F12`, `Ctrl+Shift+I`, `Ctrl+Shift+J` (WebKit inspector; on Linux the inspector window is not yet shown, see ROADMAP).
+- `browsecraft --version` prints `browsecraft <version>`.
+- New app icon (`assets/icon/`, CC-BY-4.0), desktop entry `io.github.matteomicheletti.browsecraft.desktop`, X11 window class of the same name, and `scripts/install-local.sh` for a per-user install with a GNOME menu entry.
+- `tests/web/features.html`: web platform probe (17 checks).
+- Docs: `ARCHITECTURE_DECISION.md`, `ROADMAP.md`, `SECURITY.md`, `ARTCRAFT_INTEGRATION.md`, Manjaro section in `development.md`.
+
 - Experimental Servo web view on Linux (`--features servo`, off by default): web pages render with Servo 0.7 instead of BrowseCraft's own engine, drawn in the page area with mouse, wheel and keyboard input forwarded, the same navigation policy and ad filter as on Windows, and pop-ups refused. A separate, non-required CI workflow builds it.
 - Page fullscreen: when a web page (a video, `requestFullscreen()`) goes fullscreen, the whole window goes fullscreen and the chrome is hidden, instead of the page only filling the viewport. Driven by WebView2's `ContainsFullScreenElementChanged`; the window returns to its previous state when the page leaves fullscreen. `F11` toggles window fullscreen.
 - Bookmarks: a star in the address bar, `Ctrl+D`, a bookmarks bar under the address bar (`Ctrl+Shift+B` to show or hide, overflow menu, middle-click and right-click menus), the `browsecraft://bookmarks` page (`Ctrl+Shift+O`), bookmarks as quick links on the new-tab page, and `bookmarks.txt` persistence in the per-user configuration folder.

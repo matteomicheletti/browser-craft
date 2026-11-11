@@ -1,4 +1,4 @@
-<p align="center"><img src="assets/logos/browsecraft.png" alt="BrowseCraft logo" width="160"></p>
+<p align="center"><img src="assets/icon/browsecraft-256.png" alt="BrowseCraft logo" width="160"></p>
 
 <h1 align="center">BrowseCraft</h1>
 
@@ -6,7 +6,14 @@
 
 <p align="center"><a href="https://discord.gg/SAy3t4BvJj"><img src="https://img.shields.io/badge/Discord-Join%20us-5865F2?logo=discord&logoColor=white" alt="Join the Freewright Discord"></a></p>
 
-> **Project status:** BrowseCraft is no longer actively maintained. Issues and pull requests may go unanswered, and no new releases are planned.
+> **This is a fork.** `matteomicheletti/browser-craft` continues BrowseCraft
+> (upstream [freewright-dev/BrowseCraft](https://github.com/freewright-dev/BrowseCraft),
+> no longer actively maintained) as a daily-use, AI-first browser for Linux
+> first. On Linux web pages now render with **WebKitGTK** (full JavaScript,
+> sandboxed web processes); see [the architecture decision](docs/ARCHITECTURE_DECISION.md),
+> [the roadmap](docs/ROADMAP.md) and [Manjaro build instructions](docs/development.md#manjaro--arch-linux).
+> The sections below are upstream's description; where they say Linux has no
+> web view, read the fork documents instead.
 
 An experimental open-source desktop browser written in Rust, with tabs,
 a built-in ad blocker and a custom HTML/CSS renderer.
