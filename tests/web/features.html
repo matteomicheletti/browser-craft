@@ -1,0 +1,38 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>BrowseCraft feature probe</title>
+<style>body{font:16px system-ui;background:#fff;color:#111;margin:24px} td{padding:4px 12px} .ok{color:#080} .ko{color:#c00}</style></head>
+<body><h1>Web platform probe</h1><table id="t"></table>
+<script>
+// Each probe resolves to true/false; results go in the table and in document.title.
+const probes = {
+  "ES2022 (class fields, ?., ??, top-level-ish async)": async () => { class A { #x = 1; get x() { return this.#x ?? 0 } } return new A().x === 1 && ({a:{b:2}}).a?.b === 2; },
+  "Promise + async/await": async () => (await Promise.resolve(42)) === 42,
+  "DOM mutation + MutationObserver": () => new Promise(r => { const d = document.createElement('div'); new MutationObserver(() => r(true)).observe(d, {childList:true}); d.append('x'); }),
+  "Event listeners": () => new Promise(r => { const b = document.createElement('button'); b.addEventListener('click', () => r(true)); b.click(); }),
+  "fetch": async () => (await (await fetch(location.href)).text()).includes('feature probe'),
+  "XMLHttpRequest": () => new Promise(r => { const x = new XMLHttpRequest(); x.onload = () => r(x.status === 200); x.onerror = () => r(false); x.open('GET', location.href); x.send(); }),
+  "Cookies": async () => { document.cookie = "bc_probe=1; path=/"; return document.cookie.includes("bc_probe=1"); },
+  "localStorage": async () => { localStorage.setItem('k','v'); return localStorage.getItem('k') === 'v'; },
+  "sessionStorage": async () => { sessionStorage.setItem('k','v'); return sessionStorage.getItem('k') === 'v'; },
+  "IndexedDB": () => new Promise(r => { const q = indexedDB.open('probe', 1); q.onupgradeneeded = () => q.result.createObjectStore('s'); q.onsuccess = () => { const tx = q.result.transaction('s','readwrite'); tx.objectStore('s').put('v','k'); tx.oncomplete = () => r(true); }; q.onerror = () => r(false); }),
+  "Web Worker": () => new Promise(r => { const w = new Worker(URL.createObjectURL(new Blob(["postMessage(6*7)"]))); w.onmessage = e => r(e.data === 42); w.onerror = () => r(false); }),
+  "WebSocket API": async () => typeof WebSocket === 'function',
+  "Service Worker API": async () => 'serviceWorker' in navigator,
+  "Shadow DOM": async () => !!document.createElement('div').attachShadow({mode:'open'}),
+  "History API (SPA)": async () => { history.pushState({}, '', '#spa'); return location.hash === '#spa'; },
+  "crypto.subtle": async () => !!(await crypto.subtle.digest('SHA-256', new Uint8Array([1]))),
+  "Error capture (window.onerror)": () => new Promise(r => { window.onerror = () => { r(true); return true; }; setTimeout(() => { throw new Error('probe'); }); }),
+};
+(async () => {
+  let pass = 0, total = 0;
+  for (const [name, f] of Object.entries(probes)) {
+    total++;
+    let ok = false;
+    try { ok = await Promise.race([f(), new Promise(r => setTimeout(() => r(false), 3000))]); } catch (e) { ok = false; }
+    if (ok) pass++;
+    document.getElementById('t').insertAdjacentHTML('beforeend', `<tr><td>${name}</td><td class="${ok?'ok':'ko'}">${ok?'PASS':'FAIL'}</td></tr>`);
+  }
+  document.title = `probe ${pass}/${total}`;
+  document.body.insertAdjacentHTML('beforeend', `<h2 id="sum">${pass}/${total} passed</h2>`);
+})();
+</script></body></html>

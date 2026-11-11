@@ -277,6 +277,8 @@ pub struct Browser {
     loading: bool,
     start_url: String,
     webview: Option<WebPane>,
+    /// The web engine's data store (cookies, storage, cache) for the web view.
+    web_context: Option<wry::WebContext>,
     /// The newest frame Servo painted, drawn in the page area (Servo, unlike
     /// WebView2, has no window of its own).
     servo_frame: Option<Image>,
@@ -791,6 +793,7 @@ pub enum Shortcut {
     Fullscreen,
     Quit,
     Zoom(Option<bool>),
+    DevTools,
 }
 
 /// The browser-wide shortcut for `key` with these modifiers, if any. `typing`
@@ -810,6 +813,8 @@ fn shortcut_for(key: &Key, ctrl: bool, shift: bool, alt: bool, typing: bool) -> 
                 "s" => Some(Shortcut::FocusAddress),
                 "r" => Some(Shortcut::Reload),
                 "u" => Some(Shortcut::ViewSource),
+                "i" if shift => Some(Shortcut::DevTools),
+                "j" if shift => Some(Shortcut::DevTools),
                 "h" => Some(Shortcut::History),
                 "d" => Some(Shortcut::Bookmark),
                 "b" if shift => Some(Shortcut::BookmarksBar),
@@ -838,8 +843,50 @@ fn shortcut_for(key: &Key, ctrl: bool, shift: bool, alt: bool, typing: bool) -> 
         Key::Named(NamedKey::F5) => Some(Shortcut::Reload),
         Key::Named(NamedKey::F6) => Some(Shortcut::FocusAddress),
         Key::Named(NamedKey::F11) => Some(Shortcut::Fullscreen),
+        Key::Named(NamedKey::F12) => Some(Shortcut::DevTools),
         _ => None,
     }
+}
+
+/// Browser shortcuts typed while WebKitGTK has the keyboard. The GTK web
+/// view is a separate X11 window, so its keys never reach winit; they are
+/// translated here and the page never sees the ones the browser takes.
+#[cfg(target_os = "linux")]
+fn attach_webview_shortcuts_gtk(wv: &WebView, proxy: EventLoopProxy<UserMessage>) {
+    use gtk::gdk::{ModifierType, keys::constants as k};
+    use gtk::glib::Propagation;
+    use gtk::prelude::WidgetExt as _;
+    use wry::WebViewExtUnix as _;
+    wv.webview().connect_key_press_event(move |_, event| {
+        let state = event.state();
+        let ctrl = state.contains(ModifierType::CONTROL_MASK);
+        let shift = state.contains(ModifierType::SHIFT_MASK);
+        let alt = state.contains(ModifierType::MOD1_MASK);
+        let kv = event.keyval();
+        let key = match kv {
+            k::F5 => Key::Named(NamedKey::F5),
+            k::F6 => Key::Named(NamedKey::F6),
+            k::F11 => Key::Named(NamedKey::F11),
+            k::F12 => Key::Named(NamedKey::F12),
+            k::Tab | k::ISO_Left_Tab => Key::Named(NamedKey::Tab),
+            k::Left => Key::Named(NamedKey::ArrowLeft),
+            k::Right => Key::Named(NamedKey::ArrowRight),
+            k::Home => Key::Named(NamedKey::Home),
+            _ => match kv.to_unicode() {
+                Some(c) if !c.is_control() => Key::Character(c.to_string().into()),
+                _ => return Propagation::Proceed,
+            },
+        };
+        // `typing`: the page may have a text field focused, so Ctrl+Left
+        // and Ctrl+Right stay with it.
+        match shortcut_for(&key, ctrl, shift, alt, true) {
+            Some(shortcut) => {
+                let _ = proxy.send_event(UserMessage::WebKey(shortcut));
+                Propagation::Stop
+            }
+            None => Propagation::Proceed,
+        }
+    });
 }
 
 /// Maps a Win32 virtual-key code (`VK_*`) from WebView2's
@@ -855,6 +902,7 @@ fn vk_to_key(vk: u32) -> Option<Key> {
         0x74 => Some(Key::Named(NamedKey::F5)),         // VK_F5
         0x75 => Some(Key::Named(NamedKey::F6)),         // VK_F6
         0x7A => Some(Key::Named(NamedKey::F11)),        // VK_F11
+        0x7B => Some(Key::Named(NamedKey::F12)),        // VK_F12
         0x30 | 0x60 => Some(Key::Character("0".into())), // '0', VK_NUMPAD0
         0x6B | 0xBB => Some(Key::Character("+".into())), // VK_ADD, VK_OEM_PLUS ('=' / '+')
         0x6D | 0xBD => Some(Key::Character("-".into())), // VK_SUBTRACT, VK_OEM_MINUS ('-' / '_')
@@ -1273,6 +1321,7 @@ impl Browser {
             loading: false,
             start_url,
             webview: None,
+            web_context: None,
             servo_frame: None,
             servo_buttons: Vec::new(),
             web_page: false,
@@ -2177,9 +2226,16 @@ impl Browser {
     }
 
     fn create_webview(&mut self, window: &Window) {
-        // The embedded web view is a WebView2 child window on Windows (and a
-        // WKWebView on macOS). Elsewhere everything renders in the engine.
-        if !(cfg!(windows) || cfg!(target_os = "macos")) {
+        if std::env::var_os("BROWSECRAFT_NO_WEBKIT").is_some() && cfg!(target_os = "linux") {
+            return;
+        }
+        // The embedded web view is a WebView2 child window on Windows, a
+        // WKWebView on macOS and WebKitGTK on Linux (when GTK started).
+        #[cfg(target_os = "linux")]
+        if !gtk::is_initialized_main_thread() {
+            return;
+        }
+        if !(cfg!(windows) || cfg!(target_os = "macos") || cfg!(target_os = "linux")) {
             return;
         }
         let nav_proxy = self.proxy.clone();
@@ -2194,7 +2250,13 @@ impl Browser {
             position: WryPosition::Physical(WryPhysicalPosition::new(0, 0)),
             size: WrySize::Physical(WryPhysicalSize::new(size.width.max(1), size.height.max(1))),
         };
-        let builder = WebViewBuilder::new()
+        let mut web_context = linux_web_context();
+        let builder = match web_context.as_mut() {
+            Some(context) => WebViewBuilder::new_with_web_context(context),
+            None => WebViewBuilder::new(),
+        };
+        let builder = builder
+            .with_devtools(true)
             .with_visible(false)
             .with_bounds(bounds)
             .with_initialization_script(adblock::instance().page_script_with_network(!cfg!(windows)))
@@ -2264,13 +2326,29 @@ impl Browser {
                     attach_webview_fullscreen(&wv, self.proxy.clone(), self.web_epoch.clone());
                     attach_webview_guards(&wv, self.proxy.clone(), self.web_epoch.clone());
                 }
+                #[cfg(target_os = "linux")]
+                attach_webview_shortcuts_gtk(&wv, self.proxy.clone());
+                // Development: open the inspector (with its console) at once.
+                if std::env::var_os("BROWSECRAFT_DEVTOOLS").is_some() {
+                    wv.open_devtools();
+                }
                 // Chromium lets a script close a window whose history has a
                 // single entry, and wry then destroys the web view. Starting on
                 // about:blank means a page is never that single entry.
                 let _ = wv.load_url("about:blank");
                 self.webview = Some(WebPane::Wry(wv));
+                self.web_context = web_context;
             }
             Err(e) => eprintln!("browsecraft: WebView2 is unavailable ({e}); using the engine for every page"),
+        }
+    }
+
+    /// Opens the engine's web inspector (console, DOM, network) for the
+    /// page in the web view.
+    fn open_devtools(&mut self) {
+        match &self.webview {
+            Some(WebPane::Wry(wv)) if self.web_page => wv.open_devtools(),
+            _ => self.set_notice("Developer tools are available on web pages"),
         }
     }
 
@@ -2366,13 +2444,18 @@ impl Browser {
         let Some(wv) = &self.webview else {
             return;
         };
-        if visible && self.web_bounds != Some(bounds) {
-            wv.set_bounds(bounds);
-            self.web_bounds = Some(bounds);
-        }
+        // Show before sizing: WebKitGTK only resizes a realized window, so
+        // bounds applied while it is hidden would be lost on Linux.
         if visible != self.web_visible {
             wv.set_visible(visible);
             self.web_visible = visible;
+            if visible && cfg!(target_os = "linux") {
+                self.web_bounds = None;
+            }
+        }
+        if visible && self.web_bounds != Some(bounds) {
+            wv.set_bounds(bounds);
+            self.web_bounds = Some(bounds);
         }
         if let WebPane::Servo(pane) = wv {
             pane.set_focused(visible && self.focus == Focus::Page && !self.egui_address_focused && !self.egui_popup_open
@@ -2926,6 +3009,7 @@ impl Browser {
             Shortcut::Fullscreen => self.toggle_window_fullscreen(),
             Shortcut::Quit => self.quit = true,
             Shortcut::Zoom(change) => self.zoom(change),
+            Shortcut::DevTools => self.open_devtools(),
         }
         self.request_redraw();
     }
@@ -4376,6 +4460,13 @@ impl ApplicationHandler<UserMessage> for Browser {
             .with_window_icon(window_icon)
             .with_inner_size(LogicalSize::new(1280.0, 800.0))
             .with_min_inner_size(LogicalSize::new(480.0, 320.0));
+        // The desktop entry's StartupWMClass, so the dock groups the window
+        // under the launcher icon.
+        #[cfg(target_os = "linux")]
+        let attrs = {
+            use winit::platform::x11::WindowAttributesExtX11 as _;
+            attrs.with_name(APP_ID, APP_ID)
+        };
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
@@ -4502,6 +4593,15 @@ impl ApplicationHandler<UserMessage> for Browser {
         let now = Instant::now();
         let mut wake: Option<Instant> = None;
         let mut sooner = |t: Instant| wake = Some(wake.map_or(t, |w| w.min(t)));
+        // WebKitGTK talks to its web processes through the GLib main
+        // context, which winit does not poll: service it here.
+        #[cfg(target_os = "linux")]
+        if self.webview.is_some() {
+            while gtk::events_pending() {
+                gtk::main_iteration_do(false);
+            }
+            sooner(now + Duration::from_millis(8));
+        }
         if let Some((_, at)) = &self.notice {
             let until = *at + NOTICE_LIFETIME;
             if now >= until {
@@ -4521,6 +4621,28 @@ impl ApplicationHandler<UserMessage> for Browser {
             None => ControlFlow::Wait,
         });
     }
+}
+
+/// The persistent WebKitGTK data store for the default profile, with the
+/// web process sandbox (bubblewrap) turned on. `None` elsewhere, where wry
+/// uses the platform's default store.
+/// The reverse-DNS application id (desktop file name and window class).
+#[cfg(target_os = "linux")]
+pub const APP_ID: &str = "io.github.matteomicheletti.browsecraft";
+
+#[cfg(target_os = "linux")]
+fn linux_web_context() -> Option<wry::WebContext> {
+    let dir = crate::storage::profile_dir("default").ok()?;
+    if let Err(e) = crate::storage::private_dir(&dir) {
+        eprintln!("browsecraft: cannot create the profile folder ({e}); using a temporary store");
+        return Some(wry::WebContext::new(None));
+    }
+    Some(wry::WebContext::new(Some(dir)))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn linux_web_context() -> Option<wry::WebContext> {
+    None
 }
 
 #[cfg(test)]
@@ -4546,6 +4668,9 @@ mod tests {
         assert_eq!(shortcut_for(&f5, false, false, false, false), Some(Shortcut::Reload));
         let f11 = Key::Named(NamedKey::F11);
         assert_eq!(shortcut_for(&f11, false, false, false, false), Some(Shortcut::Fullscreen));
+        let f12 = Key::Named(NamedKey::F12);
+        assert_eq!(shortcut_for(&f12, false, false, false, false), Some(Shortcut::DevTools));
+        assert_eq!(shortcut_for(&ch("I"), true, true, false, false), Some(Shortcut::DevTools));
         assert_eq!(shortcut_for(&ch("d"), true, false, false, false), Some(Shortcut::Bookmark));
         assert_eq!(shortcut_for(&ch("B"), true, true, false, false), Some(Shortcut::BookmarksBar));
         assert_eq!(shortcut_for(&ch("b"), true, false, false, false), None);

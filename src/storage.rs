@@ -31,6 +31,24 @@ pub fn config_dir() -> Result<PathBuf, String> {
     Ok(DIR.with(|dir| dir.path().join("BrowseCraft")))
 }
 
+/// Where the web engine keeps a profile's cookies, storage and cache:
+/// `$XDG_DATA_HOME/BrowseCraft/profiles/<name>` on Linux, the config folder's
+/// `profiles/<name>` elsewhere. Each profile is a separate data store.
+#[allow(dead_code)] // used by the Linux web view
+pub fn profile_dir(name: &str) -> Result<PathBuf, String> {
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        let base = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
+        if let Some(base) = base {
+            return Ok(base.join("BrowseCraft").join("profiles").join(name));
+        }
+    }
+    Ok(config_dir()?.join("profiles").join(name))
+}
+
 /// `name` inside the config folder.
 pub fn config_file(name: &str) -> Result<PathBuf, String> {
     Ok(config_dir()?.join(name))

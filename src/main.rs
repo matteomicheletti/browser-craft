@@ -51,6 +51,10 @@ fn main() {
         }
     };
     let args: Vec<String> = std::env::args().collect();
+    if matches!(args.get(1).map(String::as_str), Some("--version" | "-V")) {
+        println!("browsecraft {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if args.get(1).map(String::as_str) == Some("--screenshot") {
         let (Some(out), Some(url)) = (args.get(2), args.get(3)) else {
             eprintln!("usage: browsecraft --screenshot <out.png> <url> [width]");
@@ -80,7 +84,17 @@ fn main() {
         .map(|arg| address::resolve(&arg))
         .unwrap_or_else(|| browser::HOME_URL.to_string());
 
-    let event_loop = match EventLoop::with_user_event().build() {
+    #[cfg(target_os = "linux")]
+    let gtk_ok = linux_gtk_init();
+    let mut builder = EventLoop::with_user_event();
+    // wry embeds WebKitGTK as an X11 child window, so the browser window
+    // runs on X11 (XWayland under a Wayland session).
+    #[cfg(target_os = "linux")]
+    if gtk_ok {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        builder.with_x11();
+    }
+    let event_loop = match builder.build() {
         Ok(el) => el,
         Err(e) => {
             eprintln!("browsecraft: failed to start the event loop: {e}");
@@ -90,5 +104,40 @@ fn main() {
     let mut app = browser::Browser::new(event_loop.create_proxy(), fonts, start_url);
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("browsecraft: {e}");
+    }
+}
+
+/// Initialises GTK for WebKitGTK on its X11 backend. Returns false (and the
+/// browser falls back to its own engine) when GTK cannot start, for example
+/// on a Wayland-only session without XWayland.
+#[cfg(target_os = "linux")]
+fn linux_gtk_init() -> bool {
+    if std::env::var_os("BROWSECRAFT_NO_WEBKIT").is_some() {
+        return false;
+    }
+    // SAFETY: called on the main thread before any other thread is spawned.
+    unsafe {
+        std::env::set_var("GDK_BACKEND", "x11");
+        // WebKitGTK's DMA-BUF renderer cannot allocate GBM buffers under
+        // XWayland on hybrid Intel/NVIDIA systems and its X errors abort
+        // winit; the shared-memory path is reliable. Overridable.
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        // Run web content in WebKit's bubblewrap sandbox. wry creates the
+        // engine's processes before the application can call
+        // webkit_web_context_set_sandbox_enabled, so it is forced here.
+        if std::env::var_os("BROWSECRAFT_NO_SANDBOX").is_none() {
+            std::env::set_var("WEBKIT_FORCE_SANDBOX", "1");
+        } else {
+            eprintln!("browsecraft: BROWSECRAFT_NO_SANDBOX is set: web content is NOT sandboxed");
+        }
+    }
+    match gtk::init() {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("browsecraft: GTK is unavailable ({e}); using the engine for every page");
+            false
+        }
     }
 }
