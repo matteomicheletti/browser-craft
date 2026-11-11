@@ -55,6 +55,9 @@ pub enum CommandId {
     SavePage,
     ViewSource,
     SiteUserAgent,
+    SitePermissions,
+    ResetSitePermissions,
+    OpenInOtherBrowser,
     // Capture
     Screenshot,
     ScreenshotFullPage,
@@ -170,6 +173,9 @@ pub fn needs_page(id: CommandId) -> bool {
             | DarkModeSiteToggle
             | DuplicateTab
             | SiteUserAgent
+            | SitePermissions
+            | ResetSitePermissions
+            | OpenInOtherBrowser
     )
 }
 
@@ -212,7 +218,7 @@ pub fn catalog() -> &'static [Command] {
     &CATALOG
 }
 
-static CATALOG: [Command; 66] = [
+static CATALOG: [Command; 69] = [
     cmd!(
         NewTab,
         "new-tab",
@@ -544,6 +550,33 @@ static CATALOG: [Command; 66] = [
         ["browser identity", "ua", "spoof", "chrome", "safari", "firefox", "edge", "compatibility", "unsupported browser"],
         None,
         ph::IDENTIFICATION_CARD,
+        Page
+    ),
+    cmd!(
+        SitePermissions,
+        "site-permissions",
+        "Site permissions for this site…",
+        ["camera", "microphone", "mic", "screen", "location", "notifications", "clipboard", "allow", "block", "privacy"],
+        None,
+        ph::SHIELD_CHECK,
+        Privacy
+    ),
+    cmd!(
+        ResetSitePermissions,
+        "reset-site-permissions",
+        "Reset site permissions",
+        ["camera", "microphone", "location", "notifications", "forget", "ask again"],
+        None,
+        ph::ARROW_COUNTER_CLOCKWISE,
+        Privacy
+    ),
+    cmd!(
+        OpenInOtherBrowser,
+        "open-in-other-browser",
+        "Open page in another browser",
+        ["default browser", "external", "firefox", "chrome", "xdg-open", "teams", "webrtc", "calls"],
+        None,
+        ph::COMPASS,
         Page
     ),
     cmd!(
