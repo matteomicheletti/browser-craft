@@ -382,6 +382,26 @@ fn folder_menu(ui: &mut egui::Ui, c: &Colors, folder: &crate::bookmarks::Node, e
 }
 
 /// A small icon-and-label entry for popup menus.
+/// A submenu listing the session presets (`crate::presets`); returns the
+/// one clicked. Nothing is shown when there are none.
+pub fn presets_submenu(ui: &mut egui::Ui, c: &Colors, label: &str) -> Option<u64> {
+    let list = crate::presets::summaries();
+    if list.is_empty() {
+        return None;
+    }
+    let mut picked = None;
+    ui.menu_button(egui::RichText::new(format!("{}  {label}", egui_phosphor::regular::STACK)).size(13.0).color(c.text), |ui| {
+        for (id, name, summary) in &list {
+            let name = crate::browser::display_text(name, 40);
+            if menu_item(ui, c, egui_phosphor::regular::BROWSERS, &name).on_hover_text(summary).clicked() {
+                picked = Some(*id);
+                ui.close();
+            }
+        }
+    });
+    picked
+}
+
 pub fn menu_item(ui: &mut egui::Ui, c: &Colors, code: &str, label: &str) -> egui::Response {
     let text = egui::RichText::new(format!("{code}  {label}")).size(13.0).color(c.text);
     ui.add(egui::Button::new(text).frame(false).min_size(egui::vec2(180.0, 26.0)))
@@ -916,6 +936,8 @@ pub struct TabStrip {
     pub new_tab: Option<ContainerChoice>,
     /// "Manage containers" in the container menu.
     pub manage_containers: bool,
+    /// A session preset to open in a new window (the same menu).
+    pub open_preset: Option<u64>,
     /// Each visible chip: (tab index, rectangle), in strip order.
     pub chips: Vec<(usize, egui::Rect)>,
     /// The "Show all tabs" button.
@@ -1041,6 +1063,9 @@ pub fn tab_strip(
             if menu_item(ui, c, egui_phosphor::regular::STACK, "Manage containers").clicked() {
                 out.manage_containers = true;
                 ui.close();
+            }
+            if let Some(id) = presets_submenu(ui, c, "Open preset in new window") {
+                out.open_preset = Some(id);
             }
         });
         let all = egui::Button::new(icon(egui_phosphor::regular::SQUARES_FOUR, 14.0).color(c.muted))

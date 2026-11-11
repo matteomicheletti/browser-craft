@@ -6,7 +6,7 @@
 //! overlay is drawn with ordinary egui areas.
 //!
 //! Prefixes narrow the search: `>` commands, `@` open tabs, `#` bookmarks and
-//! history, `~` containers, `%` themes, `?` help.
+//! history, `~` containers, `%` themes, `$` session presets, `?` help.
 // The API is wired into the browser in the integration step.
 #![allow(dead_code)]
 
@@ -40,6 +40,17 @@ pub enum PaletteOutcome {
     PluginCommand { plugin: String, command: String },
     /// Give the site `host` this User-Agent (`None`: back to automatic).
     SetUserAgent { host: String, choice: Option<crate::useragent::Choice> },
+    /// Open a session preset in new windows, or in this window (`here`).
+    OpenPreset { id: u64, here: bool },
+}
+
+/// A session preset, for `$`.
+#[derive(Clone, Debug)]
+pub struct PresetItem {
+    pub id: u64,
+    pub name: String,
+    /// "2 windows, 9 tabs".
+    pub detail: String,
 }
 
 /// The current page's site and its User-Agent, for `^`.
@@ -123,6 +134,8 @@ pub struct PaletteSources {
     pub plugin_commands: Vec<PluginCommandItem>,
     /// The current web page's site (`None` on other pages).
     pub user_agent: Option<UserAgentSite>,
+    /// The session presets, in the user's order.
+    pub presets: Vec<PresetItem>,
 }
 
 // ---- fuzzy matching --------------------------------------------------------
@@ -282,6 +295,8 @@ pub enum Mode {
     Themes,
     /// `^`: the User-Agent for the current site.
     UserAgents,
+    /// `$`: session presets.
+    Presets,
     Help,
 }
 
@@ -297,6 +312,7 @@ impl Mode {
             Mode::Groups => "Add tab to group",
             Mode::Themes => "Themes",
             Mode::UserAgents => "User agent for this site",
+            Mode::Presets => "Session presets",
             Mode::Help => "Help",
         }
     }
@@ -314,6 +330,7 @@ pub fn parse_query(raw: &str) -> (Mode, &str) {
         Some('&') => Mode::Groups,
         Some('%') => Mode::Themes,
         Some('^') => Mode::UserAgents,
+        Some('$') => Mode::Presets,
         Some('?') => Mode::Help,
         _ => return (Mode::All, raw.trim()),
     };
@@ -453,6 +470,7 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
             ("& ", "Add the tab to a group", "&"),
             ("% ", "Change the theme", "%"),
             ("^ ", "User agent for this site", "^"),
+            ("$ ", "Open a session preset", "$"),
         ] {
             let mut r = Row::new(
                 "Prefixes",
@@ -737,6 +755,14 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
         rows.extend(user_agent_rows(q, s));
     }
 
+    if mode == Mode::Presets || (mode == Mode::All && q.chars().count() >= 2) {
+        let mut found = preset_rows(q, s, mode == Mode::Presets);
+        if mode == Mode::All {
+            found.truncate(SMALL_LIMIT);
+        }
+        rows.extend(found);
+    }
+
     if mode == Mode::Themes || (mode == Mode::All && q.chars().count() >= 3) {
         let mut found = theme_rows(q, s);
         if mode == Mode::All {
@@ -778,6 +804,46 @@ fn theme_rows(q: &str, s: &PaletteSources) -> Vec<Row> {
             r.tag = Some("Current");
         }
         rows.push(r);
+    }
+    rows
+}
+
+/// The session presets matching `q`, best first: each opens in new
+/// windows (Shift+Enter: in this window); with `secondary`, a row to open
+/// it in this window follows, and "Save session as preset…" ends the list.
+fn preset_rows(q: &str, s: &PaletteSources, secondary: bool) -> Vec<Row> {
+    use egui_phosphor::regular as ph;
+    let mut found: Vec<(i32, &PresetItem, Vec<usize>)> = s
+        .presets
+        .iter()
+        .filter_map(|p| {
+            let m = score_terms(q, &p.name, &["preset", "session"])?;
+            Some((m.score, p, m.positions))
+        })
+        .collect();
+    if !q.is_empty() {
+        found.sort_by_key(|f| std::cmp::Reverse(f.0));
+    }
+    let mut rows = Vec::new();
+    for (_, p, pos) in found {
+        let mut r = Row::new("Session presets", Action::Outcome(PaletteOutcome::OpenPreset { id: p.id, here: false }), ph::BROWSERS, p.name.clone());
+        r.detail = format!("{} \u{b7} new window (Shift+Enter: this window)", p.detail);
+        r.tag = Some("Preset");
+        r.matches = pos;
+        rows.push(r);
+        if secondary {
+            let mut r = Row::new(
+                "Session presets",
+                Action::Outcome(PaletteOutcome::OpenPreset { id: p.id, here: true }),
+                ph::ARROW_LINE_DOWN,
+                format!("{} \u{2014} add to this window", p.name),
+            );
+            r.detail = p.detail.clone();
+            rows.push(r);
+        }
+    }
+    if secondary && let Some(c) = commands::get(CommandId::SavePreset) {
+        rows.push(command_row("Save", c, s, Vec::new()));
     }
     rows
 }
@@ -855,6 +921,8 @@ struct Keys {
     page_down: bool,
     page_up: bool,
     enter: bool,
+    /// Shift+Enter: a preset row opens in this window.
+    shift_enter: bool,
     esc: bool,
     tab: bool,
     shift_tab: bool,
@@ -975,6 +1043,7 @@ impl Palette {
                 page_down: i.consume_key(none, Key::PageDown),
                 page_up: i.consume_key(none, Key::PageUp),
                 enter: i.consume_key(none, Key::Enter),
+                shift_enter: i.consume_key(Modifiers::SHIFT, Key::Enter),
                 esc: i.consume_key(none, Key::Escape),
                 tab: i.consume_key(none, Key::Tab),
                 shift_tab: i.consume_key(Modifiers::SHIFT, Key::Tab),
@@ -1114,7 +1183,7 @@ impl Palette {
             self.scroll_to_selected |= moved;
         }
         let mut activate: Option<usize> = None;
-        if keys.enter && n > 0 {
+        if (keys.enter || keys.shift_enter) && n > 0 {
             activate = Some(self.selected.min(n - 1));
         }
 
@@ -1189,7 +1258,7 @@ impl Palette {
             && row.enabled
         {
             match &row.action {
-                Action::Outcome(o) => *outcome = Some(o.clone()),
+                Action::Outcome(o) => *outcome = Some(with_shift(o.clone(), keys.shift_enter)),
                 Action::SetQuery(q) => {
                     self.query = format!("{q} ");
                     self.last_query = self.query.clone();
@@ -1209,6 +1278,15 @@ impl Palette {
             }
         }
         let _ = close;
+    }
+}
+
+/// What a row does when picked with Shift+Enter: a preset opens in this
+/// window; the rest is unchanged.
+fn with_shift(outcome: PaletteOutcome, shift: bool) -> PaletteOutcome {
+    match outcome {
+        PaletteOutcome::OpenPreset { id, .. } if shift => PaletteOutcome::OpenPreset { id, here: true },
+        other => other,
     }
 }
 
@@ -1636,7 +1714,39 @@ mod tests {
                 shortcut: Some("Ctrl+V".into()),
             }],
             user_agent: None,
+            presets: Vec::new(),
         }
+    }
+
+    #[test]
+    fn preset_rows_open_in_new_window_or_here() {
+        let mut s = sources();
+        s.presets = vec![
+            PresetItem { id: 1, name: "Lavoro".into(), detail: "2 windows, 9 tabs".into() },
+            PresetItem { id: 2, name: "Studio".into(), detail: "3 tabs".into() },
+        ];
+        assert_eq!(parse_query("$lav"), (Mode::Presets, "lav"));
+        let rows = build_rows("$lav", &s, &[]);
+        assert_eq!(
+            actions(&rows)[..2],
+            [PaletteOutcome::OpenPreset { id: 1, here: false }, PaletteOutcome::OpenPreset { id: 1, here: true }]
+        );
+        assert!(!actions(&rows).contains(&PaletteOutcome::OpenPreset { id: 2, here: false }));
+        assert_eq!(actions(&rows).last(), Some(&PaletteOutcome::Run(CommandId::SavePreset)), "save comes last");
+        // Every preset with an empty query, in order.
+        let all = actions(&build_rows("$", &s, &[]));
+        assert_eq!(all[0], PaletteOutcome::OpenPreset { id: 1, here: false });
+        assert_eq!(all[2], PaletteOutcome::OpenPreset { id: 2, here: false });
+        // Shift+Enter opens the preset in this window; other rows ignore it.
+        assert_eq!(with_shift(PaletteOutcome::OpenPreset { id: 1, here: false }, true), PaletteOutcome::OpenPreset { id: 1, here: true });
+        assert_eq!(with_shift(PaletteOutcome::OpenPreset { id: 1, here: false }, false), PaletteOutcome::OpenPreset { id: 1, here: false });
+        assert_eq!(with_shift(PaletteOutcome::SwitchTab(3), true), PaletteOutcome::SwitchTab(3));
+        // Plain search shows presets too, without the secondary rows.
+        let plain = actions(&build_rows("studio", &s, &[]));
+        assert!(plain.contains(&PaletteOutcome::OpenPreset { id: 2, here: false }));
+        assert!(!plain.contains(&PaletteOutcome::OpenPreset { id: 2, here: true }));
+        // The help lists the prefix.
+        assert!(build_rows("?", &s, &[]).iter().any(|r| r.detail == "$"));
     }
 
     #[test]
@@ -1809,7 +1919,7 @@ mod tests {
             }]
         );
         let help = build_rows("?", &s, &[]);
-        assert_eq!(help.len(), 8);
+        assert_eq!(help.len(), 9);
     }
 
     #[test]

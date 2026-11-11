@@ -184,6 +184,9 @@ methods! {
     BookmarksList = "bookmarks.list" => BookmarksParams : "List or search bookmarks.",
     HistorySearch = "history.search" => HistorySearchParams : "Search the browsing history.",
     BrowserVersion = "browser.version" => NoParams : "Browser name, version and API version.",
+    SessionsList = "sessions.list" => NoParams : "List the session presets.",
+    SessionsOpen = "sessions.open" => SessionsOpenParams : "Open a session preset in new windows or the current window.",
+    SessionsSave = "sessions.save" => SessionsSaveParams : "Save the current window or every window as a new session preset.",
 }
 
 /// Parses `params` (null or absent means `{}`) into `T`.
@@ -542,6 +545,76 @@ pub struct TabWindow {
     pub name: Option<String>,
 }
 
+/// Where `sessions.open` opens a preset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionWindow {
+    /// Each of its windows as a new window.
+    #[default]
+    New,
+    /// Its tabs after the tabs of the window last used.
+    Current,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionsOpenParams {
+    /// The preset's name (case-insensitive).
+    pub name: String,
+    #[serde(default)]
+    pub window: SessionWindow,
+}
+
+/// What `sessions.save` saves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SessionScope {
+    /// The window last used.
+    #[default]
+    Window,
+    /// Every window.
+    All,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SessionsSaveParams {
+    /// A name no preset has yet.
+    pub name: String,
+    #[serde(default)]
+    pub scope: SessionScope,
+}
+
+/// A session preset, in `sessions.list`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionInfo {
+    pub name: String,
+    #[serde(default)]
+    pub windows: usize,
+    #[serde(default)]
+    pub tabs: usize,
+    /// Unix seconds.
+    #[serde(default)]
+    pub created: u64,
+    #[serde(default)]
+    pub updated: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionsListResult {
+    #[serde(default)]
+    pub sessions: Vec<SessionInfo>,
+}
+
+/// `sessions.open` and `sessions.save`.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SessionResult {
+    pub session: SessionInfo,
+    /// What the user was told (tabs that lost their container).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
+}
+
 /// A browser window, in `tabs.list`'s `windows`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WindowInfo {
@@ -758,8 +831,27 @@ mod tests {
             assert_eq!(serde_json::from_value::<Method>(wire).unwrap(), m);
             assert!(!m.doc().is_empty());
         }
-        assert_eq!(Method::ALL.len(), 24);
+        assert_eq!(Method::ALL.len(), 27);
         assert_eq!(Method::from_name("page.passwords"), None);
+    }
+
+    #[test]
+    fn automation_sessions_params() {
+        let p: SessionsOpenParams = parse_params(&json!({"name": "Lavoro"})).unwrap();
+        assert_eq!(p.window, SessionWindow::New, "new windows by default");
+        let p: SessionsOpenParams = parse_params(&json!({"name": "Lavoro", "window": "current"})).unwrap();
+        assert_eq!(p.window, SessionWindow::Current);
+        assert!(Method::SessionsOpen.validate(&json!({"name": "x", "window": "other"})).is_err());
+        assert!(Method::SessionsOpen.validate(&json!({})).is_err(), "name is required");
+        let p: SessionsSaveParams = parse_params(&json!({"name": "Lavoro"})).unwrap();
+        assert_eq!(p.scope, SessionScope::Window);
+        let p: SessionsSaveParams = parse_params(&json!({"name": "Lavoro", "scope": "all"})).unwrap();
+        assert_eq!(p.scope, SessionScope::All);
+        assert!(Method::SessionsList.validate(&json!({})).is_ok());
+        let r: SessionsListResult = serde_json::from_value(json!({})).unwrap();
+        assert!(r.sessions.is_empty(), "serde defaults");
+        let r = SessionResult { session: SessionInfo { name: "A".into(), windows: 1, tabs: 2, created: 0, updated: 0 }, notice: None };
+        assert!(serde_json::to_value(&r).unwrap().get("notice").is_none());
     }
 
     #[test]

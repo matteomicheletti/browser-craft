@@ -230,6 +230,14 @@ impl Settings {
             Method::PageBack | Method::PageForward | Method::PageReload if !self.allow_navigation => {
                 Err(RpcError::denied("navigation is disabled in automation settings"))
             }
+            // Opening a preset loads its addresses; saving one changes the
+            // user's presets: both need the navigation permission.
+            Method::SessionsOpen | Method::SessionsSave if !self.allow_navigation => {
+                Err(RpcError::denied("navigation is disabled in automation settings"))
+            }
+            Method::SessionsOpen if self.allowed_hosts.is_some() => {
+                Err(RpcError::denied("sessions.open is refused while allowed_hosts is set (a preset can open any site)"))
+            }
             _ => Ok(()),
         }
     }
@@ -323,6 +331,13 @@ mod tests {
         assert!(nav(&no_nav, "https://example.com").is_err());
         assert!(no_nav.check(Method::PageReload, &json!({})).is_err());
         assert!(no_nav.check(Method::PageText, &json!({})).is_ok());
+        assert!(no_nav.check(Method::SessionsOpen, &json!({"name": "a"})).is_err());
+        assert!(no_nav.check(Method::SessionsSave, &json!({"name": "a"})).is_err());
+        assert!(no_nav.check(Method::SessionsList, &json!({})).is_ok());
+        assert!(on().check(Method::SessionsOpen, &json!({"name": "a"})).is_ok());
+        let hosts = Settings { allowed_hosts: Some(vec!["a.test".into()]), ..on() };
+        assert!(hosts.check(Method::SessionsOpen, &json!({"name": "a"})).is_err());
+        assert!(hosts.check(Method::SessionsSave, &json!({"name": "a"})).is_ok());
 
         let hosts = Settings { allowed_hosts: Some(vec!["example.com".into(), "*.test.org".into()]), ..on() };
         assert!(nav(&hosts, "https://example.com/").is_ok());

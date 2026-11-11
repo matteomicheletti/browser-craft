@@ -362,6 +362,46 @@ const TOOLS: &[Tool] = &[
         },
     },
     Tool {
+        name: "browser_sessions_list",
+        method: Method::SessionsList,
+        title: "List session presets",
+        description: "List the saved session presets (named sets of windows and tabs) with their window and tab counts.",
+        read_only: true,
+        schema: no_args,
+    },
+    Tool {
+        name: "browser_sessions_open",
+        method: Method::SessionsOpen,
+        title: "Open session preset",
+        description: "Open a session preset by name: each of its windows as a new window (window \"new\", the default) or its tabs after those of the current window (\"current\"). Tabs load when first shown.",
+        read_only: false,
+        schema: || {
+            object(
+                props(&[
+                    ("name", json!({ "type": "string", "description": "Preset name from browser_sessions_list (case-insensitive)." })),
+                    ("window", json!({ "type": "string", "enum": ["new", "current"], "description": "new (default) or current." })),
+                ]),
+                &["name"],
+            )
+        },
+    },
+    Tool {
+        name: "browser_sessions_save",
+        method: Method::SessionsSave,
+        title: "Save session preset",
+        description: "Save the current window's tabs (scope \"window\", the default) or every window's (\"all\") as a new session preset; tabs in temporary containers are left out. Fails if the name is taken.",
+        read_only: false,
+        schema: || {
+            object(
+                props(&[
+                    ("name", json!({ "type": "string", "description": "A new preset name." })),
+                    ("scope", json!({ "type": "string", "enum": ["window", "all"], "description": "window (default) or all." })),
+                ]),
+                &["name"],
+            )
+        },
+    },
+    Tool {
         name: "browser_version",
         method: Method::BrowserVersion,
         title: "Browser version",
@@ -728,6 +768,8 @@ mod tests {
                 "string" if k == "to" => json!("top"),
                 "string" if k == "level" => json!("warn"),
                 "string" if k == "url" => json!("https://a.test/"),
+                "string" if k == "window" => json!("current"),
+                "string" if k == "scope" => json!("all"),
                 "string" => json!("x"),
                 "integer" => json!(1),
                 "number" => json!(1.5),

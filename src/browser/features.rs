@@ -533,6 +533,10 @@ impl Browser {
                 let (current, origin) = crate::useragent::choice_for_host(&host);
                 palette::UserAgentSite { host, current, origin }
             }),
+            presets: crate::presets::summaries()
+                .into_iter()
+                .map(|(id, name, detail)| palette::PresetItem { id, name, detail })
+                .collect(),
         }
     }
 
@@ -565,6 +569,10 @@ impl Browser {
                 self.run_plugin_command(&plugin, &command, target);
             }
             PaletteOutcome::SetUserAgent { host, choice } => self.set_site_user_agent(&host, choice),
+            PaletteOutcome::OpenPreset { id, here } => {
+                let target = if here { crate::presets::OpenTarget::Here } else { crate::presets::OpenTarget::NewWindow };
+                self.preset_event(super::presets::PresetEvent::Open(id, target));
+            }
         }
     }
 
@@ -756,6 +764,9 @@ impl Browser {
             NewWindow => self.app_requests.push(super::windows::AppRequest::NewWindow),
             ShowAllTabs => self.toggle_overview(),
             NameWindow => self.rename = Some(self.win_name.clone().unwrap_or_default()),
+            SavePreset => self.preset_event(super::presets::PresetEvent::AskSave),
+            OpenPreset => self.feat.palette.open_with("$ "),
+            SessionPresets => self.load(Request::Get(crate::presets_page::URL.into()), true),
             MoveTabToNewWindow => self.app_requests.push(super::windows::AppRequest::MoveTab {
                 tab: self.tab_id,
                 to: super::windows::MoveTarget::NewWindow(None),

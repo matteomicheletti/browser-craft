@@ -41,6 +41,9 @@ pub enum WindowOp {
     /// The window menu's "New window" and "Name window…" (the browser's).
     NewWindow,
     NameWindow,
+    /// "Save session as preset…" and "Open preset in new window ▸".
+    SavePreset,
+    OpenPreset(u64),
 }
 
 /// Applies `op` to `window`. `Close` is the caller's (it ends the event
@@ -58,7 +61,7 @@ pub fn apply(window: &Window, op: WindowOp) -> bool {
             window.set_minimized(true);
             false
         }
-        WindowOp::Close | WindowOp::NewWindow | WindowOp::NameWindow => false,
+        WindowOp::Close | WindowOp::NewWindow | WindowOp::NameWindow | WindowOp::SavePreset | WindowOp::OpenPreset(_) => false,
     }
 }
 
@@ -127,11 +130,18 @@ pub fn drag_area(ui: &mut egui::Ui, rect: Rect, c: &Colors, maximized: bool, ops
 /// restore, close.
 pub fn window_menu(ui: &mut egui::Ui, c: &Colors, maximized: bool, ops: &mut Vec<WindowOp>) {
     use egui_phosphor::regular as ph;
-    for (glyph, label, op) in [(ph::APP_WINDOW, "New window", WindowOp::NewWindow), (ph::TAG, "Name window\u{2026}", WindowOp::NameWindow)] {
+    for (glyph, label, op) in [
+        (ph::APP_WINDOW, "New window", WindowOp::NewWindow),
+        (ph::TAG, "Name window\u{2026}", WindowOp::NameWindow),
+        (ph::FLOPPY_DISK, "Save session as preset\u{2026}", WindowOp::SavePreset),
+    ] {
         if crate::egui_chrome::menu_item(ui, c, glyph, label).clicked() {
             ops.push(op);
             ui.close();
         }
+    }
+    if let Some(id) = crate::egui_chrome::presets_submenu(ui, c, "Open preset in new window") {
+        ops.push(WindowOp::OpenPreset(id));
     }
     ui.separator();
     let size = if maximized { (ph::CORNERS_IN, "Restore") } else { (ph::CORNERS_OUT, "Maximize") };

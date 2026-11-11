@@ -58,6 +58,7 @@ mod groups_split;
 mod hover;
 mod library;
 mod overview;
+mod presets;
 mod windows;
 #[cfg(target_os = "linux")]
 mod x11;
@@ -410,6 +411,8 @@ enum Action {
     ShowAllTabs,
     /// "Name window…" was confirmed (empty: no name).
     NameWindow(String),
+    /// Session presets: a dialog's or a menu's choice.
+    Preset(presets::PresetEvent),
 }
 
 struct HistoryEntry {
@@ -536,6 +539,8 @@ pub struct Browser {
     strip_press: Option<(u64, (f32, f32))>,
     /// "Name window…": the text being typed.
     rename: Option<String>,
+    /// A session preset dialog (save, confirm a replace), `presets.rs`.
+    preset_dialog: Option<presets::PresetDialog>,
     fonts: Fonts,
     proxy: EventLoopProxy<UserMessage>,
     generation: Arc<AtomicU64>,
@@ -2288,6 +2293,7 @@ impl Browser {
             strip_drag: None,
             strip_press: None,
             rename: None,
+            preset_dialog: None,
             fonts,
             proxy,
             generation: Arc::new(AtomicU64::new(key << windows::KEY_SHIFT)),
@@ -3447,6 +3453,10 @@ impl Browser {
     }
 
     fn start_load(&mut self, mut request: Request, push: bool, restore: Option<f32>) {
+        // The presets page's links and forms act here, then the page shows.
+        if let Some(page) = self.sessions_page_submission(&request) {
+            request = page;
+        }
         // A user name and password in the URL are never sent, shown or kept.
         if let Some(clean) = crate::net::without_userinfo(request.url()) {
             request = request.with_url(clean);
@@ -4453,6 +4463,14 @@ impl Browser {
             WindowOp::NameWindow => {
                 self.rename = Some(self.win_name.clone().unwrap_or_default());
                 self.request_redraw();
+                return;
+            }
+            WindowOp::SavePreset => {
+                self.preset_event(presets::PresetEvent::AskSave);
+                return;
+            }
+            WindowOp::OpenPreset(id) => {
+                self.preset_event(presets::PresetEvent::Open(id, crate::presets::OpenTarget::NewWindow));
                 return;
             }
             _ => {}
@@ -6242,6 +6260,9 @@ impl Browser {
                     if let Some(pick) = strip.new_tab {
                         actions.push(Action::NewTabIn(pick));
                     }
+                    if let Some(id) = strip.open_preset {
+                        actions.push(Action::Preset(presets::PresetEvent::Open(id, crate::presets::OpenTarget::NewWindow)));
+                    }
                     if strip.manage_containers {
                         actions.push(Action::ToggleDrawer(Drawer::Containers));
                     }
@@ -6591,7 +6612,14 @@ impl Browser {
         if let Some(name) = self.rename_dialog(&ctx, &c) {
             actions.push(Action::NameWindow(name));
         }
-        let popup_now = egui::Popup::is_any_open(&ctx) || self.feat.palette.is_open() || self.rename.is_some() || self.plugin_modal_open();
+        if let Some(event) = self.preset_dialog_ui(&ctx, &c) {
+            actions.push(Action::Preset(event));
+        }
+        let popup_now = egui::Popup::is_any_open(&ctx)
+            || self.feat.palette.is_open()
+            || self.rename.is_some()
+            || self.preset_dialog.is_some()
+            || self.plugin_modal_open();
         if popup_now != self.egui_popup_open {
             self.egui_popup_open = popup_now;
             // Show or hide the web view, and draw the snapshot, on the next frame.
@@ -6765,6 +6793,7 @@ impl Browser {
                 }
                 Action::ShowAllTabs => self.toggle_overview(),
                 Action::NameWindow(name) => self.set_window_name(&name),
+                Action::Preset(event) => self.preset_event(event),
             }
         }
         // The hover card follows the pointer over the tabs.

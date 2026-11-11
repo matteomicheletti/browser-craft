@@ -391,6 +391,12 @@ fn load_page_checked(request: &Request, control: &Control) -> Page {
         // The address bar shows the clean URL, not the one-time link.
         return internal_page("browsecraft://flags", &source);
     }
+    if let Some(query) = crate::presets_page::query_of(raw) {
+        // The browser has already taken any submission (it needs the
+        // windows); only the view is left in the address.
+        let source = crate::presets_page::page_html(query);
+        return internal_page(&crate::presets_page::page_url(query), &source);
+    }
     if let Some(query) = internal_query(raw, "browsecraft://history") {
         // Clearing and removing are links carrying the page's token.
         let message = crate::history::apply_form(query);

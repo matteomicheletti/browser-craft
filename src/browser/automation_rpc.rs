@@ -212,6 +212,10 @@ impl Browser {
                     .collect();
                 to_value(&p::HistorySearchResult { entries }).map(Some)
             }
+            // Presets involve every window: the application answers them.
+            Method::SessionsList | Method::SessionsOpen | Method::SessionsSave => {
+                Err(RpcError::browser("sessions.* are answered by the application"))
+            }
             // Page scripts: checked here, run in `defer`.
             Method::PageText
             | Method::PageHtml
