@@ -460,7 +460,12 @@ pub struct TabInfo<'a> {
     /// A split view exists and this tab is the focused pane's partner
     /// candidate: "Open in split view with current tab" is offered.
     pub can_split: bool,
+    /// Show the title in a tooltip (off when hover cards show it).
+    pub tooltip: bool,
 }
+
+/// The other browser windows, for "Move to window": (id, label).
+pub type WindowList<'a> = &'a [(u64, String)];
 
 /// A tab group as the strip and the sidebar draw it.
 pub struct GroupInfo<'a> {
@@ -514,6 +519,15 @@ pub struct TabRow {
     /// "Remove from group".
     pub remove_from_group: bool,
     pub split: Option<SplitEvent>,
+    /// "Move to new window".
+    pub move_to_new_window: bool,
+    /// "Move to window ▸ <window>".
+    pub move_to_window: Option<u64>,
+    /// The pointer rests on it, and where it is (points).
+    pub hovered: bool,
+    pub rect: Option<egui::Rect>,
+    /// A drag of the chip started (the strip only).
+    pub drag_started: bool,
 }
 
 /// The menu of containers: no container, each container, a new temporary
@@ -546,10 +560,27 @@ pub fn container_menu(ui: &mut egui::Ui, c: &Colors, containers: &[Container], n
 }
 
 /// The right-click menu of a tab.
-fn tab_menu(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Container], groups: &[GroupInfo], out: &mut TabRow) {
+fn tab_menu(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Container], groups: &[GroupInfo], windows: WindowList, out: &mut TabRow) {
     if menu_item(ui, c, crate::icons::COPY, "Duplicate tab").clicked() {
         out.duplicate = true;
         ui.close();
+    }
+    if menu_item(ui, c, egui_phosphor::regular::ARROW_SQUARE_OUT, "Move to new window").clicked() {
+        out.move_to_new_window = true;
+        ui.close();
+    }
+    if !windows.is_empty() {
+        ui.menu_button(
+            egui::RichText::new(format!("{}  Move to window", egui_phosphor::regular::APP_WINDOW)).size(13.0).color(c.text),
+            |ui| {
+                for (key, label) in windows {
+                    if menu_item(ui, c, egui_phosphor::regular::APP_WINDOW, label).clicked() {
+                        out.move_to_window = Some(*key);
+                        ui.close();
+                    }
+                }
+            },
+        );
     }
     let current = tab.group.map(|g| g.0);
     let others: Vec<&GroupInfo> = groups.iter().filter(|g| Some(g.id) != current).collect();
@@ -822,7 +853,7 @@ fn tab_icon(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo) {
 /// get its colour as the left bar, a group's tabs are indented under its
 /// header with the group's colour, and the split pair is outlined. The
 /// whole row is clickable.
-pub fn tab_row(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Container], groups: &[GroupInfo]) -> TabRow {
+pub fn tab_row(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Container], groups: &[GroupInfo], windows: WindowList) -> TabRow {
     let (full, row) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 34.0), egui::Sense::click());
     let hovered = row.hovered();
     let painter = ui.painter();
@@ -891,9 +922,11 @@ pub fn tab_row(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, containers: &[Conta
             }
         });
     }
-    row.context_menu(|ui| tab_menu(ui, c, tab, containers, groups, &mut out));
+    row.context_menu(|ui| tab_menu(ui, c, tab, containers, groups, windows, &mut out));
     out.clicked = row.clicked() || label_resp.clicked();
     out.close |= row.middle_clicked();
+    out.hovered = hovered || label_resp.hovered();
+    out.rect = Some(full);
     out
 }
 
@@ -908,6 +941,10 @@ pub struct TabStrip {
     pub new_tab: Option<ContainerChoice>,
     /// "Manage containers" in the container menu.
     pub manage_containers: bool,
+    /// Each visible chip: (tab index, rectangle), in strip order.
+    pub chips: Vec<(usize, egui::Rect)>,
+    /// The "Show all tabs" button.
+    pub overview: bool,
 }
 
 /// The width of each tab in a strip `available` points wide: as wide as
@@ -924,6 +961,7 @@ pub fn tab_width(available: f32, count: usize) -> f32 {
 /// group (coloured, with an underline along its tabs) and per visible tab
 /// (icon, title, close button, container colour); then "+" and the
 /// container picker. The split view's two tabs share an outline.
+#[allow(clippy::too_many_arguments)]
 pub fn tab_strip(
     ui: &mut egui::Ui,
     c: &Colors,
@@ -931,12 +969,14 @@ pub fn tab_strip(
     items: &[StripItem],
     groups: &[GroupInfo],
     containers: &[Container],
+    windows: WindowList,
+    drop_marker: Option<usize>,
 ) -> TabStrip {
     let mut out = TabStrip::default();
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         ui.add_space(6.0);
-        let buttons_w = 76.0;
+        let buttons_w = 106.0;
         let chips_w: f32 = items
             .iter()
             .filter_map(|i| match i {
@@ -969,16 +1009,26 @@ pub fn tab_strip(
                             }
                             StripItem::Tab(i) => {
                                 let Some(tab) = tabs.get(i) else { continue };
-                                let (rect, row) = tab_chip(ui, c, tab, width, containers, groups);
+                                let (rect, row) = tab_chip(ui, c, tab, width, containers, groups, windows);
                                 if tab.active && !ui.is_rect_visible(rect) {
                                     ui.scroll_to_rect(rect, None);
                                 }
                                 if tab.split.is_some() {
                                     split_rects.push(rect);
                                 }
+                                out.chips.push((i, rect));
                                 out.tabs.push((i, row));
                             }
                         }
+                    }
+                    // Where a dragged tab would land.
+                    if let Some(at) = drop_marker {
+                        let x = match out.chips.iter().find(|(i, _)| *i >= at) {
+                            Some((_, r)) => r.min.x - 1.0,
+                            None => out.chips.last().map_or(ui.min_rect().min.x, |(_, r)| r.max.x + 1.0),
+                        };
+                        let y = out.chips.first().map_or(ui.min_rect().y_range(), |(_, r)| r.y_range());
+                        ui.painter().vline(x, y, egui::Stroke::new(2.0, c.accent));
                     }
                     // The split pair: one outline round both chips when
                     // they sit side by side, one each otherwise.
@@ -1018,13 +1068,21 @@ pub fn tab_strip(
                 ui.close();
             }
         });
+        let all = egui::Button::new(icon(egui_phosphor::regular::SQUARES_FOUR, 14.0).color(c.muted))
+            .frame(false)
+            .min_size(egui::vec2(28.0, 28.0))
+            .corner_radius(egui::CornerRadius::same(8));
+        if ui.add(all).on_hover_text("Show all tabs (Ctrl+Shift+\\)").clicked() {
+            out.overview = true;
+        }
     });
     out
 }
 
 /// One tab in the strip. Returns its rectangle and what happened.
-fn tab_chip(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, width: f32, containers: &[Container], groups: &[GroupInfo]) -> (egui::Rect, TabRow) {
-    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click());
+fn tab_chip(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, width: f32, containers: &[Container], groups: &[GroupInfo], windows: WindowList) -> (egui::Rect, TabRow) {
+    // Dragged to reorder it, or out of the strip to move it to a window.
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 30.0), egui::Sense::click_and_drag());
     let hovered = resp.hovered();
     let painter = ui.painter();
     let corners = egui::CornerRadius { nw: 8, ne: 8, sw: 0, se: 0 };
@@ -1091,10 +1149,16 @@ fn tab_chip(ui: &mut egui::Ui, c: &Colors, tab: &TabInfo, width: f32, containers
     if tab.split.is_some() {
         tip.push_str("\nIn split view");
     }
-    let resp = resp.on_hover_text(tip);
-    resp.context_menu(|ui| tab_menu(ui, c, tab, containers, groups, &mut out));
+    let resp = if tab.tooltip { resp.on_hover_text(tip) } else { resp };
+    resp.context_menu(|ui| tab_menu(ui, c, tab, containers, groups, windows, &mut out));
     out.clicked = resp.clicked() && !out.close;
     out.close |= resp.middle_clicked();
+    out.hovered = resp.hovered() || resp.contains_pointer();
+    out.rect = Some(rect);
+    out.drag_started = resp.drag_started_by(egui::PointerButton::Primary);
+    if resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
     (rect, out)
 }
 
@@ -1709,6 +1773,7 @@ mod tests {
                     _ => None,
                 },
                 can_split: i != 0,
+                tooltip: true,
             })
             .collect();
         let groups = [GroupInfo { id: 5, name: "Research", color: GroupColor::Blue, collapsed: false, tabs: 2, edit: false }];
@@ -1722,7 +1787,7 @@ mod tests {
         };
         let mut output = ctx.run_ui(input, |ui| {
             egui::Panel::top("tabstrip").exact_size(38.0).show(ui, |ui| {
-                let strip = tab_strip(ui, &c, &tabs, &items, &groups, std::slice::from_ref(&ctr));
+                let strip = tab_strip(ui, &c, &tabs, &items, &groups, std::slice::from_ref(&ctr), &[], None);
                 assert_eq!(strip.tabs.len(), count);
                 right = ui.min_rect().max.x;
             });
