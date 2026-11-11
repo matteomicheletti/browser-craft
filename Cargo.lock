@@ -779,6 +779,7 @@ dependencies = [
  "psl",
  "qrcode",
  "rqrr",
+ "rusqlite",
  "rust-argon2",
  "rustls",
  "scrypt",

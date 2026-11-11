@@ -90,6 +90,8 @@ pub struct GroupItem {
 pub struct LinkItem {
     pub title: String,
     pub url: String,
+    /// A bookmark's folder path ("Bookmarks bar › Work"); empty for history.
+    pub folder: String,
 }
 
 #[derive(Clone, Debug)]
@@ -672,7 +674,7 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
             let mut found: Vec<(i32, &LinkItem, Vec<usize>)> = list
                 .iter()
                 .filter_map(|b| {
-                    let m = score_terms(q, &b.title, &[&b.url])?;
+                    let m = score_terms(q, &b.title, &[&b.url, &b.folder])?;
                     Some((m.score, b, m.positions))
                 })
                 .collect();
@@ -686,7 +688,7 @@ fn build_rows(raw: &str, s: &PaletteSources, recent: &[CommandId]) -> Vec<Row> {
                     icon_code,
                     display_title(&b.title, &b.url),
                 );
-                r.detail = b.url.clone();
+                r.detail = if b.folder.is_empty() { b.url.clone() } else { format!("{} \u{b7} {}", b.folder, b.url) };
                 r.matches = pos;
                 rows.push(r);
             }
@@ -1602,10 +1604,12 @@ mod tests {
             bookmarks: vec![LinkItem {
                 title: "Rust blog".into(),
                 url: "https://blog.rust-lang.org".into(),
+                folder: "Bookmarks bar \u{203a} Reading".into(),
             }],
             history: vec![LinkItem {
                 title: "Hacker News".into(),
                 url: "https://news.ycombinator.com".into(),
+                folder: String::new(),
             }],
             containers: vec![ContainerItem {
                 id: "work".into(),
@@ -1784,6 +1788,10 @@ mod tests {
         );
         let links = build_rows("#", &s, &[]);
         assert_eq!(links.len(), 2);
+        // The folder path is searched and shown.
+        let links = build_rows("# reading", &s, &[]);
+        assert_eq!(actions(&links), vec![PaletteOutcome::OpenUrl("https://blog.rust-lang.org".into())]);
+        assert!(links[0].detail.starts_with("Bookmarks bar \u{203a} Reading"));
         let ct = build_rows("~", &s, &[]);
         assert_eq!(
             actions(&ct),

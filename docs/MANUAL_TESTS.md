@@ -215,3 +215,16 @@ For each row try the built-in choice (Safari on macOS) first, then Chrome and Ed
 | UA.5 | Settings → Site user agents: remove an override | Row disappears; the site gets its automatic string on the next load | |
 | SB.1 | Tabs left, click in a page, Ctrl+B twice | Sidebar hides, then comes back on the left; the same with tabs right | |
 | SB.2 | Tabs on top, Ctrl+B | Notice only | |
+## 9. Import, history and bookmark folders (wave 5)
+
+| # | Steps | Expected | Result |
+|---|---|---|---|
+| 9.1 | `browsecraft import --list` with Firefox and Chrome installed | JSON with each profile and its counts | OK 2026-11-11 (Firefox default-release, Chrome, Chrome Dev) |
+| 9.2 | `browsecraft import firefox --dry-run`, then without `--dry-run`, then again | Same counts; the first run adds, the second adds nothing; source files untouched | OK 2026-11-11 (temp profile) |
+| 9.3 | Run 9.2 while BrowseCraft is open | Bookmarks bar and pages update within ~2 s | |
+| 9.4 | `browsecraft://import`: pick a profile, Import; then *Undo last import* | Progress, then a summary; undo removes it | |
+| 9.5 | Drop a `bookmarks.html` on the window; export from the palette | Import page opens with the path; `~/Downloads/bookmarks-<date>.html` written | |
+| 9.6 | Bookmarks bar folder click | Menu with subfolders as submenus | OK 2026-11-11 (hook `bar-folder:`) |
+| 9.7 | Browse in a temporary container; open `browsecraft://history` | Those pages are not listed | |
+| 9.8 | History page: search, *Older*, *Remove*, *Last hour*; restart | Changes persist across restarts | |
+

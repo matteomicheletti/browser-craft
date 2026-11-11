@@ -312,8 +312,60 @@ pub fn theme_button(ui: &mut egui::Ui, c: &Colors, current: crate::theme::ThemeI
 pub enum BarEvent {
     Open(String),
     OpenInNewTab(String),
-    Remove(String),
+    /// Remove the bookmark or folder with this id.
+    Remove(u64),
     Manage,
+    /// Open the bookmarks page on this folder.
+    ManageFolder(u64),
+}
+
+/// The debug window script opens this bar folder's menu (its id; 0: none).
+#[cfg(debug_assertions)]
+pub static OPEN_BAR_FOLDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Entries listed in one folder menu of the bar; the rest are on the
+/// bookmarks page.
+const FOLDER_MENU_MAX: usize = 300;
+
+/// The contents of a bookmarks-bar folder as a menu, subfolders as
+/// submenus.
+fn folder_menu(ui: &mut egui::Ui, c: &Colors, folder: &crate::bookmarks::Node, events: &mut Vec<BarEvent>) {
+    if folder.children.is_empty() {
+        ui.label(egui::RichText::new("(empty)").size(12.5).color(c.muted));
+    }
+    for child in folder.children.iter().take(FOLDER_MENU_MAX) {
+        let label = egui::RichText::new(format!(
+            "{}  {}",
+            if child.is_folder() { crate::icons::FOLDER } else { crate::icons::GLOBE },
+            child.title
+        ))
+        .size(13.0)
+        .color(c.text);
+        match &child.url {
+            None => {
+                ui.menu_button(label, |ui| folder_menu(ui, c, child, events));
+            }
+            Some(url) => {
+                let resp = ui
+                    .add(egui::Button::new(label).frame(false).truncate().min_size(egui::vec2(220.0, 24.0)))
+                    .on_hover_text(url);
+                if resp.clicked() {
+                    events.push(BarEvent::Open(url.clone()));
+                    ui.close();
+                } else if resp.middle_clicked() {
+                    events.push(BarEvent::OpenInNewTab(url.clone()));
+                    ui.close();
+                }
+            }
+        }
+    }
+    ui.separator();
+    let more = folder.children.len().saturating_sub(FOLDER_MENU_MAX);
+    let text = if more > 0 { format!("{more} more in the bookmarks manager…") } else { "Open in the bookmarks manager".into() };
+    if menu_item(ui, c, crate::icons::BOOKMARKS, &text).clicked() {
+        events.push(BarEvent::ManageFolder(folder.id));
+        ui.close();
+    }
 }
 
 /// A small icon-and-label entry for popup menus.
@@ -324,7 +376,7 @@ pub fn menu_item(ui: &mut egui::Ui, c: &Colors, code: &str, label: &str) -> egui
 
 /// The bookmarks bar contents: one chip per bookmark that fits, an overflow
 /// menu for the rest, and an "All bookmarks" button on the right.
-pub fn bookmarks_bar(ui: &mut egui::Ui, c: &Colors, items: &[(String, String)]) -> Vec<BarEvent> {
+pub fn bookmarks_bar(ui: &mut egui::Ui, c: &Colors, items: &[crate::bookmarks::Node]) -> Vec<BarEvent> {
     const CHIP_MAX_TEXT: f32 = 150.0;
     const CHIP_PAD: f32 = 10.0;
     const ICON_W: f32 = 14.0;
@@ -338,57 +390,81 @@ pub fn bookmarks_bar(ui: &mut egui::Ui, c: &Colors, items: &[(String, String)]) 
         ui.spacing_mut().item_spacing.x = GAP;
         ui.add_space(8.0);
         let mut used = 0.0;
-        let mut shown = 0;
-        let mut overflow: Vec<&(String, String)> = Vec::new();
+        let mut overflow: Vec<&crate::bookmarks::Node> = Vec::new();
         for item in items {
             let text_w = ui
                 .painter()
-                .layout_no_wrap(item.0.clone(), font.clone(), c.text)
+                .layout_no_wrap(item.title.clone(), font.clone(), c.text)
                 .size()
                 .x
                 .min(CHIP_MAX_TEXT);
             let w = CHIP_PAD * 2.0 + ICON_W + 6.0 + text_w;
-            if overflow.is_empty() && used + w + GAP <= budget - 30.0 {
-                used += w + GAP;
-                shown += 1;
-                let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 26.0), egui::Sense::click());
-                if resp.hovered() {
-                    ui.painter().rect_filled(rect, egui::CornerRadius::same(13), c.hover);
-                }
-                let mut child = ui.new_child(
-                    egui::UiBuilder::new()
-                        .max_rect(rect.shrink2(egui::vec2(CHIP_PAD, 0.0)))
-                        .layout(egui::Layout::left_to_right(egui::Align::Center)),
-                );
-                child.spacing_mut().item_spacing.x = 6.0;
-                child.label(icon(crate::icons::GLOBE, 12.0).color(c.accent));
-                child.add(
-                    egui::Label::new(egui::RichText::new(&item.0).size(13.0).color(c.text))
-                        .truncate()
-                        .selectable(false),
-                );
-                let resp = resp.on_hover_text(&item.1);
-                if resp.clicked() {
-                    events.push(BarEvent::Open(item.1.clone()));
-                } else if resp.middle_clicked() {
-                    events.push(BarEvent::OpenInNewTab(item.1.clone()));
-                }
-                resp.context_menu(|ui| {
-                    if menu_item(ui, c, crate::icons::GLOBE, "Open").clicked() {
-                        events.push(BarEvent::Open(item.1.clone()));
-                        ui.close();
-                    }
-                    if menu_item(ui, c, crate::icons::PLUS, "Open in new tab").clicked() {
-                        events.push(BarEvent::OpenInNewTab(item.1.clone()));
-                        ui.close();
-                    }
-                    if menu_item(ui, c, crate::icons::TRASH, "Remove bookmark").clicked() {
-                        events.push(BarEvent::Remove(item.1.clone()));
-                        ui.close();
-                    }
-                });
-            } else {
+            if !(overflow.is_empty() && used + w + GAP <= budget - 30.0) {
                 overflow.push(item);
+                continue;
+            }
+            used += w + GAP;
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(w, 26.0), egui::Sense::click());
+            if resp.hovered() {
+                ui.painter().rect_filled(rect, egui::CornerRadius::same(13), c.hover);
+            }
+            let mut child = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(rect.shrink2(egui::vec2(CHIP_PAD, 0.0)))
+                    .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            );
+            child.spacing_mut().item_spacing.x = 6.0;
+            let glyph = if item.is_folder() { crate::icons::FOLDER } else { crate::icons::GLOBE };
+            child.label(icon(glyph, 12.0).color(c.accent));
+            child.add(
+                egui::Label::new(egui::RichText::new(&item.title).size(13.0).color(c.text))
+                    .truncate()
+                    .selectable(false),
+            );
+            match &item.url {
+                None => {
+                    // A folder opens as a menu under its chip.
+                    #[cfg(debug_assertions)]
+                    if OPEN_BAR_FOLDER
+                        .compare_exchange(item.id, 0, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&resp));
+                    }
+                    egui::Popup::menu(&resp).show(|ui| folder_menu(ui, c, item, &mut events));
+                    resp.context_menu(|ui| {
+                        if menu_item(ui, c, crate::icons::BOOKMARKS, "Open in the bookmarks manager").clicked() {
+                            events.push(BarEvent::ManageFolder(item.id));
+                            ui.close();
+                        }
+                        if menu_item(ui, c, crate::icons::TRASH, "Delete folder").clicked() {
+                            events.push(BarEvent::Remove(item.id));
+                            ui.close();
+                        }
+                    });
+                }
+                Some(url) => {
+                    let resp = resp.on_hover_text(url);
+                    if resp.clicked() {
+                        events.push(BarEvent::Open(url.clone()));
+                    } else if resp.middle_clicked() {
+                        events.push(BarEvent::OpenInNewTab(url.clone()));
+                    }
+                    resp.context_menu(|ui| {
+                        if menu_item(ui, c, crate::icons::GLOBE, "Open").clicked() {
+                            events.push(BarEvent::Open(url.clone()));
+                            ui.close();
+                        }
+                        if menu_item(ui, c, crate::icons::PLUS, "Open in new tab").clicked() {
+                            events.push(BarEvent::OpenInNewTab(url.clone()));
+                            ui.close();
+                        }
+                        if menu_item(ui, c, crate::icons::TRASH, "Remove bookmark").clicked() {
+                            events.push(BarEvent::Remove(item.id));
+                            ui.close();
+                        }
+                    });
+                }
             }
         }
         if items.is_empty() {
@@ -398,20 +474,17 @@ pub fn bookmarks_bar(ui: &mut egui::Ui, c: &Colors, items: &[(String, String)]) 
                     .color(c.muted),
             );
         }
-        let _ = shown;
         if !overflow.is_empty() {
             ui.menu_button(egui::RichText::new("\u{bb}").size(15.0).color(c.text), |ui| {
-                for item in overflow {
-                    let label = egui::RichText::new(&item.0).size(13.0).color(c.text);
-                    if ui
-                        .add(egui::Button::new(label).frame(false).min_size(egui::vec2(220.0, 26.0)))
-                        .on_hover_text(&item.1)
-                        .clicked()
-                    {
-                        events.push(BarEvent::Open(item.1.clone()));
-                        ui.close();
-                    }
-                }
+                let rest = crate::bookmarks::Node {
+                    id: crate::bookmarks::BAR_ID,
+                    title: String::new(),
+                    url: None,
+                    children: overflow.into_iter().cloned().collect(),
+                    added: 0,
+                    import: 0,
+                };
+                folder_menu(ui, c, &rest, &mut events);
             });
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1810,8 +1883,16 @@ mod tests {
         let ctx = egui::Context::default();
         install_icon_font(&ctx);
         let c = Colors::for_dark(true);
-        let items: Vec<(String, String)> = (0..count)
-            .map(|i| (format!("A fairly long bookmark title number {i}"), format!("https://site{i}.test/")))
+        // Every third item is a folder.
+        let items: Vec<crate::bookmarks::Node> = (0..count)
+            .map(|i| crate::bookmarks::Node {
+                id: i as u64 + 3,
+                title: format!("A fairly long bookmark title number {i}"),
+                url: (i % 3 != 0).then(|| format!("https://site{i}.test/")),
+                children: Vec::new(),
+                added: 0,
+                import: 0,
+            })
             .collect();
         let mut used = 0.0;
         let input = egui::RawInput {

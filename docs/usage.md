@@ -422,7 +422,15 @@ tab.
 
 ## Bookmarks
 
-Click the star in the address bar, or press `Ctrl+D`, to bookmark the current page; do it again to remove it. Bookmarks show on the bookmarks bar under the address bar (turn it off in Settings or with `Ctrl+Shift+B`). Click one to open it, middle-click to open it in a new tab, right-click for *Open in new tab* and *Remove bookmark*. Bookmarks that do not fit go in the `»` menu. **All bookmarks** (`Ctrl+Shift+O`) opens `browsecraft://bookmarks`. They are saved in `bookmarks.txt` in the [per-user settings folder](../README.md#settings) (one `url<TAB>title` per line). Only `http(s)` pages can be bookmarked. The bar is drawn by the GPU interface; with the software interface (`chrome=engine`) bookmarks still work from `Ctrl+D` and the manager page.
+Click the star in the address bar, or press `Ctrl+D`, to add the page to the bookmarks bar (Chrome's behaviour); do it again to remove it. Bookmarks live in two roots, *Bookmarks bar* and *Other bookmarks*, with nested folders. On the bar, folders open as menus (subfolders as submenus); click a bookmark to open it, middle-click for a new tab, right-click for *Remove*. **All bookmarks** (`Ctrl+Shift+O`) opens `browsecraft://bookmarks`: browse one folder at a time, search everything (with folder paths), create folders, move and remove bookmarks and folders, undo the last import. The palette's `#` search covers all bookmarks and shows their folder. Saved in `bookmarks.json` in the [per-user settings folder](../README.md#settings) (an old `bookmarks.txt` is moved into the bar once and kept as `bookmarks.txt.bak`). Up to 50 000 bookmarks; only `http(s)` pages.
+
+## History
+
+Every page you load is kept in `history.sqlite` in the data folder (`~/.local/share/BrowseCraft` on Linux), except tabs in temporary containers. `browsecraft://history` (`Ctrl+H`) lists visits by day with a search, *Older*/*Newer* pages, *Remove* per entry and *Clear* for the last hour, day, week, four weeks or everything; `Ctrl+Shift+Delete` still clears history together with cookies and site data. Settings › History sets how long visits are kept (30 days to forever, default one year) and a cap on visits. The palette and `history.search` rank by how often and how recently a page was visited.
+
+## Importing from other browsers
+
+`browsecraft://import` (palette *Import bookmarks and history…*, or the hint on the new-tab page while there are no bookmarks) lists the Firefox and Chromium-family profiles found, with their counts; pick one, choose bookmarks and/or history, a range and where bookmarks go, optionally a dry run. Bookmarks HTML files import by path or by dropping them on the window; *Export bookmarks to HTML* (also in the palette) writes `~/Downloads/bookmarks-<date>.html`. Details and the `browsecraft import` command: [IMPORT.md](IMPORT.md).
 
 The key menu, the bookmarks bar and the save-login bar belong to the GPU interface (the default). When a menu is open over a web page, the page is shown as a still picture until the menu closes (the live page is a native window that cannot sit under a menu).
 

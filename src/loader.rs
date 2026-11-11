@@ -391,15 +391,32 @@ fn load_page_checked(request: &Request, control: &Control) -> Page {
         // The address bar shows the clean URL, not the one-time link.
         return internal_page("browsecraft://flags", &source);
     }
-    if internal_query(raw, "browsecraft://history").is_some() {
-        let source = crate::history::page_html();
-        return internal_page(raw, &source);
+    if let Some(query) = internal_query(raw, "browsecraft://history") {
+        // Clearing and removing are links carrying the page's token.
+        let message = crate::history::apply_form(query);
+        let source = crate::history::page_html(query, message.as_deref());
+        return internal_page(&crate::history::page_url(query), &source);
     }
     if let Some(query) = internal_query(raw, "browsecraft://bookmarks") {
-        // Removing a bookmark is a link back to this page carrying the token.
-        crate::bookmarks::apply_form(query);
-        let source = crate::bookmarks::page_html();
-        return internal_page("browsecraft://bookmarks", &source);
+        // Removing is a link back to this page carrying the token; creating
+        // a folder posts a form.
+        let body = match request {
+            Request::Post(_, body) => Some(body.as_str()),
+            Request::Get(_) => None,
+        };
+        crate::bookmarks::apply_form(query, body);
+        let source = crate::bookmarks::page_html(query);
+        return internal_page(&crate::bookmarks::page_url(query), &source);
+    }
+    if let Some(query) = internal_query(raw, "browsecraft://import") {
+        // Forms post their choices with the page's token.
+        let body = match request {
+            Request::Post(_, body) => Some(body.as_str()),
+            Request::Get(_) => None,
+        };
+        let message = crate::import::page::handle(query, body);
+        let source = crate::import::page::page_html(query, message.as_deref());
+        return internal_page("browsecraft://import", &source);
     }
     if let Some(query) = internal_query(raw, "browsecraft://passwords") {
         // Forms post their fields in the body (never in the URL, which would
@@ -518,7 +535,7 @@ fn internal_query<'a>(raw: &'a str, page: &str) -> Option<&'a str> {
 /// The new-tab page for the current theme, with the user's bookmarks as quick
 /// links (or a few starting points when there are none).
 fn home_html() -> String {
-    let bookmarks = crate::bookmarks::all();
+    let bookmarks = crate::bookmarks::search("", 8);
     let mut links = String::new();
     if bookmarks.is_empty() {
         for (title, url) in [
@@ -540,7 +557,8 @@ fn home_html() -> String {
     }
     let page = HOME_HTML
         .replace("{{CSS}}", &crate::internal::css())
-        .replace("{{LINKS}}", &links);
+        .replace("{{LINKS}}", &links)
+        .replace("{{HINT}}", &crate::import::page::home_hint().unwrap_or_default());
     crate::internal::themed(&page, crate::internal::current())
 }
 

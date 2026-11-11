@@ -49,6 +49,47 @@ pub fn profile_dir(name: &str) -> Result<PathBuf, String> {
     Ok(config_dir()?.join("profiles").join(name))
 }
 
+/// Where BrowseCraft keeps its larger data (the history database):
+/// `$XDG_DATA_HOME/BrowseCraft` (`~/.local/share/BrowseCraft`) on Linux, the
+/// config folder elsewhere.
+pub fn data_dir() -> Result<PathBuf, String> {
+    #[cfg(all(target_os = "linux", not(test)))]
+    {
+        let base = std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")));
+        if let Some(base) = base {
+            return Ok(base.join("BrowseCraft"));
+        }
+    }
+    config_dir()
+}
+
+/// An exclusive advisory lock on a file, held until dropped. Every process
+/// that changes a shared file (the browser, `browsecraft import`) takes it
+/// first, so their read-modify-write cycles never interleave.
+pub struct FileLock {
+    _file: std::fs::File,
+}
+
+/// Locks `path` (created owner-only if missing), waiting for other holders.
+pub fn lock_file(path: &Path) -> std::io::Result<FileLock> {
+    if let Some(dir) = path.parent() {
+        private_dir(dir)?;
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.create(true).truncate(false).read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let file = options.open(path)?;
+    file.lock()?;
+    Ok(FileLock { _file: file })
+}
+
 /// `name` inside the config folder.
 pub fn config_file(name: &str) -> Result<PathBuf, String> {
     Ok(config_dir()?.join(name))

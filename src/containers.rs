@@ -257,6 +257,12 @@ pub fn rules() -> Vec<SiteRule> {
     STORE.read().unwrap_or_else(|p| p.into_inner()).rules.clone()
 }
 
+/// Whether `id` names a temporary container (their ids start with `tmp-`;
+/// nothing a tab in one visits is kept).
+pub fn is_temporary_id(id: &str) -> bool {
+    id.starts_with("tmp-")
+}
+
 /// A container by id, persistent or temporary.
 pub fn get(id: &str) -> Option<Container> {
     if let Some(c) = STORE.read().unwrap_or_else(|p| p.into_inner()).containers.iter().find(|c| c.id == id) {

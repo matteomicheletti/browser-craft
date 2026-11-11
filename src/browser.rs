@@ -193,6 +193,8 @@ pub enum UserMessage {
     /// Plugin pages, plugin shortcuts, clipboard history, screenshots
     /// (`browser/plugins_host.rs`).
     PluginHost(plugins_host::HostMessage),
+    /// An import started from browsecraft://import made progress or ended.
+    Import(crate::import::Event),
 }
 
 /// A key for egui, forwarded from the page's GTK window.
@@ -369,7 +371,7 @@ enum Action {
     ToggleBookmark,
     OpenBookmark(String),
     OpenInNewTab(String),
-    RemoveBookmark(String),
+    RemoveBookmark(u64),
     BookmarksPage,
     FillLogin(String),
     SuggestPassword,
@@ -1250,6 +1252,9 @@ fn background_web_event(st: &mut TabState, message: TabMessage) {
         TabMessage::Title(title) => {
             if !st.web_expect || st.web_committed {
                 st.title = clean_title(&title);
+                if !st.loading && !st.web_url.is_empty() {
+                    history::retitle(&st.web_url, &st.title, st.container.as_deref());
+                }
             }
         }
         TabMessage::Start(url) => {
@@ -1284,7 +1289,7 @@ fn background_web_event(st: &mut TabState, message: TabMessage) {
             }
             st.web_url = url.clone();
             st.web_document = url.clone();
-            history::record(&url, &st.title);
+            history::record(&url, &st.title, st.container.as_deref());
         }
         // Pop-ups, password reports and container hand-overs from a page
         // the user is not looking at are dropped.
@@ -3664,7 +3669,7 @@ impl Browser {
         }
         let title = self.live_title();
         let message = if bookmarks::toggle(&title, &url) {
-            "Bookmark added"
+            "Bookmark added to the bookmarks bar"
         } else {
             "Bookmark removed"
         };
@@ -3759,6 +3764,28 @@ impl Browser {
         }
     }
 
+    /// Bookmarks or history changed outside this window (an import,
+    /// another process): redraw the bar and reload the pages showing them.
+    fn data_changed(&mut self) {
+        self.feat.palette_links = None;
+        for page in ["browsecraft://bookmarks", "browsecraft://history", "about:home"] {
+            self.refresh_if_internal(page);
+        }
+        self.request_redraw();
+    }
+
+    /// A file dropped on the window: a bookmarks file opens the import
+    /// page with it filled in.
+    fn dropped_file(&mut self, path: PathBuf) {
+        let html = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm"));
+        if html {
+            let url = format!("browsecraft://import?file={}", crate::internal::encode(&path.to_string_lossy()));
+            self.open_in_new_tab(url);
+        } else {
+            self.set_notice("Drop a bookmarks .html file to import it");
+        }
+    }
+
     fn zoom(&mut self, change: Option<bool>) {
         self.user_zoom = match change {
             Some(up) => zoom_step(self.user_zoom, up),
@@ -3797,7 +3824,7 @@ impl Browser {
                     .get(self.index)
                     .is_some_and(|e| e.request.url().starts_with("about:blocked:"));
                 if !blocked && !url.starts_with("about:") {
-                    history::record(&url, &title);
+                    history::record(&url, &title, self.container.as_deref());
                 }
                 self.title = title;
                 self.tab = Some(Tab {
@@ -3888,7 +3915,7 @@ impl Browser {
         if !self.address_focused() {
             self.address.set(&url);
         }
-        history::record(&url, &self.title);
+        history::record(&url, &self.title, self.container.as_deref());
         self.schedule_thumbnail(self.tab_id);
     }
 
@@ -3900,7 +3927,7 @@ impl Browser {
         self.title = clean_title(&title);
         self.update_window_title();
         if !self.loading && !self.web_url.is_empty() {
-            history::record(&self.web_url, &self.title);
+            history::retitle(&self.web_url, &self.title, self.container.as_deref());
         }
     }
 
@@ -6304,19 +6331,22 @@ impl Browser {
 
         // Bookmarks bar, under the address bar.
         if bar_visible {
-            let items: Vec<(String, String)> = bookmarks::all().into_iter().map(|b| (b.title, b.url)).collect();
+            let tree = bookmarks::snapshot();
             egui::Panel::top("bookmarks")
                 .exact_size(BOOKMARKS_BAR_HEIGHT)
                 .resizable(false)
                 .show_separator_line(false)
                 .frame(egui::Frame::NONE.fill(c.bar_bg))
                 .show(ui, |ui| {
-                    for event in egui_chrome::bookmarks_bar(ui, &c, &items) {
+                    for event in egui_chrome::bookmarks_bar(ui, &c, &tree.bar.children) {
                         actions.push(match event {
                             egui_chrome::BarEvent::Open(url) => Action::OpenBookmark(url),
                             egui_chrome::BarEvent::OpenInNewTab(url) => Action::OpenInNewTab(url),
-                            egui_chrome::BarEvent::Remove(url) => Action::RemoveBookmark(url),
+                            egui_chrome::BarEvent::Remove(id) => Action::RemoveBookmark(id),
                             egui_chrome::BarEvent::Manage => Action::BookmarksPage,
+                            egui_chrome::BarEvent::ManageFolder(id) => {
+                                Action::OpenBookmark(format!("browsecraft://bookmarks?folder={id}"))
+                            }
                         });
                     }
                     let r = ui.max_rect();
@@ -6628,8 +6658,8 @@ impl Browser {
                 Action::ToggleBookmark => self.toggle_bookmark(),
                 Action::OpenBookmark(url) => self.load(Request::Get(url), true),
                 Action::OpenInNewTab(url) => self.open_in_new_tab(url),
-                Action::RemoveBookmark(url) => {
-                    bookmarks::remove(&url);
+                Action::RemoveBookmark(id) => {
+                    bookmarks::remove_id(id);
                     self.set_notice("Bookmark removed");
                     self.refresh_if_internal("browsecraft://bookmarks");
                 }
@@ -6765,6 +6795,8 @@ impl Browser {
             UserMessage::Automation(req) => self.automation_request(req),
             UserMessage::AutomationScript { job, json } => self.job_result(job, &json),
             UserMessage::Notice(text) => self.set_notice_long(text),
+            // Handled by the application (every window).
+            UserMessage::Import(_) => {}
             UserMessage::RecordingStopped(result) => self.recording_stopped(result),
             UserMessage::PluginHost(m) => self.plugin_host_message(m),
             UserMessage::ChromeKey(key) => self.chrome_key(key),
@@ -6901,6 +6933,7 @@ impl Browser {
             // The window's close button (system title bar): this window.
             WindowEvent::CloseRequested => self.quit = true,
             WindowEvent::RedrawRequested => self.render(),
+            WindowEvent::DroppedFile(path) => self.dropped_file(path),
             WindowEvent::Resized(size) => {
                 if let Some(egui) = &mut self.egui {
                     egui.on_resized(size.width, size.height);
@@ -7048,6 +7081,9 @@ impl Browser {
             "close" => self.window_op(WindowOp::Close),
             // Screenshots of the overlays, which otherwise need input.
             "palette" => self.toggle_palette(),
+            "bookmarks-reload" => {
+                bookmarks::reload_if_changed();
+            }
             "themes" => self.run_command(crate::commands::CommandId::Theme),
             "authenticator" => self.toggle_drawer(Drawer::Authenticator),
             "containers" => self.toggle_drawer(Drawer::Containers),
@@ -7087,6 +7123,15 @@ impl Browser {
                     self.run_command(id);
                 } else if let Some(name) = other.strip_prefix("name:") {
                     self.set_window_name(name);
+                } else if let Some(n) = other.strip_prefix("bar-folder:").and_then(|n| n.parse::<usize>().ok()) {
+                    // Opens the menu of the bar's n-th folder.
+                    let tree = bookmarks::snapshot();
+                    if let Some(f) = tree.bar.children.iter().filter(|c| c.is_folder()).nth(n) {
+                        egui_chrome::OPEN_BAR_FOLDER.store(f.id, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    self.request_redraw();
+                } else if let Some(q) = other.strip_prefix("palette:") {
+                    self.open_palette_with(q);
                 } else if let Some(url) = other.strip_prefix("open:") {
                     self.open_in_new_tab(address::resolve(url));
                 } else if let Some(i) = other.strip_prefix("switch:").and_then(|i| i.parse().ok()).filter(|i| *i < self.tabs.len()) {

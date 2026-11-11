@@ -27,6 +27,7 @@ mod headless_webkit;
 mod history;
 mod html;
 mod icons;
+mod import;
 mod internal;
 mod layout;
 mod loader;
@@ -65,6 +66,11 @@ fn main() {
 
     flags::load();
     bookmarks::load();
+    // `browsecraft import ...` runs instead of the browser (see docs/IMPORT.md).
+    if args.get(1).map(String::as_str) == Some("import") {
+        std::process::exit(import::cli::main(&args[2..]));
+    }
+    history::init();
     passwords::load();
     containers::load();
     useragent::load();

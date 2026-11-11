@@ -73,6 +73,8 @@ pub enum CommandId {
     BookmarksPage,
     History,
     ClearBrowsingData,
+    ImportData,
+    ExportBookmarks,
     // Privacy and accounts
     Containers,
     Authenticator,
@@ -209,7 +211,7 @@ pub fn catalog() -> &'static [Command] {
     &CATALOG
 }
 
-static CATALOG: [Command; 63] = [
+static CATALOG: [Command; 65] = [
     cmd!(
         NewTab,
         "new-tab",
@@ -667,6 +669,24 @@ static CATALOG: [Command; 63] = [
         ["visited", "recent", "past"],
         Some("Ctrl+H"),
         ph::CLOCK_COUNTER_CLOCKWISE,
+        Library
+    ),
+    cmd!(
+        ImportData,
+        "import-data",
+        "Import bookmarks and history…",
+        ["firefox", "chrome", "chromium", "brave", "edge", "migrate", "html"],
+        None,
+        ph::DOWNLOAD_SIMPLE,
+        Library
+    ),
+    cmd!(
+        ExportBookmarks,
+        "export-bookmarks",
+        "Export bookmarks to HTML",
+        ["backup", "save", "bookmarks.html", "netscape"],
+        None,
+        ph::EXPORT,
         Library
     ),
     cmd!(

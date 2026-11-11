@@ -197,12 +197,10 @@ impl Browser {
             }
             Method::BookmarksList => {
                 let params: p::BookmarksParams = req.params()?;
-                let q = params.query.unwrap_or_default().to_lowercase();
-                let bookmarks = bookmarks::all()
+                let q = params.query.unwrap_or_default();
+                let bookmarks = bookmarks::search(&q, params.limit.unwrap_or(500).clamp(1, bookmarks::MAX_BOOKMARKS))
                     .into_iter()
-                    .filter(|b| q.is_empty() || b.title.to_lowercase().contains(&q) || b.url.to_lowercase().contains(&q))
-                    .take(params.limit.unwrap_or(500).clamp(1, 5000))
-                    .map(|b| p::BookmarkInfo { title: b.title, url: b.url, folder: None })
+                    .map(|b| p::BookmarkInfo { title: b.title, url: b.url, folder: Some(b.folder) })
                     .collect();
                 to_value(&p::BookmarksListResult { bookmarks }).map(Some)
             }
@@ -210,7 +208,7 @@ impl Browser {
                 let params: p::HistorySearchParams = req.params()?;
                 let entries = history::search(&params.query, params.limit.unwrap_or(100).clamp(1, 1000))
                     .into_iter()
-                    .map(|(url, title)| p::HistoryEntry { title, url, visited: None })
+                    .map(|h| p::HistoryEntry { title: h.title, url: h.url, visited: u64::try_from(h.last_visit / 1_000_000).ok() })
                     .collect();
                 to_value(&p::HistorySearchResult { entries }).map(Some)
             }

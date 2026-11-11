@@ -25,6 +25,12 @@ network process is not sandboxed (WebKit design).
   plugins or the automation/MCP API.
 - No secrets or credentials are stored in this repository.
 
+## History and imports
+
+- Browsing history is now on disk: `history.sqlite` in the data folder (`~/.local/share/BrowseCraft`), folder 0700, file 0600, `secure_delete` on (cleared rows are zeroed), WAL checkpointed after *Clear everything*. User names and passwords in URLs are stripped; tabs in temporary containers are never recorded; retention defaults to one year. `history.sqlite.bak` (a copy made before each import) holds the same data.
+- Importers only read other browsers' profiles, from a copy in a private temporary folder deleted afterwards; inputs are size-, count- and depth-limited. Passwords, cookies and extensions are not read.
+- Internal pages that change bookmarks, history or imports require a one-time form token.
+
 ## Plugins with pages and the clipboard history (API 1.1)
 
 | Control | State | How it was checked |
