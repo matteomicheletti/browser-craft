@@ -182,9 +182,10 @@ The reply script calls `window.__bcDeliver(plugin, id, ok, json)`.
 Logic that should not run in the page (and Rust plugins) compiles to
 WebAssembly and runs inside the browser process under
 [`wasmi`](https://github.com/wasmi-labs/wasmi), a pure-Rust interpreter. It is
-behind the cargo feature `wasm` (`cargo build --features wasm`); without it a
-manifest with `wasm` still loads but `bc.sendMessage` reports that WASM is not
-compiled in.
+behind the cargo feature `wasm`, which is **on by default** (wasmi is pure Rust
+and builds cleanly everywhere). A build made with `--no-default-features`
+still loads a manifest with `wasm`, but `bc.sendMessage` reports that WASM is
+not compiled in.
 
 **Why wasmi and not wasmtime.** Plugin logic is glue code, so interpreter
 speed is enough; wasmi adds seconds, not minutes, to the build and a small
@@ -280,8 +281,8 @@ Until then: not compatible.
 
 ## Developing the runtime
 
-- `cargo test plugins` runs the unit tests (add `--features wasm` for the WASM
-  ones).
+- `cargo test plugins` runs the unit tests, the WASM ones included (the
+  `wasm` feature is on by default).
 - `cargo test plugins::script::live -- --ignored --nocapture` loads the
   generated script into a real WebKitGTK 4.1 (offscreen, needs `python3-gi`;
   see `tests/plugins_live.py`), serves test pages, answers bridge calls with

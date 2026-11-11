@@ -62,6 +62,7 @@ expect_used = "deny"
 # is no system web view. Off by default; other platforms ignore it.
 servo = ["dep:servo", "dep:rustls"]
 # Sandboxed (interpreted, pure Rust) WASM plugin modules; see docs/EXTENSIONS.md.
+default = ["wasm"]
 wasm = ["dep:wasmi"]
 
 [target.'cfg(target_os = "linux")'.dependencies]
