@@ -9,9 +9,10 @@ browsecraft "rust browser"  # runs a search
 browsecraft --screenshot out.png example.com 1200   # renders to a PNG
 browsecraft --container Work mail.example.com example.org   # two tabs, the first in "Work"
 browsecraft --temporary-container example.com              # a tab in a new temporary container
+browsecraft --preset "Lavoro"                              # starts with a session preset
 ```
 
-Each address on the command line opens in its own tab; `--container <name>` (a container's name or id) or `--temporary-container` applies to the address that follows it (alone, to a start-page tab). An unknown container name is an error (exit code 2). Without an address, BrowseCraft reopens the previous session's tabs (see *Tabs*) or the home page.
+Each address on the command line opens in its own tab; `--container <name>` (a container's name or id) or `--temporary-container` applies to the address that follows it (alone, to a start-page tab). An unknown container name is an error (exit code 2). Without an address, BrowseCraft does what *On startup* in Settings says (by default it reopens the previous session's tabs, see *Tabs*). `--preset <name>` opens that session preset instead (see *Session presets*); addresses on the command line win over it, and an unknown name restores the previous session with a notice. BrowseCraft is not single-instance: `--preset` starts a new browser process.
 
 The command-line argument is read the same way as text typed into the address bar. `--screenshot <out.png> <url> [width]` renders the page with BrowseCraft's own engine (never WebView2) and exits; the width defaults to 1200 pixels.
 
@@ -285,6 +286,44 @@ the default.
 tabs; they go on the closed-tab list, so `Ctrl+Shift+T` in any window reopens
 them one by one. Closing the last window, or `Ctrl+Q`, quits. The session
 remembers every window: its tabs, groups, split view, name, place and size.
+
+## Session presets
+
+A session preset is a named snapshot of one window or of every open window,
+such as *Lavoro* or *Research*, to open again later. It keeps each window's
+name and, per tab, its address, title, container, tab group (name, colour,
+collapsed) and split view pairing. Page state is not kept: tabs reopen from
+their address and load when first shown, as after a restart. Tabs in
+temporary containers are left out.
+
+**Saving.** *Save session as preset…* in the palette or in the title bar's
+right-click menu asks for a name and whether to save this window or all
+windows. Names are unique (case-insensitive). Saving never overwrites a
+preset: *Update…* on `browsecraft://sessions` replaces a preset's tabs with
+the current ones.
+
+**Opening.** *Open preset in new window ▸* in the title bar menu and in the
+tab strip's `▾` menu next to `+`, or the palette: type `$` and part of a name
+(`$lav`), `Enter` opens the preset with each of its windows as a new window;
+`Shift+Enter`, or the row *… — add to this window*, adds its tabs after this
+window's tabs (groups recreated; its split view too when this window has
+none). On `browsecraft://sessions`, *Replace this window…* closes this
+window's tabs (after asking; `Ctrl+Shift+T` reopens them) and opens the
+preset in their place. Tabs whose container was deleted open without one, with
+a notice. There are no keyboard shortcuts for single presets.
+
+**Managing.** `browsecraft://sessions` (palette: *Manage session presets*)
+lists the presets with open, add, replace, update, rename, delete (asks
+first), move up/down, and export/import: *Export* writes every preset to
+`~/Downloads/browsecraft-presets-<time>.json`; *Import* takes such a file's
+path and adds its presets (a name in use gets a number). Presets are kept in
+`presets.json` in the config folder (owner-only, versioned).
+
+**On startup** (Settings, *Tabs and memory*): *Continue previous session* (the
+default), *Open a new tab* (the session is then not remembered), *Open a
+preset* (choose which; if it is deleted the previous session opens, with a
+notice) or *Ask every time*: the browser starts on a chooser with *Previous
+session*, each preset and *Blank page*.
 
 ## Containers
 

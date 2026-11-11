@@ -228,3 +228,18 @@ For each row try the built-in choice (Safari on macOS) first, then Chrome and Ed
 | 9.7 | Browse in a temporary container; open `browsecraft://history` | Those pages are not listed | |
 | 9.8 | History page: search, *Older*, *Remove*, *Last hour*; restart | Changes persist across restarts | |
 
+## 10. Session presets (wave 8)
+
+| # | Steps | Expected | Result |
+|---|---|---|---|
+| 10.1 | Two windows with a group (collapsed), a split pair, a container tab and a temporary-container tab; title bar menu → *Save session as preset…* → "Lavoro", All windows | Notice "Saved preset"; `browsecraft://sessions` lists "Lavoro · 2 windows, N tabs" (temporary tab not counted) | |
+| 10.2 | Close everything but one tab; palette `$lav` → Enter | Two new windows with their names, groups (collapsed), split pair, container tabs; only the shown tabs load | |
+| 10.3 | Palette `$lav` → Shift+Enter (or the *add to this window* row) | The preset's tabs are appended after the current ones; groups recreated; split only if the window had none | |
+| 10.4 | `browsecraft://sessions` → *Replace this window…* → confirm | The window's tabs close (Ctrl+Shift+T reopens them), the preset's tabs and window name take their place | |
+| 10.5 | Delete the container used by a preset tab, open the preset | The tab opens without container; notice says so | |
+| 10.6 | Sessions page: rename, ↑/↓, *Update…* (confirm), *Delete…* (confirm), Export, Import the exported file | Each change persists across restarts; import adds "Lavoro (2)" | |
+| 10.7 | Tab strip `▾` menu → *Open preset in new window ▸* | The preset opens in new windows | |
+| 10.8 | Settings → On startup: *Open a preset* → pick "Lavoro"; restart; delete it; restart | The preset opens; after deleting, the previous session opens with a notice | |
+| 10.9 | On startup: *Ask every time*; restart; try *Previous session*, a preset, *Blank page* | The chooser shows; each choice replaces the chooser tab (previous session's other windows open too) | |
+| 10.10 | `browsecraft --preset Lavoro`; `browsecraft --preset Nope`; `browsecraft --preset Lavoro example.com` | The preset; the previous session with a notice; only example.com | |
+| 10.11 | `browsecraft ctl sessions.list`; `sessions.save {"name":"X","scope":"all"}`; `sessions.open {"name":"x","window":"current"}`; with `allow_navigation = false` | Lists; saves (taken name is an error); opens; open/save refused | |
