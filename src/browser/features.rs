@@ -536,7 +536,11 @@ impl Browser {
             SavePage => self.save_page(),
             ViewSource => self.view_source(),
             Screenshot => self.save_screenshot(),
-            ScreenshotFullPage => self.full_page_screenshot(),
+            ScreenshotFullPage => {
+                if !self.webkit_screenshot(true) {
+                    self.set_notice("Full-page screenshots are not available yet on this platform");
+                }
+            }
             StartRecording => self.start_recording(),
             StopRecording => self.stop_recording(),
             DevTools => self.open_devtools(),
@@ -670,13 +674,16 @@ impl Browser {
         self.set_notice("Saving pages is not available yet on this platform");
     }
 
-    /// The whole document as a PNG in Pictures (WebKitGTK snapshot).
-    fn full_page_screenshot(&mut self) {
+    /// The visible page or the whole document as a PNG in Pictures, rendered
+    /// by WebKitGTK (Linux). False when this platform cannot.
+    pub(super) fn webkit_screenshot(&mut self, full_page: bool) -> bool {
         #[cfg(target_os = "linux")]
-        if let Some(WebPane::Wry(wv)) = &self.webview {
+        if self.web_page
+            && let Some(WebPane::Wry(wv)) = &self.webview
+        {
             use wry::WebViewExtUnix as _;
             let proxy = self.proxy.clone();
-            crate::headless_webkit::snapshot_png(&wv.webview(), true, move |r| {
+            crate::headless_webkit::snapshot_png(&wv.webview(), full_page, move |r| {
                 let notice = match r.and_then(|(png, _, _)| {
                     let dir = pictures_dir()?;
                     let secs = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs());
@@ -684,15 +691,18 @@ impl Browser {
                     std::io::Write::write_all(&mut file, &png).map_err(|e| e.to_string())?;
                     Ok(path)
                 }) {
-                    Ok(path) => format!("Full-page screenshot saved to {}", path.display()),
+                    Ok(path) => format!("Screenshot saved to {}", path.display()),
                     Err(e) => format!("Screenshot failed: {e}"),
                 };
                 let _ = proxy.send_event(UserMessage::Notice(notice));
             });
-            self.set_notice("Capturing the whole page…");
-            return;
+            if full_page {
+                self.set_notice("Capturing the whole page…");
+            }
+            return true;
         }
-        self.set_notice("Full-page screenshots are not available yet on this platform");
+        let _ = full_page;
+        false
     }
 
     fn start_recording(&mut self) {

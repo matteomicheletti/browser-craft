@@ -5410,6 +5410,11 @@ impl Browser {
             return;
         }
         self.last_screenshot = Some(Instant::now());
+        // WebKitGTK renders its own snapshot: the native page cannot be
+        // read back from the window on Linux.
+        if self.webkit_screenshot(false) {
+            return;
+        }
         match self.capture_png() {
             Ok(path) => self.set_notice(format!("Screenshot saved to {}", path.display())),
             Err(e) => self.set_notice(format!("Screenshot failed: {e}")),
