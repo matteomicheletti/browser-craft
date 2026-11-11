@@ -33,6 +33,10 @@ base64 = "0.22"
 winit = "0.30"
 wry = { version = "0.55", features = ["devtools"] }
 psl = "2"
+# Shared by the fork's modules (settings, plugin manifests, automation API).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
 
 # Release builds abort on panic, so production code may not unwrap or
 # expect; the few proven invariants say why in an `allow` attribute. Tests
