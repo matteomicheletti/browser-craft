@@ -113,10 +113,24 @@ pub fn handle(query: &str, body: Option<&str>) -> Option<PageAction> {
 
 fn export() -> Result<String, String> {
     let dir = crate::import::downloads_dir()?;
-    let secs = presets::now();
-    let path = dir.join(format!("browsecraft-presets-{secs}.json"));
-    crate::storage::write_private(&path, presets::store().export().as_bytes()).map_err(|e| format!("Could not write {}: {e}", path.display()))?;
+    let path = export_to(&dir, presets::now(), &presets::store().export())?;
     Ok(format!("Presets exported to {}", path.display()))
+}
+
+/// Writes an export into `dir` (Downloads, or the home folder) as a new
+/// owner-only file. Never `write_private`: that would make the folder
+/// itself owner-only.
+fn export_to(dir: &std::path::Path, secs: u64, text: &str) -> Result<std::path::PathBuf, String> {
+    for n in 1..100 {
+        let name = if n == 1 { format!("browsecraft-presets-{secs}.json") } else { format!("browsecraft-presets-{secs}-{n}.json") };
+        let path = dir.join(name);
+        match crate::storage::create_new(&path, text.as_bytes(), true) {
+            Ok(()) => return Ok(path),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("Could not write {}: {e}", path.display())),
+        }
+    }
+    Err("Too many preset exports this second".into())
 }
 
 fn import(file: &str) -> Result<String, String> {
@@ -314,6 +328,26 @@ mod tests {
             ..presets::PresetWindow::default()
         };
         presets::modify(|s| s.add(name, vec![w], 1)).unwrap()
+    }
+
+    #[test]
+    fn presets_export_leaves_the_folder_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let a = export_to(dir.path(), 7, "{}").unwrap();
+        let b = export_to(dir.path(), 7, "{}").unwrap();
+        assert_ne!(a, b, "an earlier export is kept");
+        assert_eq!(std::fs::read_to_string(&a).unwrap(), "{}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(dir.path()).unwrap().permissions().mode() & 0o777, 0o755, "the folder keeps its mode");
+            assert_eq!(std::fs::metadata(&a).unwrap().permissions().mode() & 0o077, 0, "the file is owner-only");
+        }
     }
 
     #[test]
