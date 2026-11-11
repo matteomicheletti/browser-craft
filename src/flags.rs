@@ -51,11 +51,20 @@ pub struct Flags {
     /// Use the desktop's own title bar and window frame instead of the
     /// browser's (tabs in the title bar, window buttons on the right).
     pub system_titlebar: bool,
+    /// Resting the pointer on a tab shows a card with its title, site and
+    /// a picture of the page (Chrome's hover cards).
+    pub hover_cards: bool,
+    /// The hover card shows the page's picture.
+    pub hover_card_images: bool,
+    /// How long the pointer rests on a tab before the first card shows.
+    pub hover_card_delay_ms: u32,
 }
 
 /// The choices offered for `suspend_after_min` and `max_live_tabs`.
 pub const SUSPEND_CHOICES: [u32; 5] = [0, 5, 15, 30, 60];
 pub const LIVE_TAB_CHOICES: [u32; 4] = [4, 8, 16, 32];
+/// The choices offered for `hover_card_delay_ms` (Chrome waits about 0.5 s).
+pub const HOVER_DELAY_CHOICES: [u32; 5] = [0, 250, 500, 800, 1200];
 
 impl Default for Flags {
     fn default() -> Self {
@@ -72,6 +81,9 @@ const DEFAULT_FLAGS: Flags = Flags {
     max_live_tabs: 16,
     restore_tabs: true,
     system_titlebar: false,
+    hover_cards: true,
+    hover_card_images: true,
+    hover_card_delay_ms: 500,
 };
 
 static FLAGS: RwLock<Flags> = RwLock::new(DEFAULT_FLAGS);
@@ -126,6 +138,17 @@ fn load_from_mut(flags: &mut Flags) {
             ("restore-tabs", "off") => flags.restore_tabs = false,
             ("system-titlebar", "on") => flags.system_titlebar = true,
             ("system-titlebar", "off") => flags.system_titlebar = false,
+            ("hover-cards", "on") => flags.hover_cards = true,
+            ("hover-cards", "off") => flags.hover_cards = false,
+            ("hover-card-images", "on") => flags.hover_card_images = true,
+            ("hover-card-images", "off") => flags.hover_card_images = false,
+            ("hover-card-delay", v) => {
+                if let Ok(n) = v.parse::<u32>()
+                    && n <= 5000
+                {
+                    flags.hover_card_delay_ms = n;
+                }
+            }
             _ => {}
         }
     }
@@ -154,6 +177,9 @@ fn save_to(path: &Path, flags: &Flags) -> std::io::Result<()> {
     text += &format!("max-live-tabs={}\n", flags.max_live_tabs);
     text += if flags.restore_tabs { "restore-tabs=on\n" } else { "restore-tabs=off\n" };
     text += if flags.system_titlebar { "system-titlebar=on\n" } else { "system-titlebar=off\n" };
+    text += if flags.hover_cards { "hover-cards=on\n" } else { "hover-cards=off\n" };
+    text += if flags.hover_card_images { "hover-card-images=on\n" } else { "hover-card-images=off\n" };
+    text += &format!("hover-card-delay={}\n", flags.hover_card_delay_ms);
     crate::storage::write_private(path, text.as_bytes())
 }
 
@@ -317,6 +343,22 @@ fn apply_query(pairs: impl Iterator<Item = (String, String)>) -> bool {
                 changed |= flags.system_titlebar;
                 flags.system_titlebar = false;
             }
+            ("hover-cards", v @ ("on" | "off")) => {
+                let on = v == "on";
+                changed |= flags.hover_cards != on;
+                flags.hover_cards = on;
+            }
+            ("hover-card-images", v @ ("on" | "off")) => {
+                let on = v == "on";
+                changed |= flags.hover_card_images != on;
+                flags.hover_card_images = on;
+            }
+            ("hover-card-delay", v) => {
+                if let Some(n) = v.parse::<u32>().ok().filter(|n| HOVER_DELAY_CHOICES.contains(n)) {
+                    changed |= flags.hover_card_delay_ms != n;
+                    flags.hover_card_delay_ms = n;
+                }
+            }
             _ => {}
         }
     }
@@ -418,10 +460,36 @@ pub fn page_html() -> String {
         flags.restore_tabs,
         &to("restore-tabs", if flags.restore_tabs { "off" } else { "on" }),
     );
+    let hover = internal::switch_row(
+        false,
+        "Tab hover cards",
+        "Rest the pointer on a tab to see its title, site and a picture of the page.",
+        flags.hover_cards,
+        &to("hover-cards", if flags.hover_cards { "off" } else { "on" }),
+    );
+    let hover_images = internal::switch_row(
+        false,
+        "Pictures in hover cards",
+        "Show a picture of the page in the card (taken when you leave the tab).",
+        flags.hover_card_images,
+        &to("hover-card-images", if flags.hover_card_images { "off" } else { "on" }),
+    );
+    let delay_labels = ["None", "0.25 s", "0.5 s", "0.8 s", "1.2 s"];
+    let delays: Vec<(&'static str, String, bool)> = HOVER_DELAY_CHOICES
+        .iter()
+        .zip(delay_labels)
+        .map(|(n, label)| (label, to("hover-card-delay", &n.to_string()), flags.hover_card_delay_ms == *n))
+        .collect();
+    let hover_delay = internal::segmented_row(
+        false,
+        "Hover card delay",
+        "How long the pointer rests on a tab before the first card shows; moving to the next tab is immediate.",
+        &delays,
+    );
     let body = format!(
         "<h1>Settings</h1><p class=\"sub\">Changes apply immediately.</p>{error}\
          <div class=\"card\"><h2>Appearance</h2>{appearance}{titlebar}</div>\
-         <div class=\"card\"><h2>Layout</h2>{layout}{bar}</div>\
+         <div class=\"card\"><h2>Layout</h2>{layout}{bar}{hover}{hover_images}{hover_delay}</div>\
          <div class=\"card\"><h2>Tabs and memory</h2>{suspend}{live}{restore}</div>\
          <div class=\"card\"><h2>Advanced</h2>{renderer}</div>\
          <div class=\"card\"><h2>Shortcuts to your data</h2>\
@@ -581,18 +649,20 @@ mod tests {
             chrome: Chrome::Egui,
             bookmarks_bar: false,
             restore_tabs: false,
+            hover_cards: false,
+            hover_card_images: false,
             ..Flags::default()
         }).unwrap();
         let html = page_html();
         assert!(html.contains("tabs-position=right\">Right"), "unselected links have no class");
         assert!(html.contains("class=\"on\" href=\"browsecraft://flags?token="));
-        assert_eq!(html.matches("class=\"on\"").count(), 4, "one selected option per control");
+        assert_eq!(html.matches("class=\"on\"").count(), 5, "one selected option per control");
         assert_eq!(html.matches("class=\"theme on\"").count(), 1, "one theme selected");
         assert!(html.contains("theme=sand"), "every theme is offered");
         // The bookmarks-bar switch is off and offers to turn it on.
         assert!(html.contains("bookmarks-bar=on"));
         assert!(!html.contains("class=\"sw on\""));
-        set(Flags { bookmarks_bar: true, ..Flags::default() }).unwrap();
+        set(Flags { bookmarks_bar: true, hover_cards: false, hover_card_images: false, ..Flags::default() }).unwrap();
         assert!(page_html().contains("class=\"sw on\""));
         set(before).unwrap();
     }
@@ -636,6 +706,26 @@ mod tests {
         load_from_mut(&mut flags);
         assert_eq!(flags.tabs_position, TabsPosition::Left);
         assert_eq!((flags.suspend_after_min, flags.max_live_tabs, flags.restore_tabs), (5, 4, false));
+        set(before).unwrap();
+    }
+
+    #[test]
+    fn hover_card_flags_round_trip_and_validate() {
+        let _guard = SERIAL.lock().unwrap();
+        let before = get();
+        set(Flags::default()).unwrap();
+        assert!(get().hover_cards && get().hover_card_images, "hover cards with pictures by default");
+        assert_eq!(get().hover_card_delay_ms, 500, "Chrome's half second");
+        let pairs = vec![
+            ("hover-cards".into(), "off".into()),
+            ("hover-card-images".into(), "off".into()),
+            ("hover-card-delay".into(), "250".into()),
+        ];
+        assert!(apply_query(pairs.into_iter()));
+        assert!(!apply_query(vec![("hover-card-delay".into(), "7".into())].into_iter()), "only the offered delays");
+        let mut flags = Flags::default();
+        load_from_mut(&mut flags);
+        assert_eq!((flags.hover_cards, flags.hover_card_images, flags.hover_card_delay_ms), (false, false, 250));
         set(before).unwrap();
     }
 
