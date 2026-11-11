@@ -303,6 +303,9 @@ pub struct CardWindow {
     image: Option<((u64, u64, u32), Image)>,
     /// The last frame, to draw again on expose.
     last: Option<(u32, u32, Vec<u32>)>,
+    /// What the last frame was drawn from (content, anchor, placement,
+    /// colours, scale, window size), to skip drawing it again.
+    drawn: Option<String>,
 }
 
 #[cfg(target_os = "linux")]
@@ -323,13 +326,21 @@ impl CardWindow {
         let window = std::sync::Arc::new(event_loop.create_window(attrs).ok()?);
         let context = softbuffer::Context::new(window.clone()).ok()?;
         let surface = softbuffer::Surface::new(&context, window.clone()).ok()?;
-        Some(CardWindow { window, surface, _context: context, shown: None, visible: false, image: None, last: None })
+        Some(CardWindow { window, surface, _context: context, shown: None, visible: false, image: None, last: None, drawn: None })
     }
 
     /// Shows `content` at `anchor` (parent pixels). Draws only when it
     /// changed; raises the window above the web views every time.
     #[allow(clippy::too_many_arguments)]
     pub fn show(&mut self, fonts: &Fonts, content: CardContent, thumb: Option<&crate::thumbnails::Thumb>, anchor: Rect, sidebar: Option<bool>, c: CardColors, scale: f32, window_size: (u32, u32)) {
+        let key = format!(
+            "{content:?}|{:?}|{sidebar:?}|{:?}|{scale}|{window_size:?}",
+            (anchor.x, anchor.y, anchor.w, anchor.h),
+            (c.bg, c.border, c.text, c.muted, c.image_bg)
+        );
+        if self.visible && self.drawn.as_deref() == Some(key.as_str()) {
+            return;
+        }
         let width = (CARD_W * scale).round() as u32;
         let image = match thumb {
             Some(t) => {
@@ -354,9 +365,11 @@ impl CardWindow {
             self.window.set_visible(true);
             self.visible = true;
         }
+        // GTK raises a web view's window when it shows it: on top again.
         super::x11::raise(&self.window);
         // The window may be mapped or resized after this: draw again then.
         self.last = Some((w, h, pixels));
+        self.drawn = Some(key);
     }
 
     /// Paints `pixels` (`w × h`, 0RGB) into the window.
@@ -384,6 +397,7 @@ impl CardWindow {
         if self.visible {
             self.window.set_visible(false);
             self.visible = false;
+            self.drawn = None;
         }
     }
 }
@@ -473,6 +487,14 @@ mod tests {
 // ---- the window side ----
 
 impl super::Browser {
+    /// A web view was just shown (GTK raised it): the card on top again.
+    pub(super) fn raise_hover_card(&self) {
+        #[cfg(target_os = "linux")]
+        if let Some(card) = self.card.as_ref().filter(|c| c.visible) {
+            super::x11::raise(&card.window);
+        }
+    }
+
     pub(super) fn hide_hover_card(&mut self) {
         #[cfg(target_os = "linux")]
         if let Some(card) = &mut self.card {
@@ -485,8 +507,9 @@ impl super::Browser {
     /// sidebar on the left (`Some(true)`) or the right.
     pub(super) fn update_hover_card(&mut self, ppp: f32, sidebar: Option<bool>) {
         let f = crate::flags::get();
-        let focused = self.gfx.as_ref().is_some_and(|g| g.window.has_focus()) || cfg!(debug_assertions);
-        let blocked = !f.hover_cards || self.egui_popup_open || self.overview.open || self.strip_drag.is_some() || self.web_fullscreen || !focused;
+        // Not gated on the window's focus: winit reports the window as
+        // unfocused while the keyboard is in the page (a child window).
+        let blocked = !f.hover_cards || self.egui_popup_open || self.overview.open || self.strip_drag.is_some() || self.web_fullscreen;
         let hovered = if blocked { None } else { self.hover_anchor.map(|(id, _)| id) };
         let delay = std::time::Duration::from_millis(u64::from(f.hover_card_delay_ms));
         let shown = self.hover.update(hovered, Instant::now(), delay);

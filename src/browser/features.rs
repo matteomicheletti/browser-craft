@@ -906,13 +906,22 @@ impl Browser {
                 if s.enabled {
                     #[cfg(unix)]
                     if let Some(h) = &self.feat.automation {
-                        h.set_settings(s);
+                        h.set_settings(s.clone());
                     }
                     if self.feat.automation.is_none() {
-                        self.start_automation();
+                        if self.shared.borrow().automation_on {
+                            // The server runs in another window: it takes them.
+                            self.app_requests.push(super::windows::AppRequest::AutomationSettings(s));
+                        } else {
+                            self.start_automation();
+                        }
                     }
                 } else {
                     // Dropping the handle stops the server and removes the socket.
+                    if self.feat.automation.is_none() && self.shared.borrow().automation_on {
+                        // It runs in another window.
+                        self.app_requests.push(super::windows::AppRequest::StopAutomation);
+                    }
                     self.feat.automation = None;
                     self.feat.automation_error = None;
                 }
@@ -925,6 +934,10 @@ impl Browser {
     /// for it. Requests reach the event loop as `UserMessage::Automation`.
     pub(super) fn start_automation(&mut self) {
         if self.feat.automation.is_some() || !self.feat.automation_settings.enabled {
+            return;
+        }
+        // One server for the application: another window may run it.
+        if self.shared.borrow().automation_on {
             return;
         }
         let proxy = std::sync::Mutex::new(self.proxy.clone());

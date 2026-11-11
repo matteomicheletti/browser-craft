@@ -3099,7 +3099,12 @@ impl Browser {
         let Some(i) = self.tabs.iter().position(|t| t.id == id) else {
             return; // a closed tab
         };
-        if matches!(&message, TabMessage::Load(url) if !url.is_empty() && url != "about:blank") {
+        // A background page that loaded: its picture, unless it has one
+        // taken while it was on screen (a hidden page may not be fully
+        // painted, e.g. by dark mode, which waits for animation frames).
+        if matches!(&message, TabMessage::Load(url) if !url.is_empty() && url != "about:blank")
+            && !self.shared.borrow().thumbs.contains(id)
+        {
             self.schedule_thumbnail(id);
         }
         match message {
@@ -4180,6 +4185,7 @@ impl Browser {
             self.web_visible = visible;
             if visible && cfg!(target_os = "linux") {
                 self.web_bounds = None;
+                self.raise_hover_card();
             }
         }
         if visible && self.web_bounds != Some(bounds) {
@@ -5875,7 +5881,11 @@ impl Browser {
         let maximized = self.maximized;
         let edge = if titlebar && !maximized { titlebar::RESIZE_EDGE } else { 0.0 };
         let mut win_ops: Vec<WindowOp> = Vec::new();
-        // The tab overview covers the whole window (the web views hide).
+        // The tab overview covers the whole window (the web views hide);
+        // its picture textures go when it closes.
+        if !self.overview.open && !self.thumb_tex.is_empty() {
+            self.thumb_tex.clear();
+        }
         if self.overview.open {
             self.overview_frame(ui, &c, titlebar, maximized, edge);
             return;
@@ -6914,6 +6924,8 @@ impl Browser {
                     self.overview.selected = n.parse::<usize>().ok().map(|i| self.tab_id_at(i));
                 } else if let Some(i) = other.strip_prefix("hover:") {
                     self.hover_force = i.parse().ok();
+                } else if let Some(id) = other.strip_prefix("cmd:").and_then(crate::commands::from_key) {
+                    self.run_command(id);
                 } else if let Some(name) = other.strip_prefix("name:") {
                     self.set_window_name(name);
                 } else if let Some(url) = other.strip_prefix("open:") {

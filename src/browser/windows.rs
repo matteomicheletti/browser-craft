@@ -128,6 +128,10 @@ pub(super) enum AppRequest {
     DropTab { tab: u64, at: (f64, f64) },
     /// Drop the data stores no tab in any window uses.
     ReleaseContexts,
+    /// Automation was turned off in a window that does not run the server.
+    StopAutomation,
+    /// New automation settings from a window that does not run the server.
+    AutomationSettings(crate::automation::Settings),
 }
 
 /// How a window starts.
@@ -204,6 +208,27 @@ pub(super) fn reordered(order: &[u64], id: u64, to: usize) -> Vec<u64> {
     out
 }
 
+/// The tab that becomes active when the active tab `i` of `len` leaves the
+/// window: its split partner, else the next tab, else the previous one.
+pub(super) fn successor(i: usize, len: usize, partner: Option<usize>) -> Option<usize> {
+    if len < 2 {
+        return None;
+    }
+    partner.filter(|p| *p != i && *p < len).or(Some(if i + 1 < len { i + 1 } else { i.saturating_sub(1) }))
+}
+
+/// Where a tab arriving in a window of `len` tabs goes: `index`, or the end.
+pub(super) fn insert_index(index: Option<usize>, len: usize) -> usize {
+    index.unwrap_or(len).min(len)
+}
+
+/// A tab leaving its window leaves its group (an emptied group goes) and the
+/// split view (which ends). Returns the split that remains.
+pub(super) fn leave_layout(groups: &mut crate::tab_groups::TabGroups, split: Option<crate::split::Split>, tab: u64) -> Option<crate::split::Split> {
+    groups.forget_tab(tab);
+    split.and_then(|s| s.after_close(tab))
+}
+
 /// The window entries of a session file: `windows`, or the root itself in
 /// files from before multiple windows.
 pub(super) fn session_windows(text: &str) -> Vec<Value> {
@@ -239,6 +264,10 @@ pub struct App {
     saved_session: String,
     last_save: Instant,
     quit: bool,
+    /// Closed windows, hidden, dropped a moment later: destroying a window
+    /// that still has the X focus makes winit fail on the focus-out event
+    /// that follows (BadWindow in its input method code).
+    dying: Vec<(Instant, Browser)>,
     /// Debug test hook steps for the application: (when, step).
     #[cfg(debug_assertions)]
     script: Vec<(Instant, String)>,
@@ -257,6 +286,7 @@ impl App {
             saved_session: String::new(),
             last_save: Instant::now(),
             quit: false,
+            dying: Vec::new(),
             #[cfg(debug_assertions)]
             script: Vec::new(),
         }
@@ -400,6 +430,22 @@ impl App {
             }
             AppRequest::DropTab { tab, at } => self.drop_tab(event_loop, from, tab, at),
             AppRequest::ReleaseContexts => self.release_contexts(),
+            AppRequest::AutomationSettings(s) => {
+                for b in &mut self.browsers {
+                    b.feat.automation_settings = s.clone();
+                    #[cfg(unix)]
+                    if let Some(h) = &b.feat.automation {
+                        h.set_settings(s.clone());
+                    }
+                }
+            }
+            AppRequest::StopAutomation => {
+                for b in &mut self.browsers {
+                    b.feat.automation = None;
+                    b.feat.automation_settings.enabled = false;
+                    b.request_redraw();
+                }
+            }
         }
     }
 
@@ -498,7 +544,12 @@ impl App {
         {
             super::features::hand_over_automation(&mut b, next);
         }
-        drop(b);
+        b.retire();
+        self.dying.push((Instant::now() + Duration::from_secs(1), b));
+        // The window the user goes back to.
+        if let Some(next) = self.browsers.first() {
+            next.focus_window();
+        }
         if self.last_active == key {
             self.last_active = self.browsers.first().map_or(0, |b| b.win_key);
         }
@@ -844,6 +895,10 @@ impl ApplicationHandler<UserMessage> for App {
                 sooner(t);
             }
         }
+        self.dying.retain(|(at, _)| *at > now);
+        if let Some(t) = self.dying.iter().map(|(at, _)| *at).min() {
+            sooner(t);
+        }
         #[cfg(debug_assertions)]
         if let Some(t) = self.run_script(event_loop, now) {
             sooner(t);
@@ -869,16 +924,17 @@ impl Browser {
         let i = self.tab_index(id)?;
         self.overview.hide();
         if i == self.active {
-            if self.tabs.len() > 1 {
-                let partner = self.split.and_then(|s| s.other(id)).and_then(|p| self.tab_index(p));
-                let next = partner.unwrap_or(if i + 1 < self.tabs.len() { i + 1 } else { i.saturating_sub(1) });
-                self.switch_tab(next);
-            } else {
-                self.park_active_tab();
+            let partner = self.split.and_then(|s| s.other(id)).and_then(|p| self.tab_index(p));
+            match successor(i, self.tabs.len(), partner) {
+                Some(next) => self.switch_tab(next),
+                None => self.park_active_tab(),
             }
         }
         let i = self.tab_index(id)?;
-        self.forget_closed_tab(id);
+        self.split = leave_layout(&mut self.groups, self.split, id);
+        if self.edit_group.is_some_and(|g| self.groups.get(g).is_none()) {
+            self.edit_group = None;
+        }
         let state = self.tabs.remove(i);
         if i < self.active {
             self.active -= 1;
@@ -916,7 +972,7 @@ impl Browser {
             self.feat.console.insert(id, log);
         }
         self.park_active_tab();
-        let at = index.unwrap_or(self.tabs.len()).min(self.tabs.len());
+        let at = insert_index(index, self.tabs.len());
         self.tabs.insert(at, state);
         if at <= self.active && self.tabs.len() > 1 {
             self.active += 1;
@@ -928,6 +984,23 @@ impl Browser {
             self.set_favicon(id, w, h, rgba.to_vec());
         }
         self.request_redraw();
+    }
+
+    /// A closed window before it is dropped: its pages and its card go,
+    /// and the window is hidden (so it loses the focus while it exists).
+    pub(super) fn retire(&mut self) {
+        #[cfg(target_os = "linux")]
+        {
+            self.card = None;
+        }
+        self.webview = None;
+        for t in &mut self.tabs {
+            t.view = None;
+        }
+        self.app_requests.clear();
+        if let Some(g) = &self.gfx {
+            g.window.set_visible(false);
+        }
     }
 
     /// The containers this window's tabs use.
@@ -1200,6 +1273,40 @@ mod tests {
         assert_eq!(reordered(&order, 4, 0), vec![4, 1, 2, 3]);
         assert_eq!(reordered(&order, 2, 2), vec![1, 2, 3, 4], "dropped on itself");
         assert_eq!(reordered(&order, 9, 0), vec![1, 2, 3, 4], "unknown tab");
+    }
+
+    #[test]
+    fn the_partner_or_a_neighbour_takes_over() {
+        assert_eq!(successor(0, 1, None), None, "the window empties");
+        assert_eq!(successor(1, 3, None), Some(2), "the next tab");
+        assert_eq!(successor(2, 3, None), Some(1), "the last tab: the previous");
+        assert_eq!(successor(0, 4, Some(3)), Some(3), "the split partner first");
+        assert_eq!(successor(0, 4, Some(9)), Some(1), "a stale partner is ignored");
+        assert_eq!(insert_index(None, 3), 3);
+        assert_eq!(insert_index(Some(1), 3), 1);
+        assert_eq!(insert_index(Some(7), 3), 3);
+    }
+
+    #[test]
+    fn a_moved_tab_leaves_its_group_and_the_split() {
+        let mut groups = crate::tab_groups::TabGroups::default();
+        let g = groups.create("Work", None);
+        let order = groups.add_tab(1, g, &[1, 2, 3]);
+        let order = groups.add_tab(2, g, &order);
+        let split = crate::split::Split::new(2, 3);
+        // Tab 3 leaves: the split ends, the group stays.
+        let rest = leave_layout(&mut groups, split, 3);
+        assert!(rest.is_none());
+        assert_eq!(groups.members(g, &order), vec![1, 2]);
+        // A tab outside the split keeps it.
+        let split = crate::split::Split::new(2, 3);
+        assert_eq!(leave_layout(&mut groups, split, 1), split);
+        assert_eq!(groups.members(g, &order), vec![2]);
+        // The group's last tab leaves: the group goes.
+        leave_layout(&mut groups, None, 2);
+        assert!(groups.get(g).is_none());
+        // The tab arrives in the other window with no group.
+        assert!(groups.group_of(2).is_none());
     }
 
     #[test]

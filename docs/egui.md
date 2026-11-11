@@ -139,7 +139,7 @@ egui. The adaptation of ArtCraft Launcher's widgets is credited in
 `name:<text>`, `rename-dialog`, `overview`, `overview-close`,
 `overview-query:<text>`, `overview-select:<tab index>`, `hover:<tab index>`,
 `hover-off`, `thumbs`, `open:<url>`, `switch:<i>`, `split:<i>`, `group:<i>`,
-`tabs-top|left|right`. A step acts on the first window unless it ends in
+`tabs-top|left|right`, `cmd:<palette command key>` (e.g. `cmd:reopen-tab`). A step acts on the first window unless it ends in
 `@N` (window N), e.g. `"5:name:Work@2"`.
 
 ## Several windows

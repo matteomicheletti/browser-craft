@@ -101,7 +101,6 @@ impl ThumbnailCache {
         self.entries.get(&tab).map(|(t, _)| t)
     }
 
-    #[cfg(test)]
     pub fn contains(&self, tab: u64) -> bool {
         self.entries.contains_key(&tab)
     }
