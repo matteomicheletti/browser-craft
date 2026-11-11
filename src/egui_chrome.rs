@@ -883,8 +883,12 @@ pub fn tab_strip(
         let available = (ui.available_width() - buttons_w).max(48.0);
         let shown = items.iter().filter(|i| matches!(i, StripItem::Tab(_))).count();
         let width = tab_width((available - chips_w).max(48.0), shown);
+        // Wide enough for every chip when they fit, so the strip never
+        // scrolls a tab out of sight for nothing.
+        let content_w = chips_w + shown as f32 * (width + 2.0);
         egui::ScrollArea::horizontal()
             .max_width(available)
+            .min_scrolled_width(content_w.min(available))
             .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
             .show(ui, |ui| {
                 ui.horizontal(|ui| {

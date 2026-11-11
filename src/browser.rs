@@ -3101,9 +3101,11 @@ impl Browser {
             s.set_ratio(ratio);
             Some(s)
         });
-        // The active tab's partner loads too: it is on screen.
+        // The active tab's partner loads too when it is a web page: it is
+        // on screen (an engine page shows a placeholder until clicked).
         if let Some(other) = self.split.and_then(|s| s.other(active_id))
             && let Some(j) = self.tabs.iter().position(|t| t.id == other)
+            && self.tabs[j].history.first().is_some_and(|e| request_in_webview(e.request.url()))
         {
             self.activate_pantry(j);
             self.park_active_tab();
