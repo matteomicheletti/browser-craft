@@ -572,8 +572,17 @@ fn login_url(text: &str) -> Option<String> {
 }
 
 pub(crate) fn copy_to_clipboard(text: &str) -> Result<(), String> {
+    // Never in the clipboard history: marked for BrowseCraft's own history
+    // and, through `x-kde-passwordManagerHint`, for other clipboard managers.
+    crate::plugins::clipboard_history::mark_sensitive(text);
     let mut clipboard = arboard::Clipboard::new().map_err(|e| format!("No clipboard: {e}"))?;
-    clipboard.set_text(text).map_err(|e| format!("Could not copy: {e}"))?;
+    let set = clipboard.set();
+    #[cfg(target_os = "linux")]
+    let set = {
+        use arboard::SetExtLinux as _;
+        set.exclude_from_history()
+    };
+    set.text(text).map_err(|e| format!("Could not copy: {e}"))?;
     schedule_clear(text);
     static CLEARER: Once = Once::new();
     CLEARER.call_once(|| {
