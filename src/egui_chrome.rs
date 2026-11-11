@@ -1630,8 +1630,8 @@ pub fn save_login_bar(
 
 /// A site's permission prompt: "<host> wants to use your microphone and
 /// camera" with Allow / Block and "Remember for this site". Returns the
-/// answer (`true`: allow).
-pub fn permission_bar(ui: &mut egui::Ui, c: &Colors, prompt: &crate::permissions::Prompt, remember: &mut bool) -> Option<bool> {
+/// answer (`true`: allow). Until `armed`, the buttons are shown disabled.
+pub fn permission_bar(ui: &mut egui::Ui, c: &Colors, prompt: &crate::permissions::Prompt, remember: &mut bool, armed: bool) -> Option<bool> {
     use crate::permissions::Kind;
     use egui_phosphor::regular as ph;
     let glyph = match prompt.kinds.first() {
@@ -1653,13 +1653,13 @@ pub fn permission_bar(ui: &mut egui::Ui, c: &Colors, prompt: &crate::permissions
             let block = egui::Button::new(egui::RichText::new("Block").size(12.5).color(c.text))
                 .fill(c.bar_bg)
                 .corner_radius(egui::CornerRadius::same(8));
-            if ui.add(block).clicked() {
+            if ui.add_enabled(armed, block).clicked() {
                 answer = Some(false);
             }
             let allow = egui::Button::new(egui::RichText::new("Allow").size(12.5).color(c.accent_text))
                 .fill(c.accent)
                 .corner_radius(egui::CornerRadius::same(8));
-            if ui.add(allow).clicked() {
+            if ui.add_enabled(armed, allow).clicked() {
                 answer = Some(true);
             }
             if prompt.rememberable() {

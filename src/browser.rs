@@ -361,6 +361,9 @@ enum Hit {
     Control(NodeId),
 }
 
+/// How long a new permission prompt's buttons ignore clicks.
+const PERMISSION_ARM: Duration = Duration::from_millis(600);
+
 /// What the bar under the toolbar shows for the active tab.
 enum SiteBar {
     Prompt(crate::permissions::Prompt),
@@ -603,6 +606,10 @@ pub struct Browser {
     /// Permission prompts (ids) whose "Remember for this site" the user
     /// unticked.
     perm_forget: std::collections::HashSet<u64>,
+    /// The permission prompt on screen and when it appeared: its buttons
+    /// wait `PERMISSION_ARM` so a click meant for the page cannot land on
+    /// a bar that just pushed the page down.
+    perm_shown: Option<(u64, Instant)>,
     favicons: HashMap<u64, egui::TextureHandle>,
     /// A snapshot of the page was requested and has not arrived yet.
     snapshot_pending: bool,
@@ -2347,6 +2354,7 @@ impl Browser {
             find: None,
             webrtc_notice: None,
             perm_forget: Default::default(),
+            perm_shown: None,
             favicons: HashMap::new(),
             snapshot_pending: false,
             extra_page_scripts: Vec::new(),
@@ -6519,9 +6527,21 @@ impl Browser {
                 .show(ui, |ui| {
                     match &bar {
                         SiteBar::Prompt(prompt) => {
+                            let now = Instant::now();
+                            let since = match self.perm_shown {
+                                Some((id, at)) if id == prompt.id => at,
+                                _ => {
+                                    self.perm_shown = Some((prompt.id, now));
+                                    now
+                                }
+                            };
+                            let wait = PERMISSION_ARM.saturating_sub(now.duration_since(since));
+                            if !wait.is_zero() {
+                                ui.ctx().request_repaint_after(wait);
+                            }
                             let mut remember = !self.perm_forget.contains(&prompt.id);
                             let was = remember;
-                            if let Some(allow) = egui_chrome::permission_bar(ui, &c, prompt, &mut remember) {
+                            if let Some(allow) = egui_chrome::permission_bar(ui, &c, prompt, &mut remember, wait.is_zero()) {
                                 actions.push(Action::Permission { id: prompt.id, allow, remember });
                             } else if remember != was {
                                 actions.push(Action::PermissionRemember(prompt.id, remember));
