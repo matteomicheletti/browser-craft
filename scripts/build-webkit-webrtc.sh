@@ -65,7 +65,24 @@ if (( avail_kb < 25 * 1024 * 1024 )); then
   exit 1
 fi
 
-sudo pacman -S --needed base-devel git gst-plugins-bad-libs gst-plugins-bad libnice libsrtp
+# Arch and Manjaro do not support partial upgrades: installing one package
+# from a newer repository than the rest of the system breaks dependencies
+# (e.g. gstreamer 1.28.7 against installed gst-* 1.28.6). Stop and ask for a
+# full upgrade first; the build also has to match the installed libraries.
+pending=$(pacman -Qu 2>/dev/null | wc -l)
+if (( pending > 0 )); then
+  echo "Your system has $pending pending updates. Update everything first, then run this again:" >&2
+  echo "  sudo pacman -Syu        (or: pamac upgrade)" >&2
+  echo "and reboot if the kernel or systemd were updated." >&2
+  exit 1
+fi
+
+# Install only what is missing; never upgrade packages that are already there.
+missing=$(pacman -T base-devel git gst-plugins-bad-libs gst-plugins-bad libnice libsrtp || true)
+if [[ -n $missing ]]; then
+  # shellcheck disable=SC2086 # one package name per word
+  sudo pacman -S --needed $missing
+fi
 
 dir=$(mktemp -d "$BUILD_ROOT/webkit2gtk-webrtc.XXXXXX")
 echo "Building in $dir"
