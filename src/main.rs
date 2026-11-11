@@ -8,6 +8,7 @@
 
 mod adblock;
 mod address;
+mod authenticator;
 mod bookmarks;
 mod browser;
 mod capture;
