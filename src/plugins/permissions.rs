@@ -157,7 +157,7 @@ pub fn check(granted: &[Requested], wire: &str) -> Result<(), String> {
     let m = method(wire).ok_or_else(|| format!("unknown API method \"{wire}\""))?;
     match m.needs {
         None => Ok(()),
-        Some(p) if granted.iter().any(|g| *g == Requested::Api(p)) => Ok(()),
+        Some(p) if granted.contains(&Requested::Api(p)) => Ok(()),
         Some(p) => Err(format!("permission \"{}\" is required for {}", p.name(), m.js)),
     }
 }

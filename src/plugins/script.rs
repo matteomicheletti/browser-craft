@@ -213,7 +213,7 @@ mod live {
         assert_eq!(f(2, "banner"), Value::Null, "strict CSP (no unsafe-eval) blocks plugin JS: documented limitation");
         assert!(f(4, "lineHeight").as_str().unwrap().starts_with("27.2"), "CSS still applies under a strict CSP");
         assert!(f(3, "lineHeight").as_str().unwrap().starts_with("27.2"), "CSS-only plugin applied");
-        assert_eq!(f(3, "banner").is_string(), true);
+        assert!(f(3, "banner").is_string());
         assert!(reg.storage_get("dev.browsecraft.examples.word-counter", "largest").unwrap()["words"].as_u64().unwrap() > 50, "storage via the bridge");
         assert!(bodies.iter().any(|b| b.contains("\"m\":\"storage.set\"")));
     }
