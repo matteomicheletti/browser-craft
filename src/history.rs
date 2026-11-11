@@ -941,7 +941,7 @@ pub fn page_html(query: &str, message: Option<&str>) -> String {
         }
         let title = if row.title.is_empty() { row.url.clone() } else { row.title.clone() };
         body.push_str(&format!(
-            "<div class=\"item\"><div class=\"ico\">{h:02}:{m:02}</div>\
+            "<div class=\"item\"><div class=\"ico\" style=\"width: 52px; font-size: 12px\">{h:02}:{m:02}</div>\
              <div class=\"main\"><a class=\"name\" href=\"{url}\">{title}</a><div class=\"url\">{url}</div></div>\
              <a class=\"btn ghost\" href=\"browsecraft://history?token={token}&amp;remove={enc}\">Remove</a></div>",
             h = secs / 3600,

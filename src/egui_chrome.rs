@@ -319,6 +319,10 @@ pub enum BarEvent {
     ManageFolder(u64),
 }
 
+/// The debug window script opens this bar folder's menu (its id; 0: none).
+#[cfg(debug_assertions)]
+pub static OPEN_BAR_FOLDER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 /// Entries listed in one folder menu of the bar; the rest are on the
 /// bookmarks page.
 const FOLDER_MENU_MAX: usize = 300;
@@ -420,6 +424,13 @@ pub fn bookmarks_bar(ui: &mut egui::Ui, c: &Colors, items: &[crate::bookmarks::N
             match &item.url {
                 None => {
                     // A folder opens as a menu under its chip.
+                    #[cfg(debug_assertions)]
+                    if OPEN_BAR_FOLDER
+                        .compare_exchange(item.id, 0, std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed)
+                        .is_ok()
+                    {
+                        egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&resp));
+                    }
                     egui::Popup::menu(&resp).show(|ui| folder_menu(ui, c, item, &mut events));
                     resp.context_menu(|ui| {
                         if menu_item(ui, c, crate::icons::BOOKMARKS, "Open in the bookmarks manager").clicked() {

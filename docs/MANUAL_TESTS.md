@@ -201,3 +201,17 @@ between windows that a window manager places, on one or two monitors.
 | 8.17 | Tabs in the left sidebar, hover a row | The card appears to the right of the sidebar | OK 2026-11-11 (hook) |
 | 8.18 | `browsecraft://flags`: hover cards off; pictures off; delay 0.25 s / 1.2 s | No card; card without picture; the delay changes | |
 | 8.19 | `browsecraft ctl tabs.list` with two windows; `tabs.open` with `"window": 2` | Each tab has `window: {id, name}`, a `windows` list; the tab opens in window 2; an unknown window id is an error | OK 2026-11-11 |
+
+## 9. Import, history and bookmark folders (wave 5)
+
+| # | Steps | Expected | Result |
+|---|---|---|---|
+| 9.1 | `browsecraft import --list` with Firefox and Chrome installed | JSON with each profile and its counts | OK 2026-11-11 (Firefox default-release, Chrome, Chrome Dev) |
+| 9.2 | `browsecraft import firefox --dry-run`, then without `--dry-run`, then again | Same counts; the first run adds, the second adds nothing; source files untouched | OK 2026-11-11 (temp profile) |
+| 9.3 | Run 9.2 while BrowseCraft is open | Bookmarks bar and pages update within ~2 s | |
+| 9.4 | `browsecraft://import`: pick a profile, Import; then *Undo last import* | Progress, then a summary; undo removes it | |
+| 9.5 | Drop a `bookmarks.html` on the window; export from the palette | Import page opens with the path; `~/Downloads/bookmarks-<date>.html` written | |
+| 9.6 | Bookmarks bar folder click | Menu with subfolders as submenus | OK 2026-11-11 (hook `bar-folder:`) |
+| 9.7 | Browse in a temporary container; open `browsecraft://history` | Those pages are not listed | |
+| 9.8 | History page: search, *Older*, *Remove*, *Last hour*; restart | Changes persist across restarts | |
+

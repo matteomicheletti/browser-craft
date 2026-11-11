@@ -157,7 +157,9 @@ pub fn main(args: &[String]) -> i32 {
         }
     };
     let report = super::run(&source, &a.options, Arc::new(|text| eprintln!("{text}")));
-    crate::history::flush();
+    if !a.options.dry_run {
+        crate::history::flush();
+    }
     let code = print_json(&report);
     if report.errors.is_empty() { code } else { 1 }
 }

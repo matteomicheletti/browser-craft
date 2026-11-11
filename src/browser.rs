@@ -7005,6 +7005,13 @@ impl Browser {
                     self.run_command(id);
                 } else if let Some(name) = other.strip_prefix("name:") {
                     self.set_window_name(name);
+                } else if let Some(n) = other.strip_prefix("bar-folder:").and_then(|n| n.parse::<usize>().ok()) {
+                    // Opens the menu of the bar's n-th folder.
+                    let tree = bookmarks::snapshot();
+                    if let Some(f) = tree.bar.children.iter().filter(|c| c.is_folder()).nth(n) {
+                        egui_chrome::OPEN_BAR_FOLDER.store(f.id, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    self.request_redraw();
                 } else if let Some(q) = other.strip_prefix("palette:") {
                     self.open_palette_with(q);
                 } else if let Some(url) = other.strip_prefix("open:") {

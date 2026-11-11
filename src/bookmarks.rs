@@ -1050,7 +1050,7 @@ pub fn page_html(query: &str) -> String {
             .find(|(id, _, _)| tree.find(*id).is_some_and(|f| f.children.iter().any(|c| c.id == folder_id)))
             .map_or(BAR_ID, |(id, _, _)| id);
         body.push_str(&format!(
-            "<div class=\"item first\"><div class=\"ico\">\u{2191}</div><div class=\"main\"><a class=\"name\" href=\"{}\">Up</a></div>\
+            "<div class=\"item first\"><div class=\"ico\">\u{ab}</div><div class=\"main\"><a class=\"name\" href=\"{}\">Up</a></div>\
              <a class=\"btn ghost\" href=\"browsecraft://bookmarks?folder={folder_id}&amp;picking={folder_id}\">Move folder</a> \
              <a class=\"btn danger\" href=\"browsecraft://bookmarks?token={token}&amp;folder={parent}&amp;delete={folder_id}\">Delete folder</a></div>",
             folder_href(parent)
@@ -1059,7 +1059,7 @@ pub fn page_html(query: &str) -> String {
     }
     for c in folder.children.iter().filter(|c| c.is_folder()) {
         body.push_str(&format!(
-            "<div class=\"item{}\"><div class=\"ico\">\u{25b8}</div><div class=\"main\"><a class=\"name\" href=\"{}\">{}</a>\
+            "<div class=\"item{}\"><div class=\"ico\">\u{bb}</div><div class=\"main\"><a class=\"name\" href=\"{}\">{}</a>\
              <div class=\"url\">Folder, {} bookmarks</div></div></div>",
             if first { " first" } else { "" },
             folder_href(c.id),
