@@ -62,6 +62,9 @@ pub struct Flags {
     pub history_days: u32,
     /// The most visits kept; the oldest go first (0: no cap).
     pub history_max_visits: u32,
+    /// The new-tab page offers to import from another browser (until
+    /// dismissed, and only while there are no bookmarks).
+    pub import_hint: bool,
 }
 
 /// The choices offered for `suspend_after_min` and `max_live_tabs`.
@@ -94,6 +97,7 @@ const DEFAULT_FLAGS: Flags = Flags {
     hover_card_delay_ms: 500,
     history_days: 365,
     history_max_visits: 500_000,
+    import_hint: true,
 };
 
 static FLAGS: RwLock<Flags> = RwLock::new(DEFAULT_FLAGS);
@@ -171,6 +175,8 @@ fn load_from_mut(flags: &mut Flags) {
                     flags.history_max_visits = n;
                 }
             }
+            ("import-hint", "on") => flags.import_hint = true,
+            ("import-hint", "off") => flags.import_hint = false,
             _ => {}
         }
     }
@@ -204,6 +210,7 @@ fn save_to(path: &Path, flags: &Flags) -> std::io::Result<()> {
     text += &format!("hover-card-delay={}\n", flags.hover_card_delay_ms);
     text += &format!("history-days={}\n", flags.history_days);
     text += &format!("history-max-visits={}\n", flags.history_max_visits);
+    text += if flags.import_hint { "import-hint=on\n" } else { "import-hint=off\n" };
     crate::storage::write_private(path, text.as_bytes())
 }
 

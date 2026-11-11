@@ -43,6 +43,10 @@ type AutomationHandle = crate::automation::Handle;
 #[cfg(not(unix))]
 type AutomationHandle = ();
 
+/// The palette's bookmark and history candidates for a (query, bookmarks
+/// generation).
+pub(super) type PaletteLinks = ((String, u64), Vec<palette::LinkItem>, Vec<palette::LinkItem>);
+
 /// A `page.*` automation request answered by scripts in a tab.
 pub(super) struct PageJob {
     pub job: crate::automation::scripts::PageJob,
@@ -105,7 +109,7 @@ pub(super) struct Features {
     pub host: super::plugins_host::HostState,
     /// The palette's bookmark and history candidates for (query,
     /// bookmarks generation).
-    pub palette_links: Option<((String, u64), Vec<palette::LinkItem>, Vec<palette::LinkItem>)>,
+    pub palette_links: Option<PaletteLinks>,
 }
 
 impl Features {
@@ -528,6 +532,16 @@ impl Browser {
         }
     }
 
+    /// Opens the palette with `query` typed (the debug window script).
+    #[cfg(debug_assertions)]
+    pub(super) fn open_palette_with(&mut self, query: &str) {
+        if !self.feat.palette.is_open() {
+            self.toggle_palette();
+        }
+        self.feat.palette.open_with(query);
+        self.request_redraw();
+    }
+
     pub(super) fn palette_outcome(&mut self, outcome: PaletteOutcome) {
         match outcome {
             PaletteOutcome::Run(id) => self.run_command(id),
@@ -673,6 +687,11 @@ impl Browser {
             BookmarksPage => self.load(Request::Get("browsecraft://bookmarks".into()), true),
             History => self.open_history_page(),
             ClearBrowsingData => self.clear_browsing_data(),
+            ImportData => self.load(Request::Get("browsecraft://import".into()), true),
+            ExportBookmarks => match crate::import::downloads_dir().and_then(|dir| crate::import::export_to(&dir)) {
+                Ok(path) => self.set_notice_long(format!("Bookmarks exported to {}", path.display())),
+                Err(e) => self.set_notice_long(e),
+            },
             Containers => self.open_drawer(Drawer::Containers),
             Authenticator => {
                 if plugins::is_enabled("builtin.authenticator") {

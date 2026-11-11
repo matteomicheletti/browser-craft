@@ -668,6 +668,10 @@ static STORE: LazyLock<RwLock<Store>> = LazyLock::new(|| {
 });
 static FORM_TOKEN: FormToken = FormToken::new();
 
+/// Tests that use the process-wide store (here and in `import`) take this.
+#[cfg(test)]
+pub static TEST_SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 fn file_path() -> Result<PathBuf, String> {
     crate::storage::config_file(FILE_NAME)
 }
@@ -815,6 +819,7 @@ pub fn toggle(title: &str, url: &str) -> bool {
 }
 
 /// Every bookmark with its folder path.
+#[cfg(test)]
 pub fn entries() -> Vec<Entry> {
     snapshot().entries()
 }
@@ -1101,8 +1106,7 @@ fn path_contains(node: &Node, id: u64) -> bool {
 mod tests {
     use super::*;
 
-    /// The store is a process global and persists to a file.
-    static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    use super::TEST_SERIAL as SERIAL;
 
     fn reset() {
         install(Tree::default(), None, None);
@@ -1121,7 +1125,7 @@ mod tests {
 
     #[test]
     fn add_remove_toggle_and_dedup() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         reset();
         assert!(add("Example", "https://example.com/"));
         assert!(!add("Again", "https://example.com/#top"), "fragment is the same page");
@@ -1137,7 +1141,7 @@ mod tests {
 
     #[test]
     fn only_web_pages_can_be_bookmarked() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         reset();
         for url in ["about:home", "browsecraft://flags", "javascript:alert(1)", "file:///etc/passwd"] {
             assert!(!add("x", url), "{url}");
@@ -1175,7 +1179,7 @@ mod tests {
 
     #[test]
     fn migrates_bookmarks_txt_into_the_bar() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         reset();
         let old = crate::storage::config_file(OLD_FILE_NAME).unwrap();
         crate::storage::write_private(&old, b"https://a.test/\tA\nnot a bookmark\njavascript:x\tbad\nhttps://a.test/#f\tdup\nhttps://b.test/\tB\n")
@@ -1312,7 +1316,7 @@ mod tests {
 
     #[test]
     fn outside_changes_are_noticed() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         reset();
         assert!(add("Here", "https://here.test/"));
         assert!(!reload_if_changed());
@@ -1335,7 +1339,7 @@ mod tests {
 
     #[test]
     fn only_the_rendered_page_can_change() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         reset();
         assert!(add("Keep", "https://keep.test/?a=1&b=2"));
         let id = entries()[0].id;
@@ -1361,7 +1365,7 @@ mod tests {
 
     #[test]
     fn page_escapes_markup_and_shows_folders() {
-        let _g = SERIAL.lock().unwrap();
+        let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
         reset();
         assert!(add("<script>x</script>", "https://x.test/?q=\"a\""));
         update(|t| t.create_folder(BAR_ID, "Sub<b>").ok()).unwrap();

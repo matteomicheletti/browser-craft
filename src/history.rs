@@ -738,6 +738,7 @@ pub fn undo_import(id: i64) -> Result<usize, String> {
 }
 
 /// (addresses, visits).
+#[cfg(test)]
 pub fn counts() -> (i64, i64) {
     with_reader(|db| db.counts()).unwrap_or((0, 0))
 }

@@ -251,6 +251,9 @@ pub(super) fn session_text(windows: &[Value]) -> String {
 }
 
 /// The application: every browser window.
+/// How often bookmarks.json is checked for changes by other processes.
+const BOOKMARKS_POLL: Duration = Duration::from_secs(2);
+
 pub struct App {
     proxy: EventLoopProxy<UserMessage>,
     shared: Rc<RefCell<Shared>>,
@@ -268,6 +271,9 @@ pub struct App {
     /// that still has the X focus makes winit fail on the focus-out event
     /// that follows (BadWindow in its input method code).
     dying: Vec<(Instant, Browser)>,
+    /// When bookmarks.json was last checked for changes made by another
+    /// process (`browsecraft import`).
+    bookmarks_checked: Instant,
     /// Debug test hook steps for the application: (when, step).
     #[cfg(debug_assertions)]
     script: Vec<(Instant, String)>,
@@ -275,7 +281,12 @@ pub struct App {
 
 impl App {
     pub fn new(proxy: EventLoopProxy<UserMessage>, fonts: Fonts, start_tabs: Vec<StartTab>) -> Self {
+        let imports = proxy.clone();
+        crate::import::set_notifier(move |event| {
+            let _ = imports.send_event(UserMessage::Import(event));
+        });
         App {
+            bookmarks_checked: Instant::now(),
             proxy,
             shared: Rc::new(RefCell::new(Shared::new())),
             browsers: Vec::new(),
@@ -847,6 +858,23 @@ impl ApplicationHandler<UserMessage> for App {
             self.process(event_loop);
             return;
         }
+        // An import's progress shows on every window's import page; when it
+        // ends, the bookmarks bar and the bookmarks and history pages too.
+        if let UserMessage::Import(event) = message {
+            let done = matches!(event, crate::import::Event::Done(_));
+            for b in &mut self.browsers {
+                b.refresh_if_internal("browsecraft://import");
+                if done {
+                    b.data_changed();
+                }
+            }
+            if let crate::import::Event::Done(line) = event {
+                let i = self.active_index();
+                self.browsers[i].set_notice_long(line);
+            }
+            self.process(event_loop);
+            return;
+        }
         if let UserMessage::PageClicked(tab) = &message
             && let Some(i) = self.owner_of_tab(*tab)
         {
@@ -915,6 +943,16 @@ impl ApplicationHandler<UserMessage> for App {
         if let Some(t) = self.run_script(event_loop, now) {
             sooner(t);
         }
+        // `browsecraft import` may have changed the bookmarks.
+        if now.duration_since(self.bookmarks_checked) >= BOOKMARKS_POLL {
+            self.bookmarks_checked = now;
+            if crate::bookmarks::reload_if_changed() {
+                for b in &mut self.browsers {
+                    b.data_changed();
+                }
+            }
+        }
+        sooner(self.bookmarks_checked + BOOKMARKS_POLL);
         self.process(event_loop);
         self.save_session(false);
         sooner(self.last_save + SESSION_INTERVAL);

@@ -193,6 +193,8 @@ pub enum UserMessage {
     /// Plugin pages, plugin shortcuts, clipboard history, screenshots
     /// (`browser/plugins_host.rs`).
     PluginHost(plugins_host::HostMessage),
+    /// An import started from browsecraft://import made progress or ended.
+    Import(crate::import::Event),
 }
 
 /// A key for egui, forwarded from the page's GTK window.
@@ -3659,6 +3661,28 @@ impl Browser {
         }
     }
 
+    /// Bookmarks or history changed outside this window (an import,
+    /// another process): redraw the bar and reload the pages showing them.
+    fn data_changed(&mut self) {
+        self.feat.palette_links = None;
+        for page in ["browsecraft://bookmarks", "browsecraft://history", "about:home"] {
+            self.refresh_if_internal(page);
+        }
+        self.request_redraw();
+    }
+
+    /// A file dropped on the window: a bookmarks file opens the import
+    /// page with it filled in.
+    fn dropped_file(&mut self, path: PathBuf) {
+        let html = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm"));
+        if html {
+            let url = format!("browsecraft://import?file={}", crate::internal::encode(&path.to_string_lossy()));
+            self.open_in_new_tab(url);
+        } else {
+            self.set_notice("Drop a bookmarks .html file to import it");
+        }
+    }
+
     fn zoom(&mut self, change: Option<bool>) {
         self.user_zoom = match change {
             Some(up) => zoom_step(self.user_zoom, up),
@@ -6657,6 +6681,8 @@ impl Browser {
             UserMessage::Automation(req) => self.automation_request(req),
             UserMessage::AutomationScript { job, json } => self.job_result(job, &json),
             UserMessage::Notice(text) => self.set_notice_long(text),
+            // Handled by the application (every window).
+            UserMessage::Import(_) => {}
             UserMessage::RecordingStopped(result) => self.recording_stopped(result),
             UserMessage::PluginHost(m) => self.plugin_host_message(m),
             UserMessage::ChromeKey(key) => self.chrome_key(key),
@@ -6793,6 +6819,7 @@ impl Browser {
             // The window's close button (system title bar): this window.
             WindowEvent::CloseRequested => self.quit = true,
             WindowEvent::RedrawRequested => self.render(),
+            WindowEvent::DroppedFile(path) => self.dropped_file(path),
             WindowEvent::Resized(size) => {
                 if let Some(egui) = &mut self.egui {
                     egui.on_resized(size.width, size.height);
@@ -6940,6 +6967,9 @@ impl Browser {
             "close" => self.window_op(WindowOp::Close),
             // Screenshots of the overlays, which otherwise need input.
             "palette" => self.toggle_palette(),
+            "bookmarks-reload" => {
+                bookmarks::reload_if_changed();
+            }
             "themes" => self.run_command(crate::commands::CommandId::Theme),
             "authenticator" => self.toggle_drawer(Drawer::Authenticator),
             "containers" => self.toggle_drawer(Drawer::Containers),
@@ -6975,6 +7005,8 @@ impl Browser {
                     self.run_command(id);
                 } else if let Some(name) = other.strip_prefix("name:") {
                     self.set_window_name(name);
+                } else if let Some(q) = other.strip_prefix("palette:") {
+                    self.open_palette_with(q);
                 } else if let Some(url) = other.strip_prefix("open:") {
                     self.open_in_new_tab(address::resolve(url));
                 } else if let Some(i) = other.strip_prefix("switch:").and_then(|i| i.parse().ok()).filter(|i| *i < self.tabs.len()) {

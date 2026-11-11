@@ -408,6 +408,16 @@ fn load_page_checked(request: &Request, control: &Control) -> Page {
         let source = crate::bookmarks::page_html(query);
         return internal_page(&crate::bookmarks::page_url(query), &source);
     }
+    if let Some(query) = internal_query(raw, "browsecraft://import") {
+        // Forms post their choices with the page's token.
+        let body = match request {
+            Request::Post(_, body) => Some(body.as_str()),
+            Request::Get(_) => None,
+        };
+        let message = crate::import::page::handle(query, body);
+        let source = crate::import::page::page_html(query, message.as_deref());
+        return internal_page("browsecraft://import", &source);
+    }
     if let Some(query) = internal_query(raw, "browsecraft://passwords") {
         // Forms post their fields in the body (never in the URL, which would
         // land in the history); links carry only a token and an id.
@@ -547,7 +557,8 @@ fn home_html() -> String {
     }
     let page = HOME_HTML
         .replace("{{CSS}}", &crate::internal::css())
-        .replace("{{LINKS}}", &links);
+        .replace("{{LINKS}}", &links)
+        .replace("{{HINT}}", &crate::import::page::home_hint().unwrap_or_default());
     crate::internal::themed(&page, crate::internal::current())
 }
 
