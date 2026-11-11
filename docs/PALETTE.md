@@ -24,16 +24,19 @@ Prefixes narrow the search:
 | Prefix | Searches                              |
 | ------ | ------------------------------------- |
 | `>`    | commands only                         |
-| `@`    | open tabs                             |
+| `@`    | open tabs, then tab groups (picking a group expands it and goes to it) |
 | `#`    | bookmarks and history                 |
 | `~`    | containers (`~ example.com` opens the address in the chosen one) |
+| `\|`   | open tabs to show beside the current one (split view) |
+| `&`    | tab groups to add the current tab to, and "New group" |
 | `?`    | lists the prefixes                    |
 
 Text that looks like an address (`example.com`, `localhost:3000`) or a search
 gets an "Open ..." / "Search the web for ..." row first, using the same rules
 as the address bar (`address::resolve`). Commands that need a web page (print,
 screenshot, find, zoom, ...) are greyed out on internal pages. "New tab in
-container..." switches the palette to the `~` list. "Start screen recording"
+container..." switches the palette to the `~` list, "Split view with tab..."
+to `|` and "Add tab to group..." to `&`. "Start screen recording"
 turns into "Stop screen recording" while one is running.
 
 The recent-commands list is `palette-recent.json` in the config folder (a

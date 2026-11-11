@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Tab groups (`src/tab_groups.rs`, `src/browser/groups_split.rs`): from a tab's right-click menu, named and coloured (Chrome's nine colours, theme-aware), collapsible, shown as chips with an underline in the strip and as header rows in the sidebar; rename, recolour, new tab in group, ungroup, close group; remembered with the session; palette commands, `&` picker and groups in `@`.
+- Split view (`src/split.rs`): two tabs side by side, each in its own web view, with a draggable divider, a focused pane that the toolbar, find, zoom and dev tools act on (a click in a page focuses it), swap and close; the pair is outlined in the strip, never unloaded while shown, alone in page fullscreen, with snapshots of both panes under menus and the palette; remembered with the session; palette commands and `|` picker.
+- `tabs.list` reports each tab's group and split pane (optional fields).
 - Wave 1 integration: the feature modules now work in the browser window (`src/browser/features.rs`, `src/browser/automation_rpc.rs`).
   - Command palette on `Ctrl+P` / `F1` over a snapshot of the page, running every command (print, save page as MHTML, screenshots of the visible or whole page, screen recording, find, zoom, containers, authenticator, dark mode, plugins, JS console, automation toggle, clear browsing data with a confirmation, settings…). New shortcuts: `Ctrl+Shift+P` print, `Ctrl+Shift+J` JavaScript console, `Ctrl+Shift+R` reload bypassing the cache, `Ctrl+Shift+Delete` clear browsing data, `Ctrl+,` settings.
   - Drawer panels for the authenticator (codes copied and cleared after 30 s, auto-lock with the drawer closed), dark mode, plugins and automation (control server settings and a per-tab JavaScript console).

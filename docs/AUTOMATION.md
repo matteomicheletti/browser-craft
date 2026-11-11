@@ -113,7 +113,7 @@ either `selector` (CSS, searched through open shadow roots) or `ref` (from
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `tabs.list` | – | `{tabs: [{id, index, url, title, active, loading, container}]}` |
+| `tabs.list` | – | `{tabs: [{id, index, url, title, active, loading, container, group?, split?}]}`; `group` = `{id, name, color, collapsed}` for a tab in a tab group, `split` = `{side: "left"\|"right", with: <tab id>}` for a tab in split view (the active tab is the focused pane) |
 | `tabs.open` | `url`, `container?`, `background?` | the new tab (`TabInfo`) |
 | `tabs.activate` | `tab` (required) | `TabInfo` |
 | `tabs.close` | `tab?` | `{ok}` |

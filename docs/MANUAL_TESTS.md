@@ -97,6 +97,30 @@ Build under test: `browsecraft --version`, installed by
 | 5b.4 | A plugin calling `bc.notify` | Notice under the page | OK 2026-11-11 (nested X) |
 | 5.8 | HiDPI: GNOME scaling 125%/200%: text sharpness, page size correct | |
 
+## 5c. Tab groups and split view
+
+| # | Action | Expected | Result |
+| --- | --- | --- | --- |
+| 5c.1 | Right-click a tab → *Add tab to new group*, type a name, pick a colour | Coloured chip before the tab, underline under it, editor closes on a click outside | OK 2026-11-11 (nested X) |
+| 5c.2 | Right-click another tab → *Add tab to group ▸* the group | The tab moves next to the group's tabs, underline covers both | OK 2026-11-11 (nested X) |
+| 5c.3 | Click the chip; click it again | Collapsed to the chip with the tab count; expanded | OK 2026-11-11 (nested X) |
+| 5c.4 | Collapse the group of the tab you are on (palette *Collapse or expand tab group*) | Moves to the nearest tab outside the group | OK 2026-11-11 (nested X) |
+| 5c.5 | Collapse a group with an unloaded (dimmed) tab, expand it | The tab stays dimmed until shown | |
+| 5c.6 | Tabs on the left (palette *Move tabs to top or side*) | Header rows with caret, chip and count; tabs indented with the group colour | OK 2026-11-11 (nested X) |
+| 5c.7 | Chip right-click → *Ungroup*; another group → *Close group* | Tabs stay / tabs close (a new tab if they were all the tabs) | |
+| 5c.8 | Right-click a tab → *Open in split view with current tab* | Both pages side by side, focused pane with a blue bar, pair outlined in the strip | OK 2026-11-11 (nested X) |
+| 5c.9 | Drag the divider; double-click it | Panes resize live; back to half and half | OK 2026-11-11 (nested X, drag) |
+| 5c.10 | Click in the other pane, then type in a field there | Address bar shows that page; keys go to the clicked page | Click OK 2026-11-11 (nested X); typing on GNOME to do |
+| 5c.11 | Ctrl+F, Ctrl+plus, F12 in split | Act on the focused pane only | |
+| 5c.12 | Open the containers drawer; open the palette | Both panes narrow; palette over pictures of both panes | OK 2026-11-11 (nested X) |
+| 5c.13 | Palette *Swap split view panes*; tab menu *Close split view* | Panes swap; single page, both tabs still open | Swap OK 2026-11-11 (nested X) |
+| 5c.14 | Ctrl+W on the focused pane | Split ends, the other tab becomes active | OK 2026-11-11 (nested X) |
+| 5c.15 | Fullscreen a video in one pane (YouTube), Esc | Only that pane fills the screen; split comes back | |
+| 5c.16 | Set *Unload background tabs after* to 1 min, wait 2 min with a split open | The other pane stays loaded | |
+| 5c.17 | Quit and restart with groups and a split | Groups (names, colours, collapsed) and the split with its divider position come back | OK 2026-11-11 (nested X) |
+| 5c.18 | Light theme | Group chips readable (white text on the darker shade) | OK 2026-11-11 (nested X) |
+| 5c.19 | `browsecraft ctl tabs.list` with a group and a split | `group` and `split` fields on those tabs | OK 2026-11-11 (nested X) |
+
 ## 6. Automation (headless, ctl, MCP)
 
 Serve the probes first: `python3 -m http.server -d tests/web 8000`.

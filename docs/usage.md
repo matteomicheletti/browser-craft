@@ -114,6 +114,46 @@ open them. Tabs of temporary containers are not remembered. Turn this off with
 deleted). `Ctrl+Shift+T` reopens the last closed tabs (up to 25), with their
 history and container.
 
+### Tab groups
+
+Groups keep related tabs together under a name and a colour, as in Chrome and
+Edge. Right-click a tab and choose *Add tab to new group*: the group's chip
+appears before the tab with an editor where you type its name and pick one of
+nine colours. *Add tab to group ▸* moves a tab into an existing group (it moves
+next to the group's other tabs) and *Remove from group* takes it out. In the
+strip a group is a coloured chip followed by its tabs, underlined in its colour;
+in the vertical sidebar it is a header row with its tabs indented under it.
+
+Click a group's chip (or header row) to collapse it to the chip alone, showing
+how many tabs it hides, and again to expand it. Collapsing the group of the tab
+you are on moves you to the nearest tab outside it (a new tab when there is
+none). Collapsing does not load or unload anything: unloaded tabs stay unloaded.
+Right-click the chip to rename it, recolour it, open a *New tab in group*,
+*Collapse* / *Expand*, *Ungroup* (the tabs stay) or *Close group* (its tabs
+close). A group can mix tabs of different containers. Groups, their colours
+and whether they are collapsed are remembered with the session.
+
+### Split view
+
+Split view shows two tabs side by side, each with its own live page. Right-click
+a tab and choose *Open in split view with current tab*, or use the palette's
+*Split view with tab…* and pick the tab: the current tab goes on the left, the
+one you picked on the right. The two tabs are outlined together in the strip.
+
+The focused pane has a blue bar along its top: the address bar, back, reload,
+find (`Ctrl+F`), zoom and developer tools act on it. Click in a page to focus
+that pane. Drag the divider between the panes to resize them (double-click it to
+split the width in half). Right-click either tab for *Swap split panes* and
+*Close split view* (both tabs stay open); the palette also has *Focus the other
+split pane*. Switching to a tab outside the pair shows that tab alone; going
+back to either tab of the pair shows the split again. Closing one of the pair
+ends the split and focuses the other. A drawer opened on the right narrows both
+panes. A page that goes fullscreen (a video) fills the screen alone. The pane
+on screen is never unloaded to save memory. A tab showing a BrowseCraft page
+(`about:home`, `browsecraft://…`) in the other pane is shown as a placeholder:
+click it to focus that tab. Split view needs the GPU interface. The pair and the
+divider position are remembered with the session.
+
 ## Containers
 
 Containers keep sites apart: each container has its own cookies, logins,
@@ -166,13 +206,16 @@ the same key, `Esc` or a click outside closes it. Type to search every browser
 action (with its shortcut), the open tabs (with their container colour), your
 bookmarks and recent history, or type an address or search terms to open them
 in a new tab. `Up` / `Down` choose, `Enter` runs, `Tab` jumps to the next
-section. Prefixes narrow the search: `>` commands only, `@` open tabs, `#`
-bookmarks and history, `~` open a tab in a container, `?` lists them. Recently
-run commands come first.
+section. Prefixes narrow the search: `>` commands only, `@` open tabs and tab
+groups, `#` bookmarks and history, `~` open a tab in a container, `|` split view
+with an open tab, `&` add the tab to a group, `?` lists them. Recently run
+commands come first.
 
 Commands include: new tab (also in a container or a temporary container),
 duplicate, close, close others, reopen, next / previous tab, move the tabs to
-the top or the side; back, forward, reload, reload bypassing the cache, home,
+the top or the side; new tab group, add tab to group, remove tab from group,
+collapse or expand tab group; split view with tab, swap split view panes,
+focus the other split pane, close split view; back, forward, reload, reload bypassing the cache, home,
 focus the address bar, copy the address; find, zoom, fullscreen, print, save
 the page (an `.mhtml` file in `~/Downloads`), view source; screenshot of the
 visible page or the whole page (PNG in Pictures), start / stop a screen
