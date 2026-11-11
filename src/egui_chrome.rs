@@ -348,6 +348,7 @@ pub fn bookmarks_bar(ui: &mut egui::Ui, c: &Colors, items: &[(String, String)]) 
             });
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.add_space(6.0);
             let label = egui::RichText::new(format!("{}  All bookmarks", ICON_BOOKMARKS))
                 .size(12.5)
                 .color(c.muted);
@@ -358,7 +359,6 @@ pub fn bookmarks_bar(ui: &mut egui::Ui, c: &Colors, items: &[(String, String)]) 
             if ui.add(button).on_hover_text("Open the bookmarks page (Ctrl+Shift+O)").clicked() {
                 events.push(BarEvent::Manage);
             }
-            ui.add_space(6.0);
         });
     });
     events
