@@ -36,15 +36,39 @@ pub fn request_thumbnail(wv: &wry::WebView, proxy: EventLoopProxy<UserMessage>, 
     unsafe { view.takeSnapshotWithConfiguration_completionHandler(Some(&config), &block) };
 }
 
-/// The snapshot as a thumbnail: through PNG (the `image` crate reads it),
-/// cropped and scaled with a good filter.
-fn thumbnail_rgba(image: &NSImage) -> Option<(usize, usize, Vec<u8>)> {
+/// Asks WebKit for a full-size picture of the visible page
+/// (`TabMessage::Snapshot`), drawn in its place while a menu covers it. An
+/// empty picture is sent when WebKit has none, so the caller stops waiting.
+pub fn request_snapshot(wv: &wry::WebView, proxy: EventLoopProxy<UserMessage>, tab: u64) {
+    use wry::WebViewExtMacOS as _;
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let view = wv.webview();
+    // SAFETY: a default configuration (the visible page), on the main thread.
+    let config = unsafe { WKSnapshotConfiguration::new(mtm) };
+    let block = RcBlock::new(move |image: *mut NSImage, _error: *mut NSError| {
+        // SAFETY: WebKit hands a valid image (or null) for the call.
+        let (w, h, rgba) = unsafe { image.as_ref() }.and_then(image_rgba).unwrap_or((0, 0, Vec::new()));
+        let _ = proxy.send_event(UserMessage::Tab(tab, TabMessage::Snapshot { w, h, rgba }));
+    });
+    // SAFETY: a configuration and a block with the signature WebKit expects.
+    unsafe { view.takeSnapshotWithConfiguration_completionHandler(Some(&config), &block) };
+}
+
+/// An image's pixels, through PNG (the `image` crate reads it).
+fn image_rgba(image: &NSImage) -> Option<(usize, usize, Vec<u8>)> {
     let tiff = image.TIFFRepresentation()?;
     let rep = NSBitmapImageRep::imageRepWithData(&tiff)?;
     // SAFETY: an empty property dictionary.
     let png = unsafe { rep.representationUsingType_properties(NSBitmapImageFileType::PNG, &NSDictionary::new()) }?;
     let img = image::load_from_memory_with_format(&png.to_vec(), image::ImageFormat::Png).ok()?.to_rgba8();
-    let (w, h) = (img.width() as usize, img.height() as usize);
+    Some((img.width() as usize, img.height() as usize, img.into_raw()))
+}
+
+/// The snapshot as a thumbnail: through PNG (the `image` crate reads it),
+/// cropped and scaled with a good filter.
+fn thumbnail_rgba(image: &NSImage) -> Option<(usize, usize, Vec<u8>)> {
+    let (w, h, rgba) = image_rgba(image)?;
+    let img = image::RgbaImage::from_raw(w as u32, h as u32, rgba)?;
     let (tw, th, crop_h) = crate::thumbnails::target_size(w, h);
     if tw == 0 || crop_h == 0 {
         return None;

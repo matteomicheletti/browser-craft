@@ -619,6 +619,9 @@ pub struct Browser {
     favicons: HashMap<u64, egui::TextureHandle>,
     /// A snapshot of the page was requested and has not arrived yet.
     snapshot_pending: bool,
+    /// The theme under the pointer in the theme menu, shown until the menu
+    /// closes or the pointer leaves it.
+    theme_preview: Option<flags::Theme>,
     /// Scripts the page modules add to every new web view.
     extra_page_scripts: Vec<String>,
     /// The egui chrome is in use (`egui` is taken out while a frame is
@@ -2466,6 +2469,7 @@ impl Browser {
             web_fullscreen: false,
             page_forms: None,
             egui_popup_open: false,
+            theme_preview: None,
             popup_snapshot: None,
             egui_repaint_at: None,
             fullscreen_restore: false,
@@ -2656,7 +2660,10 @@ impl Browser {
     /// The theme in effect: the user's choice, or the desktop's light or
     /// dark one for "Follow system".
     fn theme(&self) -> &'static crate::theme::Theme {
-        flags::effective_theme(self.system_dark)
+        match self.theme_preview {
+            Some(id) => id.resolve(self.system_dark),
+            None => flags::effective_theme(self.system_dark),
+        }
     }
 
     fn dark(&self) -> bool {
@@ -3391,6 +3398,8 @@ impl Browser {
             return; // the menu closed meanwhile
         }
         self.snapshot_pending = false;
+        // The web view may hide now (macOS keeps it until this point).
+        self.request_redraw();
         if w == 0 || h == 0 || rgba.len() != w * h * 4 || !self.egui_popup_open {
             return;
         }
@@ -4482,6 +4491,14 @@ impl Browser {
             self.snapshot_pending = true;
             return;
         }
+        // WebKit draws the picture; the page stays on show until it arrives
+        // (see `sync_webview`), so the menu never opens over an empty page.
+        #[cfg(target_os = "macos")]
+        if let Some(WebPane::Wry(wv)) = &self.webview {
+            crate::macos_web::request_snapshot(wv, self.proxy.clone(), self.tab_id);
+            self.snapshot_pending = true;
+            return;
+        }
         let r = self.webview_rect();
         let (x, y, w, h) = (r.x.round() as i32, r.y.round() as i32, r.w.round() as u32, r.h.round() as u32);
         let max_side = self.egui.as_ref().map_or(0, |e| e.max_texture_side()) as u32;
@@ -4562,7 +4579,9 @@ impl Browser {
         }
         self.sync_split_peer(self.egui_popup_open && !self.cheatsheet && !self.overview.open);
         // The overview covers the window: no page, no snapshot needed.
-        let visible = self.web_page && !self.cheatsheet && !(self.egui_popup_open && native) && !self.overview.open;
+        // On macOS the page stays until its picture is ready to take its place.
+        let hide_for_menu = self.egui_popup_open && native && !(cfg!(target_os = "macos") && self.snapshot_pending);
+        let visible = self.web_page && !self.cheatsheet && !hide_for_menu && !self.overview.open;
         let r = self.webview_rect();
         let bounds = (
             r.x.round() as i32,
@@ -6512,8 +6531,16 @@ impl Browser {
                             // Authenticator, plugins, dark mode, containers
                             // (an overflow menu on a narrow window).
                             self.feature_toolbar(ui, &c, &mut actions);
-                            if let Some(id) = egui_chrome::theme_button(ui, &c, flags::get().theme) {
+                            let current = flags::get().theme;
+                            let (pick, hovered) = egui_chrome::theme_button(ui, &c, current);
+                            if let Some(id) = pick {
                                 actions.push(Action::SetTheme(id));
+                            }
+                            // Hovering another theme previews it on the chrome.
+                            let preview = hovered.filter(|id| *id != current && pick.is_none());
+                            if preview != self.theme_preview {
+                                self.theme_preview = preview;
+                                ctx.request_repaint();
                             }
                             let width = (ui.available_width() - 4.0).max(60.0);
                             if self.egui_focus_address {

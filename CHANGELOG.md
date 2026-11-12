@@ -7,9 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Ctrl/Cmd + and - zoomed the browser's own chrome along with the page (egui's keyboard zoom): only the page zooms now.
+- macOS: the page went black under a chrome menu (theme, passwords...). A WebKit snapshot takes its place, and the page stays on show until the snapshot is ready.
+
 ### Added
 
-- Zoom badge in the address bar, as in Firefox: the current zoom (e.g. `110%`) while it is not 100%; a click resets it.
+- Zoom badge in the address bar, as in Firefox: the current zoom (e.g. `110%`) at the right end of the field while it is not 100%; a click resets it. The address text is centred vertically.
+- Theme menu: hovering a theme previews it on the chrome until the menu closes.
 - Dark mode URL rules: regular expressions on the full address, dark or light, checked before the site rules (`url_rules` in `darkmode.json`, panel section *URL rules*). The global mode now defaults to *Off*: pages stay as they are unless a rule says dark.
 - Plugin shortcuts can use `Super` (the Windows/Super key on Linux and Windows, Cmd on macOS): `shortcut = "Super+V"`.
 - Site permissions (`src/permissions/`): WebKitGTK's microphone, camera, screen sharing, location, notification, clipboard and storage-access requests wait for a Chrome-like bar under the toolbar (*Allow* / *Block*, *Remember for this site*); remembered answers per host in `permissions.json` (owner-only, atomic); device names follow the camera/microphone decision; waiting requests are denied when the tab leaves the page or closes; screen sharing is never allowed without asking. Palette *Site permissions for this site…* (`!`) and *Reset site permissions*; *Settings → Site permissions* with Reset buttons.

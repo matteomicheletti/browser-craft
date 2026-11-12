@@ -34,6 +34,9 @@ impl EguiChrome {
     /// adapter/device is available so the caller can keep the engine chrome.
     pub fn new(window: Arc<Window>) -> Option<Self> {
         let ctx = egui::Context::default();
+        // Cmd/Ctrl +, - and 0 zoom the page only (the browser handles them):
+        // egui's own keyboard zoom would scale the whole chrome too.
+        ctx.options_mut(|o| o.zoom_with_keyboard = false);
         install_icon_font(&ctx);
         let viewport_id = egui::ViewportId::ROOT;
         let mut state = egui_winit::State::new(
@@ -240,19 +243,12 @@ pub fn address_bar(
         .inner_margin(egui::Margin::symmetric(12, 3))
         .show(ui, |ui| {
             ui.set_width((width - 24.0).max(40.0));
+            // The toolbar lays out right to left, and so does this row:
+            // the site icon and the zoom sit at the right end, the star at
+            // the left, the address between them.
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 ui.label(icon(leading, 13.0).color(c.muted));
-                let zoom_w = zoom_label.as_ref().map_or(0.0, |l| l.chars().count() as f32 * 7.5 + 22.0);
-                let star_w = if star.is_some() { 26.0 } else { 0.0 } + zoom_w;
-                let response = ui.add_sized(
-                    [(ui.available_width() - star_w).max(20.0), 24.0],
-                    egui::TextEdit::singleline(text)
-                        .id(address_id())
-                        .frame(egui::Frame::NONE)
-                        .text_color(c.text)
-                        .hint_text(egui::RichText::new("Search or enter address").color(c.muted)),
-                );
                 if let Some(label) = &zoom_label {
                     let badge = egui::Button::new(egui::RichText::new(label).size(12.0).color(c.text))
                         .fill(c.hover)
@@ -261,6 +257,16 @@ pub fn address_bar(
                         .min_size(egui::vec2(0.0, 20.0));
                     clicks.zoom = ui.add(badge).on_hover_text("Current zoom. Click to reset to 100% (Ctrl+0)").clicked();
                 }
+                let star_w = if star.is_some() { 30.0 } else { 0.0 };
+                let response = ui.add_sized(
+                    [(ui.available_width() - star_w).max(20.0), 24.0],
+                    egui::TextEdit::singleline(text)
+                        .id(address_id())
+                        .frame(egui::Frame::NONE)
+                        .vertical_align(egui::Align::Center)
+                        .text_color(c.text)
+                        .hint_text(egui::RichText::new("Search or enter address").color(c.muted)),
+                );
                 if let Some(on) = star {
                     let color = if on { c.accent } else { c.muted };
                     let tip = if on { "Remove bookmark (Ctrl+D)" } else { "Bookmark this page (Ctrl+D)" };
@@ -326,20 +332,30 @@ pub fn theme_item(ui: &mut egui::Ui, c: &Colors, id: crate::theme::ThemeId, curr
     resp
 }
 
-/// The theme button of the toolbar and its menu. Returns the theme picked.
-pub fn theme_button(ui: &mut egui::Ui, c: &Colors, current: crate::theme::ThemeId) -> Option<crate::theme::ThemeId> {
+/// The theme button of the toolbar and its menu. Returns the theme picked
+/// and the one under the pointer (to preview it).
+pub fn theme_button(
+    ui: &mut egui::Ui,
+    c: &Colors,
+    current: crate::theme::ThemeId,
+) -> (Option<crate::theme::ThemeId>, Option<crate::theme::ThemeId>) {
     let button = icon_button(ui, true, crate::icons::THEME, "Theme", 16.0);
     let mut pick = None;
+    let mut hovered = None;
     egui::Popup::menu(&button).align(egui::RectAlign::BOTTOM_END).width(230.0).show(|ui| {
         ui.label(egui::RichText::new("Theme").size(12.0).color(c.muted));
         for id in crate::theme::ThemeId::ALL {
-            if theme_item(ui, c, id, id == current).clicked() {
+            let item = theme_item(ui, c, id, id == current);
+            if item.hovered() {
+                hovered = Some(id);
+            }
+            if item.clicked() {
                 pick = Some(id);
                 ui.close();
             }
         }
     });
-    pick
+    (pick, hovered)
 }
 
 /// What the user did in the bookmarks bar.
