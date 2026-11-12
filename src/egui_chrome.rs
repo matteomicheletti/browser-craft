@@ -206,6 +206,16 @@ pub fn address_id() -> egui::Id {
 /// that can be bookmarked) a star on the right. `star` is `Some(is_starred)`
 /// or `None` when the page cannot be bookmarked. Returns the text edit's
 /// response and whether the star was clicked.
+/// What the user clicked in the address bar besides the field.
+#[derive(Default)]
+pub struct AddressClicks {
+    pub star: bool,
+    /// The zoom badge (back to 100%).
+    pub zoom: bool,
+}
+
+/// The address field with the page's icon, the zoom badge (`zoom`: the
+/// percentage when it is not 100, as Firefox shows it) and the bookmark star.
 pub fn address_bar(
     ui: &mut egui::Ui,
     text: &mut String,
@@ -213,14 +223,16 @@ pub fn address_bar(
     c: &Colors,
     leading: &str,
     star: Option<bool>,
-) -> (egui::Response, bool) {
+    zoom: Option<u32>,
+) -> (egui::Response, AddressClicks) {
     let focused = ui.memory(|m| m.has_focus(address_id()));
     let stroke = if focused {
         egui::Stroke::new(1.5, c.accent)
     } else {
         egui::Stroke::new(1.0, c.line)
     };
-    let mut star_clicked = false;
+    let mut clicks = AddressClicks::default();
+    let zoom_label = zoom.map(|z| format!("{z}%"));
     let response = egui::Frame::NONE
         .fill(c.field_bg)
         .stroke(stroke)
@@ -231,7 +243,8 @@ pub fn address_bar(
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 ui.label(icon(leading, 13.0).color(c.muted));
-                let star_w = if star.is_some() { 26.0 } else { 0.0 };
+                let zoom_w = zoom_label.as_ref().map_or(0.0, |l| l.chars().count() as f32 * 7.5 + 22.0);
+                let star_w = if star.is_some() { 26.0 } else { 0.0 } + zoom_w;
                 let response = ui.add_sized(
                     [(ui.available_width() - star_w).max(20.0), 24.0],
                     egui::TextEdit::singleline(text)
@@ -240,20 +253,28 @@ pub fn address_bar(
                         .text_color(c.text)
                         .hint_text(egui::RichText::new("Search or enter address").color(c.muted)),
                 );
+                if let Some(label) = &zoom_label {
+                    let badge = egui::Button::new(egui::RichText::new(label).size(12.0).color(c.text))
+                        .fill(c.hover)
+                        .stroke(egui::Stroke::new(1.0, c.line))
+                        .corner_radius(egui::CornerRadius::same(10))
+                        .min_size(egui::vec2(0.0, 20.0));
+                    clicks.zoom = ui.add(badge).on_hover_text("Current zoom. Click to reset to 100% (Ctrl+0)").clicked();
+                }
                 if let Some(on) = star {
                     let color = if on { c.accent } else { c.muted };
                     let tip = if on { "Remove bookmark (Ctrl+D)" } else { "Bookmark this page (Ctrl+D)" };
                     let button = egui::Button::new(icon(ICON_STAR, 15.0).color(color))
                         .frame(false)
                         .min_size(egui::vec2(24.0, 24.0));
-                    star_clicked = ui.add(button).on_hover_text(tip).clicked();
+                    clicks.star = ui.add(button).on_hover_text(tip).clicked();
                 }
                 response
             })
             .inner
         })
         .inner;
-    (response, star_clicked)
+    (response, clicks)
 }
 
 /// A theme's swatch: its background with its surface and accent as dots.
@@ -1789,7 +1810,7 @@ mod tests {
                             buttons.push(icon_button(ui, true, code, "x", 16.0).rect);
                         }
                         let width = (ui.available_width() - 4.0).max(60.0);
-                        let (resp, _) = address_bar(ui, &mut text, width, &c, ICON_LOCK, Some(false));
+                        let (resp, _) = address_bar(ui, &mut text, width, &c, ICON_LOCK, Some(false), Some(110));
                         address = resp.rect;
                     });
                 });

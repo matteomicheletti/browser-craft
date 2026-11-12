@@ -376,6 +376,8 @@ enum SiteBar {
 
 /// Chrome actions collected while the egui frame is built and applied after.
 enum Action {
+    /// The address bar's zoom badge: back to 100%.
+    ZoomReset,
     /// The permission prompt `id` was answered.
     Permission { id: u64, allow: bool, remember: bool },
     /// "Remember for this site" was ticked or unticked on prompt `id`.
@@ -6519,10 +6521,21 @@ impl Browser {
                                 self.egui_focus_address = false;
                                 self.egui_select_all = true;
                             }
-                            let (resp, star_clicked) =
-                                egui_chrome::address_bar(ui, &mut self.address.text, width, &c, leading, star);
-                            if star_clicked {
+                            let zoom = (self.user_zoom * 100.0).round() as u32;
+                            let (resp, clicks) = egui_chrome::address_bar(
+                                ui,
+                                &mut self.address.text,
+                                width,
+                                &c,
+                                leading,
+                                star,
+                                (zoom != 100).then_some(zoom),
+                            );
+                            if clicks.star {
                                 actions.push(Action::ToggleBookmark);
+                            }
+                            if clicks.zoom {
+                                actions.push(Action::ZoomReset);
                             }
                             self.egui_address_focused = resp.has_focus();
                             if self.egui_select_all && resp.has_focus() {
@@ -6896,6 +6909,7 @@ impl Browser {
                 Action::Home => self.home(),
                 Action::SetTheme(id) => self.set_theme(id),
                 Action::Flags => self.open_settings(),
+                Action::ZoomReset => self.zoom(None),
                 Action::Navigate(text) => {
                     ctx.memory_mut(|m| m.surrender_focus(egui_chrome::address_id()));
                     self.navigate_input(&text);
