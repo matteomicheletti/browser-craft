@@ -1644,6 +1644,12 @@ pub enum Shortcut {
 /// monitor in `macos_menu`, which sees it before WKWebView): a plugin's
 /// shortcut, a browser shortcut, or nothing (the page and the Edit menu get
 /// it). `key` is named as `shortcuts::KeyCombo` names keys.
+/// macOS: Ctrl+Cmd+F typed in a page, the system's full screen key.
+#[cfg(target_os = "macos")]
+pub fn mac_fullscreen_key() -> UserMessage {
+    UserMessage::WebKey(Shortcut::Fullscreen)
+}
+
 #[cfg(target_os = "macos")]
 pub fn mac_page_key(key: &str, shift: bool, alt: bool) -> Option<UserMessage> {
     if let Some((plugin, command)) = crate::plugins::shortcuts::lookup(true, false, shift, alt, key) {
@@ -4593,6 +4599,11 @@ impl Browser {
         };
         let want = !self.custom_frame();
         if self.decorations != Some(want) {
+            // macOS keeps a titled window and hides its title bar instead
+            // (see `macos_web::set_custom_titlebar`).
+            #[cfg(target_os = "macos")]
+            crate::macos_web::set_custom_titlebar(&g.window, !want);
+            #[cfg(not(target_os = "macos"))]
             g.window.set_decorations(want);
             self.decorations = Some(want);
             self.web_bounds = None;
@@ -5156,6 +5167,11 @@ impl Browser {
         let ctrl = mods.control_key() || (cfg!(target_os = "macos") && mods.super_key());
         let (shift, alt) = (mods.shift_key(), mods.alt_key());
         let base = event.key_without_modifiers();
+        // macOS: Ctrl+Cmd+F is the system's full screen key, not Find.
+        if cfg!(target_os = "macos") && mods.control_key() && mods.super_key() && is_char(&base, "f") {
+            self.run_shortcut(Shortcut::Fullscreen);
+            return;
+        }
         if self.overview.open && self.overview_key(&base, ctrl, shift, alt) {
             return;
         }
@@ -7125,7 +7141,7 @@ impl Browser {
             .with_maximized(setup.maximized)
             // The browser's own title bar unless the system's is asked for
             // (the software chrome always has the system's).
-            .with_decorations(flags::get().system_titlebar || flags::get().chrome == Chrome::Engine);
+            .with_decorations(cfg!(target_os = "macos") || flags::get().system_titlebar || flags::get().chrome == Chrome::Engine);
         if let Some((w, h)) = setup.size {
             attrs = attrs.with_inner_size(winit::dpi::PhysicalSize::new(w, h));
         }

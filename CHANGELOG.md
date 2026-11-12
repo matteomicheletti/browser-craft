@@ -111,6 +111,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- macOS: the browser's own title bar is a titled window with a transparent, hidden title bar (content under it, no traffic lights) instead of a borderless window, so Magnet, other window managers and the system zoom fill the screen (a title bar's height was left empty above the window) and a click brings the window to the front. Ctrl+Cmd+F toggles full screen (it opened Find).
+
 - macOS: the clipboard history records copies (`src/plugins/clipboard_watch_macos.rs`, polling the pasteboard's change count; concealed copies are secrets, transient ones are skipped); the watcher was Linux-only, so the manager stayed empty.
 - macOS: tab hover cards show, with the page's picture: a layer-backed view above the web views drawn with softbuffer, and WKWebView snapshots for the thumbnails (`src/macos_web.rs`).
 - Settings (gear button, palette, menu) open in a new tab, or bring forward the tab already showing them, instead of replacing the page in use.

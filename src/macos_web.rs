@@ -54,6 +54,39 @@ fn thumbnail_rgba(image: &NSImage) -> Option<(usize, usize, Vec<u8>)> {
     Some((tw, th, small.into_raw()))
 }
 
+/// The browser's own title bar on macOS: a normal titled window whose title
+/// bar is transparent, untitled and without the traffic lights, with the
+/// content drawn under it. A borderless window (winit's "no decorations")
+/// is not a real window to macOS: window managers such as Magnet and the
+/// system's own zoom left the height of a title bar empty above it, and a
+/// click did not bring it to the front. `custom` false restores the
+/// system's title bar.
+pub fn set_custom_titlebar(window: &winit::window::Window, custom: bool) {
+    use objc2_app_kit::{NSWindowButton, NSWindowStyleMask, NSWindowTitleVisibility};
+    if MainThreadMarker::new().is_none() {
+        return;
+    }
+    let Ok(handle) = window.window_handle() else { return };
+    let RawWindowHandle::AppKit(h) = handle.as_raw() else { return };
+    // SAFETY: winit's handle points at its live NSView.
+    let Some(view) = (unsafe { Retained::retain(h.ns_view.as_ptr().cast::<NSView>()) }) else { return };
+    let Some(ns_window) = view.window() else { return };
+    let mut mask = ns_window.styleMask();
+    if custom {
+        mask |= NSWindowStyleMask::FullSizeContentView;
+    } else {
+        mask &= !NSWindowStyleMask::FullSizeContentView;
+    }
+    ns_window.setStyleMask(mask);
+    ns_window.setTitlebarAppearsTransparent(custom);
+    ns_window.setTitleVisibility(if custom { NSWindowTitleVisibility::Hidden } else { NSWindowTitleVisibility::Visible });
+    for b in [NSWindowButton::CloseButton, NSWindowButton::MiniaturizeButton, NSWindowButton::ZoomButton] {
+        if let Some(button) = ns_window.standardWindowButton(b) {
+            button.setHidden(custom);
+        }
+    }
+}
+
 /// A native view as a softbuffer target.
 #[derive(Clone)]
 pub struct ViewHandle(NonNull<c_void>);

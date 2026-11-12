@@ -137,12 +137,18 @@ pub fn install_key_monitor(proxy: EventLoopProxy<UserMessage>) {
 
 fn page_key(ev: &NSEvent, mtm: MainThreadMarker) -> Option<UserMessage> {
     let flags = ev.modifierFlags();
-    if !flags.contains(NSEventModifierFlags::Command) || flags.contains(NSEventModifierFlags::Control) {
+    if !flags.contains(NSEventModifierFlags::Command) {
         return None;
     }
     let window = ev.window(mtm)?;
     if !web_view_has_keyboard(&window) {
         return None;
+    }
+    if flags.contains(NSEventModifierFlags::Control) {
+        // Ctrl+Cmd+F, the system's full screen key; other Control chords
+        // stay with the page.
+        let f = ev.charactersIgnoringModifiers().is_some_and(|c| c.to_string().eq_ignore_ascii_case("f"));
+        return f.then(crate::browser::mac_fullscreen_key);
     }
     let key = match ev.keyCode() {
         48 => "tab".to_string(),
