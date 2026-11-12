@@ -6573,6 +6573,8 @@ impl Browser {
                                     let n = self.address.text.chars().count();
                                     egui_chrome::select_range(&ctx, egui_chrome::address_id(), n, n);
                                     self.omni.close();
+                                    // egui drops the focus on Escape: the field keeps it.
+                                    ctx.memory_mut(|m| m.request_focus(egui_chrome::address_id()));
                                 }
                             }
                             let zoom = (self.user_zoom * 100.0).round() as u32;

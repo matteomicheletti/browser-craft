@@ -75,7 +75,12 @@ impl Omnibox {
 pub fn suggestions(query: &str) -> Vec<Suggestion> {
     let mut out: Vec<Suggestion> = Vec::new();
     let mut push = |s: Suggestion, out: &mut Vec<Suggestion>| {
-        if !out.iter().any(|o| same_page(&o.url, &s.url)) {
+        // The same page twice, or the same title on one site (a sign-in
+        // callback with a long code next to the page itself), once.
+        let dup = out.iter().any(|o| {
+            same_page(&o.url, &s.url) || (!s.title.is_empty() && o.title == s.title && host(&o.url) == host(&s.url))
+        });
+        if !dup {
             out.push(s);
         }
     };
@@ -99,6 +104,11 @@ pub fn suggestions(query: &str) -> Vec<Suggestion> {
 
 fn same_page(a: &str, b: &str) -> bool {
     strip(a).trim_end_matches('/') == strip(b).trim_end_matches('/')
+}
+
+fn host(url: &str) -> &str {
+    let rest = strip(url);
+    rest.split(['/', '?', '#']).next().unwrap_or(rest)
 }
 
 /// The address without its scheme and `www.`.
