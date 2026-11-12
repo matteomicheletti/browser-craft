@@ -165,8 +165,13 @@ fn web_view_has_keyboard(window: &NSWindow) -> bool {
     let Some(responder) = window.firstResponder() else { return false };
     let mut view = responder.downcast::<NSView>().ok();
     while let Some(v) = view {
-        if v.class().name().to_bytes().starts_with(b"WK") {
-            return true;
+        // wry's web view is a subclass (`WryWebView`): look up the classes.
+        let mut class = Some(v.class());
+        while let Some(c) = class {
+            if c.name().to_bytes().starts_with(b"WK") {
+                return true;
+            }
+            class = c.superclass();
         }
         // SAFETY: reading a view's superview on the main thread.
         view = unsafe { v.superview() };
