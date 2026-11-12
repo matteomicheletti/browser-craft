@@ -580,6 +580,12 @@ impl super::Browser {
                 super::request_thumbnail_gtk(wv, self.proxy.clone(), peer);
             }
         }
+        #[cfg(target_os = "macos")]
+        if let Some(super::WebPane::Wry(wv)) = &self.webview
+            && self.web_page
+        {
+            crate::macos_web::request_thumbnail(wv, self.proxy.clone(), self.tab_id);
+        }
     }
 
     /// Asks for pictures of every live page (debug hook).
@@ -611,7 +617,13 @@ impl super::Browser {
                 super::request_thumbnail_gtk(wv, self.proxy.clone(), id);
             }
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "macos")]
+        for id in due {
+            if let Some(super::WebPane::Wry(wv)) = self.view_of(id) {
+                crate::macos_web::request_thumbnail(wv, self.proxy.clone(), id);
+            }
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let _ = due;
         self.thumb_due.iter().map(|(at, _)| *at).min()
     }

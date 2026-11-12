@@ -1286,11 +1286,12 @@ impl Browser {
     /// A closed window before it is dropped: its pages and its card go,
     /// and the window is hidden (so it loses the focus while it exists).
     pub(super) fn retire(&mut self) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             self.card = None;
-            self.release_clipboard_watcher();
         }
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        self.release_clipboard_watcher();
         self.webview = None;
         for t in &mut self.tabs {
             t.view = None;
@@ -1528,7 +1529,7 @@ impl Drop for Browser {
     /// The web views and the hover card are child windows of the browser
     /// window: they go first, so they never outlive their parent.
     fn drop(&mut self) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
             self.card = None;
         }

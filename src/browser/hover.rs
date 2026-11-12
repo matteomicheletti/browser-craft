@@ -397,6 +397,84 @@ impl CardWindow {
     }
 }
 
+/// The card on macOS: a native view above the web views (they are sibling
+/// views of the browser window's view), drawn with softbuffer like on Linux.
+#[cfg(target_os = "macos")]
+pub struct CardWindow {
+    view: crate::macos_web::CardView,
+    surface: softbuffer::Surface<crate::macos_web::ViewHandle, crate::macos_web::ViewHandle>,
+    _context: softbuffer::Context<crate::macos_web::ViewHandle>,
+    pub shown: Option<(CardContent, (i32, i32))>,
+    pub visible: bool,
+    /// The picture scaled for the card: (tab, stamp, width) and pixels.
+    image: Option<((u64, u64, u32), Image)>,
+    drawn: Option<String>,
+}
+
+#[cfg(target_os = "macos")]
+impl CardWindow {
+    pub fn new(_event_loop: &winit::event_loop::ActiveEventLoop, parent: &winit::window::Window) -> Option<Self> {
+        let (view, handle) = crate::macos_web::CardView::new(parent)?;
+        let context = softbuffer::Context::new(handle.clone()).ok()?;
+        let surface = softbuffer::Surface::new(&context, handle).ok()?;
+        Some(CardWindow { view, surface, _context: context, shown: None, visible: false, image: None, drawn: None })
+    }
+
+    /// Shows `content` at `anchor` (window pixels). Draws only when it changed.
+    #[allow(clippy::too_many_arguments)]
+    pub fn show(&mut self, fonts: &Fonts, content: CardContent, thumb: Option<&crate::thumbnails::Thumb>, anchor: Rect, c: CardColors, scale: f32, window_size: (u32, u32)) {
+        let key = format!(
+            "{content:?}|{:?}|{:?}|{scale}|{window_size:?}",
+            (anchor.x, anchor.y, anchor.w, anchor.h),
+            (c.bg, c.border, c.text, c.muted, c.image_bg)
+        );
+        if self.visible && self.drawn.as_deref() == Some(key.as_str()) {
+            return;
+        }
+        let width = (CARD_W * scale).round() as u32;
+        let image = match thumb {
+            Some(t) => {
+                let key = (content.tab, t.stamp, width);
+                if self.image.as_ref().is_none_or(|(k, _)| *k != key) {
+                    self.image = scaled_image(t, width).map(|img| (key, img));
+                }
+                self.image.as_ref().map(|(_, img)| img)
+            }
+            None => None,
+        };
+        let (w, h, pixels) = render_card(fonts, &content, image, c, scale);
+        let pos = card_position(anchor, (w, h), window_size, 6.0 * scale);
+        self.view.place(pos, w, h, scale);
+        if let (Some(nw), Some(nh)) = (std::num::NonZeroU32::new(w), std::num::NonZeroU32::new(h))
+            && self.surface.resize(nw, nh).is_ok()
+            && let Ok(mut buffer) = self.surface.buffer_mut()
+        {
+            let n = buffer.len().min(pixels.len());
+            buffer[..n].copy_from_slice(&pixels[..n]);
+            let _ = buffer.present();
+        }
+        self.shown = Some((content, pos));
+        if !self.visible {
+            self.view.raise();
+            self.view.set_visible(true);
+            self.visible = true;
+        }
+        self.drawn = Some(key);
+    }
+
+    pub fn raise(&self) {
+        self.view.raise();
+    }
+
+    pub fn hide(&mut self) {
+        if self.visible {
+            self.view.set_visible(false);
+            self.visible = false;
+            self.drawn = None;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,10 +563,14 @@ impl super::Browser {
         if let Some(card) = self.card.as_ref().filter(|c| c.visible) {
             super::x11::raise(&card.window);
         }
+        #[cfg(target_os = "macos")]
+        if let Some(card) = self.card.as_ref().filter(|c| c.visible) {
+            card.raise();
+        }
     }
 
     pub(super) fn hide_hover_card(&mut self) {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(card) = &mut self.card {
             card.hide();
         }
@@ -543,11 +625,11 @@ impl super::Browser {
         let card_colors = CardColors { bg: t.surface, border: t.border, text: t.text, muted: t.text_muted, image_bg: t.surface2 };
         let anchor = Rect { x: rect.min.x * ppp, y: rect.min.y * ppp, w: rect.width() * ppp, h: rect.height() * ppp };
         let size = self.gfx.as_ref().map(|g| g.window.inner_size()).map(|s| (s.width, s.height)).unwrap_or((1, 1));
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if let Some(card) = &mut self.card {
             card.show(&self.fonts, content, thumb.as_ref(), anchor, card_colors, ppp, size);
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
         let _ = (content, card_colors, anchor, size, thumb);
     }
 }

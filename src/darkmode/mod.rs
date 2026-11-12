@@ -21,7 +21,7 @@ mod settings;
 pub use panel::{DarkEvent, DarkModePanel};
 #[allow(unused_imports)]
 pub use settings::{
-    DarkSettings, Decision, Mode, Schedule, SiteMode, SiteSettings, host_matches, load, normalize_host, save,
+    DarkSettings, Decision, Mode, Schedule, SiteMode, SiteSettings, UrlRule, host_matches, load, normalize_host, save,
 };
 
 use serde::{Deserialize, Serialize};
@@ -50,6 +50,8 @@ struct PageConfig<'a> {
     respect_native: bool,
     excluded: &'a [String],
     sites: std::collections::BTreeMap<&'a str, PageSite<'a>>,
+    #[serde(rename = "urlRules")]
+    url_rules: &'a [UrlRule],
     schedule: Schedule,
 }
 
@@ -90,6 +92,7 @@ fn config_json(settings: &DarkSettings) -> String {
         respect_native: s.respect_native,
         excluded: &s.excluded,
         sites: s.sites.iter().map(|(k, v)| (k.as_str(), PageSite { mode: v.mode, css: &v.css })).collect(),
+        url_rules: &s.url_rules,
         schedule: s.schedule,
     })
 }
@@ -192,7 +195,8 @@ mod tests {
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["sites"]["evil.com"]["css"], s.sites["evil.com"].css.as_str());
         assert_eq!(v["fontFamily"], "Foo\"</script>");
-        assert_eq!(v["mode"], "system");
+        assert_eq!(v["mode"], "off", "pages stay light by default");
+        assert!(v["urlRules"].is_array());
         assert_eq!(v["excluded"][0], "a.com");
     }
 

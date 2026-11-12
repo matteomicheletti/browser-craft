@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 const FILE_NAME: &str = "darkmode.json";
 const MAX_SITES: usize = 500;
+const MAX_URL_RULES: usize = 200;
+/// A URL rule's regular expression, in bytes.
+pub const MAX_PATTERN: usize = 500;
 const MAX_EXCLUDED: usize = 1000;
 /// Per-site custom CSS, in bytes.
 pub const MAX_CSS: usize = 64 * 1024;
@@ -42,6 +45,23 @@ pub struct SiteSettings {
     pub mode: SiteMode,
     /// Extra CSS applied on top of the dark theme (Dark Reader `fixes.css`).
     pub css: String,
+}
+
+/// Dark mode on or off for every address a regular expression finds a
+/// match in (anywhere in the full URL, as JavaScript's `RegExp.test`).
+/// Checked before the per-site settings, first match wins.
+#[derive(Clone, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UrlRule {
+    pub pattern: String,
+    /// `On` or `Off` (`Default` rules are dropped).
+    pub mode: SiteMode,
+}
+
+/// Whether `pattern` is a regular expression both Rust and the page accept
+/// (the common syntax: no look-around, no back-references).
+pub fn valid_pattern(pattern: &str) -> bool {
+    !pattern.trim().is_empty() && pattern.len() <= MAX_PATTERN && regex::Regex::new(pattern).is_ok()
 }
 
 /// A daily window in which dark mode may apply, minutes after midnight.
@@ -82,6 +102,8 @@ pub struct DarkSettings {
     /// Hosts that never get the dark theme (a host covers its subdomains).
     pub excluded: Vec<String>,
     pub sites: BTreeMap<String, SiteSettings>,
+    /// Regular expressions on the full address, before `sites`.
+    pub url_rules: Vec<UrlRule>,
     pub schedule: Schedule,
 }
 
@@ -89,7 +111,8 @@ impl Default for DarkSettings {
     fn default() -> Self {
         Self {
             enabled: true,
-            mode: Mode::System,
+            // Pages stay as they are unless a site or URL rule says "on".
+            mode: Mode::Off,
             brightness: 100,
             contrast: 100,
             sepia: 0,
@@ -100,6 +123,7 @@ impl Default for DarkSettings {
             respect_native: true,
             excluded: Vec::new(),
             sites: BTreeMap::new(),
+            url_rules: Vec::new(),
             schedule: Schedule::default(),
         }
     }
@@ -166,6 +190,12 @@ impl DarkSettings {
         ex.dedup();
         ex.truncate(MAX_EXCLUDED);
         self.excluded = ex;
+        let mut rules = std::mem::take(&mut self.url_rules);
+        rules.retain(|r| r.mode != SiteMode::Default && valid_pattern(&r.pattern));
+        let mut seen = std::collections::HashSet::new();
+        rules.retain(|r| seen.insert(r.pattern.clone()));
+        rules.truncate(MAX_URL_RULES);
+        self.url_rules = rules;
         let sites = std::mem::take(&mut self.sites);
         for (k, mut v) in sites {
             let k = normalize_host(&k);
@@ -231,6 +261,35 @@ impl DarkSettings {
         Decision::Dark
     }
 
+    /// The first URL rule whose expression finds a match in `url`.
+    pub fn url_rule_for(&self, url: &str) -> Option<&UrlRule> {
+        self.url_rules.iter().find(|r| regex::Regex::new(&r.pattern).is_ok_and(|re| re.is_match(url)))
+    }
+
+    /// `decide` for a page at `url` (on `host`): a matching URL rule wins.
+    pub fn decide_url(&self, url: &str, host: &str, system_dark: bool, minutes: u16) -> Decision {
+        if !self.enabled {
+            return Decision::Light("off");
+        }
+        match self.url_rule_for(url).map(|r| r.mode) {
+            Some(SiteMode::On) => Decision::Dark,
+            Some(SiteMode::Off) => Decision::Light("url"),
+            _ => self.decide(host, system_dark, minutes),
+        }
+    }
+
+    /// Adds (or moves to the end, with a new mode) a URL rule.
+    pub fn set_url_rule(&mut self, pattern: &str, mode: SiteMode) -> Result<(), String> {
+        let pattern = pattern.trim();
+        if !valid_pattern(pattern) {
+            return Err(format!("Not a valid regular expression: {pattern}"));
+        }
+        self.url_rules.retain(|r| r.pattern != pattern);
+        self.url_rules.push(UrlRule { pattern: pattern.to_string(), mode });
+        self.normalize();
+        Ok(())
+    }
+
     pub fn site_mode(&self, host: &str) -> SiteMode {
         self.site_for(host).map(|s| s.mode).unwrap_or_default()
     }
@@ -289,6 +348,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn url_rules_come_first() {
+        let mut s = DarkSettings::default();
+        assert_eq!(s.mode, Mode::Off, "pages stay light by default");
+        assert_eq!(s.decide_url("https://a.example/", "a.example", true, 0), Decision::Light("mode"));
+        s.set_url_rule(r"fluiid4\.com/(app|admin)", SiteMode::On).unwrap();
+        s.set_url_rule(r"^https://b\.example/", SiteMode::Off).unwrap();
+        assert!(s.set_url_rule("(unclosed", SiteMode::On).is_err());
+        assert_eq!(s.decide_url("https://clx.fluiid4.com/app/x", "clx.fluiid4.com", false, 0), Decision::Dark);
+        assert_eq!(s.decide_url("https://clx.fluiid4.com/home", "clx.fluiid4.com", false, 0), Decision::Light("mode"));
+        s.set_site_mode("b.example", SiteMode::On);
+        assert_eq!(s.decide_url("https://b.example/x", "b.example", false, 0), Decision::Light("url"), "the URL rule beats the site");
+        s.url_rules.push(UrlRule { pattern: "x".into(), mode: SiteMode::Default });
+        s.normalize();
+        assert_eq!(s.url_rules.len(), 2, "rules without a mode are dropped");
+    }
+
+    #[test]
     fn hosts_are_normalised() {
         assert_eq!(normalize_host("https://User@WWW.Example.COM:8080/a?b#c"), "example.com");
         assert_eq!(normalize_host("*.example.com."), "example.com");
@@ -313,6 +389,7 @@ mod tests {
     #[test]
     fn decisions_follow_the_precedence() {
         let mut s = DarkSettings::default();
+        s.mode = Mode::System;
         assert_eq!(s.decide("a.com", false, 0), Decision::Light("mode"));
         assert_eq!(s.decide("a.com", true, 0), Decision::Dark);
         s.mode = Mode::Dark;

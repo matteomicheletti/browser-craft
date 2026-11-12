@@ -19,6 +19,9 @@ pub struct DarkModePanel {
     css_draft: String,
     css_host: String,
     new_exclusion: String,
+    /// The URL rule being typed and the mode it gets.
+    new_rule: String,
+    new_rule_on: bool,
     native: HashMap<String, bool>,
     error: Option<String>,
 }
@@ -34,6 +37,8 @@ impl DarkModePanel {
             css_draft: String::new(),
             css_host: String::new(),
             new_exclusion: String::new(),
+            new_rule: String::new(),
+            new_rule_on: true,
             native: HashMap::new(),
             error: None,
         }
@@ -49,7 +54,7 @@ impl DarkModePanel {
         change(&mut self.settings);
         self.settings.normalize();
         let saved = settings::save(&self.settings);
-        self.error = saved.clone().err();
+        self.error = saved.clone().err().map(|e| format!("Could not save: {e}"));
         saved
     }
 
@@ -60,7 +65,7 @@ impl DarkModePanel {
 
     fn commit(&mut self, events: &mut Vec<DarkEvent>) {
         self.settings.normalize();
-        self.error = settings::save(&self.settings).err();
+        self.error = settings::save(&self.settings).err().map(|e| format!("Could not save: {e}"));
         events.push(DarkEvent::SettingsChanged);
     }
 
@@ -81,14 +86,14 @@ impl DarkModePanel {
                         Mode::System => "Follow system",
                         Mode::Dark => "Always dark",
                         Mode::Light => "Always light",
-                        Mode::Off => "Off",
+                        Mode::Off => "Off (only sites and URLs set to dark)",
                     })
                     .show_ui(ui, |ui| {
                         for (m, label) in [
                             (Mode::System, "Follow system"),
                             (Mode::Dark, "Always dark"),
                             (Mode::Light, "Always light"),
-                            (Mode::Off, "Off"),
+                            (Mode::Off, "Off (only sites and URLs set to dark)"),
                         ] {
                             changed |= ui.selectable_value(&mut self.settings.mode, m, label).changed();
                         }
@@ -217,6 +222,54 @@ impl DarkModePanel {
             }
 
             ui.separator();
+            ui.label(egui::RichText::new("URL rules").strong());
+            ui.label(
+                egui::RichText::new("Regular expressions matched anywhere in the address, e.g. fluiid4\\.com or ^https://[^/]*\\.example\\.com/app. Checked before the site rules; the first match wins.")
+                    .color(c.muted)
+                    .small(),
+            );
+            let mut remove_rule = None;
+            let mut toggle_rule = None;
+            for (i, r) in self.settings.url_rules.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    let on = r.mode == SiteMode::On;
+                    if ui.small_button(if on { "Dark" } else { "Light" }).on_hover_text("Click to switch").clicked() {
+                        toggle_rule = Some(i);
+                    }
+                    ui.label(egui::RichText::new(&r.pattern).monospace());
+                    if ui.small_button("Remove").clicked() {
+                        remove_rule = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = toggle_rule
+                && let Some(r) = self.settings.url_rules.get_mut(i)
+            {
+                r.mode = if r.mode == SiteMode::On { SiteMode::Off } else { SiteMode::On };
+                changed = true;
+            }
+            if let Some(i) = remove_rule {
+                self.settings.url_rules.remove(i);
+                changed = true;
+            }
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut self.new_rule_on, true, "Dark");
+                ui.selectable_value(&mut self.new_rule_on, false, "Light");
+                let r = ui.add(egui::TextEdit::singleline(&mut self.new_rule).hint_text("regex, e.g. example\\.com/admin").font(egui::TextStyle::Monospace));
+                let go = ui.button("Add").clicked() || (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+                if go && !self.new_rule.trim().is_empty() {
+                    let mode = if self.new_rule_on { SiteMode::On } else { SiteMode::Off };
+                    match self.settings.set_url_rule(&self.new_rule, mode) {
+                        Ok(()) => {
+                            self.new_rule.clear();
+                            changed = true;
+                        }
+                        Err(e) => self.error = Some(e),
+                    }
+                }
+            });
+
+            ui.separator();
             ui.label(egui::RichText::new("Excluded sites").strong());
             let mut remove = None;
             for (i, h) in self.settings.excluded.iter().enumerate() {
@@ -243,7 +296,7 @@ impl DarkModePanel {
         });
 
         if let Some(e) = &self.error {
-            ui.colored_label(c.danger, format!("Could not save: {e}"));
+            ui.colored_label(c.danger, e);
         }
         if changed {
             self.commit(&mut events);

@@ -26,7 +26,7 @@ use winit::platform::modifier_supplement::KeyEventExtModifierSupplement;
 
 use super::{Browser, UserMessage, WebPane};
 /// Whether some window runs the app's clipboard watcher.
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 static WATCHER_OWNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 use crate::plugins::clipboard_history::{self as history, Capture, Item, Kind, Limits, Source};
@@ -100,7 +100,7 @@ pub(super) struct HostState {
     modal: Option<Modal>,
     /// The data store of modal plugin pages (their own, not a web profile).
     context: Option<wry::WebContext>,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     watcher: Option<crate::plugins::clipboard_watch::Watcher>,
     #[cfg(target_os = "linux")]
     dialog: Option<gtk::FileChooserNative>,
@@ -115,7 +115,7 @@ impl HostState {
         HostState {
             modal: None,
             context: None,
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             watcher: None,
             #[cfg(target_os = "linux")]
             dialog: None,
@@ -408,7 +408,7 @@ impl Browser {
 
     /// One clipboard watcher for the whole app: the first window that wants
     /// it owns it, so a change is captured once however many windows are open.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn sync_clipboard_watcher(&mut self, wanted: bool) {
         use std::sync::atomic::Ordering;
         if wanted && self.feat.host.watcher.is_none() {
@@ -428,12 +428,12 @@ impl Browser {
         }
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     fn sync_clipboard_watcher(&mut self, _wanted: bool) {}
 
     /// A closing window hands the app's clipboard watcher back, so another
     /// window can start it on its next plugin sync.
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     pub(super) fn release_clipboard_watcher(&mut self) {
         if self.feat.host.watcher.take().is_some() {
             WATCHER_OWNED.store(false, std::sync::atomic::Ordering::SeqCst);

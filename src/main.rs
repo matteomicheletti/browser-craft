@@ -32,6 +32,8 @@ mod internal;
 mod layout;
 #[cfg(target_os = "macos")]
 mod macos_menu;
+#[cfg(target_os = "macos")]
+mod macos_web;
 mod loader;
 mod net;
 mod paint;

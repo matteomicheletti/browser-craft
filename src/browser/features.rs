@@ -382,7 +382,7 @@ impl Browser {
     /// Whether the dark theme applies to `host` now (ignoring the page's
     /// own "already dark" check, which only the page can make).
     fn dark_applies(&self, host: &str) -> bool {
-        matches!(self.feat.dark.settings().decide(host, self.dark(), local_minutes()), Decision::Dark)
+        matches!(self.feat.dark.settings().decide_url(&self.web_url, host, self.dark(), local_minutes()), Decision::Dark)
     }
 
     fn page_host(&self) -> Option<String> {
@@ -784,7 +784,7 @@ impl Browser {
                     self.set_notice("Plugins reloaded");
                 }
             }
-            Settings => self.load(Request::Get("browsecraft://flags".into()), true),
+            Settings => self.open_settings(),
             Quit => self.quit_app = true,
             NewWindow => self.app_requests.push(super::windows::AppRequest::NewWindow),
             ShowAllTabs => self.toggle_overview(),

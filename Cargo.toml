@@ -37,6 +37,8 @@ psl = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"
+# Dark mode URL rules (src/darkmode/settings.rs); already in the lock graph.
+regex = "1"
 # Interpreter for untrusted plugin logic (feature `wasm`): pure Rust, no JIT.
 wasmi = { version = "2.0.0", default-features = false, features = ["std", "validate"], optional = true }
 # Authenticator (src/authenticator): HMAC-SHA1/256/512 for HOTP/TOTP, the
@@ -94,12 +96,14 @@ x11-dl = "2.21"
 libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# The Edit menu and the page key monitor (src/macos_menu.rs); same
-# versions wry already pulls in.
+# The Edit menu and the page key monitor (src/macos_menu.rs), the
+# clipboard watcher (src/plugins/clipboard_watch_macos.rs), page pictures
+# and the hover card (src/macos_web.rs); same versions wry already pulls in.
 block2 = "0.6"
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSEvent", "NSMenu", "NSMenuItem", "NSResponder", "NSView", "NSWindow"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "block2", "NSApplication", "NSBitmapImageRep", "NSEvent", "NSGraphics", "NSImage", "NSImageRep", "NSMenu", "NSMenuItem", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSView", "NSWindow"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry", "NSString"] }
+objc2-web-kit = { version = "0.3", default-features = false, features = ["std", "block2", "objc2-app-kit", "WKWebView", "WKSnapshotConfiguration"] }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = "0.38"

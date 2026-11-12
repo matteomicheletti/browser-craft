@@ -550,7 +550,7 @@ pub struct Browser {
     thumb_due: Vec<(Instant, u64)>,
     /// When to show the tab hover card, and the card's window.
     hover: hover::HoverTimer,
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     card: Option<hover::CardWindow>,
     /// The hovered tab and where its chip or row is (points), last frame.
     hover_anchor: Option<(u64, egui::Rect)>,
@@ -2365,7 +2365,7 @@ impl Browser {
             thumb_tex: HashMap::new(),
             thumb_due: Vec::new(),
             hover: hover::HoverTimer::default(),
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             card: None,
             hover_anchor: None,
             #[cfg(debug_assertions)]
@@ -2777,6 +2777,12 @@ impl Browser {
                 && let WebPane::Wry(view) = &wv
             {
                 request_thumbnail_gtk(view, self.proxy.clone(), self.tab_id);
+            }
+            #[cfg(target_os = "macos")]
+            if self.web_visible
+                && let WebPane::Wry(view) = &wv
+            {
+                crate::macos_web::request_thumbnail(view, self.proxy.clone(), self.tab_id);
             }
             // Each tab keeps its own web view, hidden, with its page alive.
             // One of a split view stays up: it may become the other pane
@@ -3918,6 +3924,18 @@ impl Browser {
         self.focus = Focus::Page;
     }
 
+    /// Settings (`browsecraft://flags`) never replace the page in use: the
+    /// tab already showing them comes forward, else they open in a new tab.
+    fn open_settings(&mut self) {
+        const URL: &str = "browsecraft://flags";
+        if let Some(i) = (0..self.tabs.len()).find(|&i| same_internal_page(&self.tab_url(i), URL)) {
+            self.switch_tab(i);
+            self.focus = Focus::Page;
+            return;
+        }
+        self.open_in_new_tab(URL.to_string());
+    }
+
     /// The URL tab `i` is showing.
     fn tab_url(&self, i: usize) -> String {
         if i == self.active {
@@ -4552,7 +4570,7 @@ impl Browser {
         if visible != self.web_visible {
             wv.set_visible(visible);
             self.web_visible = visible;
-            if visible && cfg!(target_os = "linux") {
+            if visible && cfg!(any(target_os = "linux", target_os = "macos")) {
                 self.web_bounds = None;
                 self.raise_hover_card();
             }
@@ -5381,7 +5399,7 @@ impl Browser {
                 }
                 Button::Home => self.home(),
                 Button::Theme => self.toggle_theme(),
-                Button::Flags => self.load(Request::Get("browsecraft://flags".into()), true),
+                Button::Flags => self.open_settings(),
             }
             return;
         }
@@ -6861,7 +6879,7 @@ impl Browser {
                 Action::Stop => self.stop(),
                 Action::Home => self.home(),
                 Action::SetTheme(id) => self.set_theme(id),
-                Action::Flags => self.load(Request::Get("browsecraft://flags".into()), true),
+                Action::Flags => self.open_settings(),
                 Action::Navigate(text) => {
                     ctx.memory_mut(|m| m.surrender_focus(egui_chrome::address_id()));
                     self.navigate_input(&text);
@@ -7162,7 +7180,7 @@ impl Browser {
             context = Some(ctx);
         }
         // The hover card: a child window above the web views (hover.rs).
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         if self.gpu_chrome {
             self.card = hover::CardWindow::new(event_loop, &window);
         }

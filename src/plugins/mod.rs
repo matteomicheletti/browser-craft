@@ -17,6 +17,9 @@ pub mod bridge;
 pub mod clipboard_history;
 #[cfg(target_os = "linux")]
 pub mod clipboard_watch;
+#[cfg(target_os = "macos")]
+#[path = "clipboard_watch_macos.rs"]
+pub mod clipboard_watch;
 pub mod host;
 pub mod manifest;
 pub mod panel;

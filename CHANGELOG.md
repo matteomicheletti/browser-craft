@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Dark mode URL rules: regular expressions on the full address, dark or light, checked before the site rules (`url_rules` in `darkmode.json`, panel section *URL rules*). The global mode now defaults to *Off*: pages stay as they are unless a rule says dark.
 - Plugin shortcuts can use `Super` (the Windows/Super key on Linux and Windows, Cmd on macOS): `shortcut = "Super+V"`.
 - Site permissions (`src/permissions/`): WebKitGTK's microphone, camera, screen sharing, location, notification, clipboard and storage-access requests wait for a Chrome-like bar under the toolbar (*Allow* / *Block*, *Remember for this site*); remembered answers per host in `permissions.json` (owner-only, atomic); device names follow the camera/microphone decision; waiting requests are denied when the tab leaves the page or closes; screen sharing is never allowed without asking. Palette *Site permissions for this site…* (`!`) and *Reset site permissions*; *Settings → Site permissions* with Reset buttons.
 - WebRTC check: on Teams, Meet, Zoom and Jitsi pages, a one-time bar when this WebKitGTK has no `RTCPeerConnection` (the Arch/Manjaro build), with *Open in <default browser>*. `scripts/build-webkit-webrtc.sh` (not run, untested) rebuilds Arch's `webkit2gtk-4.1` with WebRTC.
@@ -109,6 +110,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The home page (`Alt+Home`, and the page shown at startup without an argument) is Startpage; new tabs open the built-in `about:home` start page.
 
 ### Fixed
+
+- macOS: the clipboard history records copies (`src/plugins/clipboard_watch_macos.rs`, polling the pasteboard's change count; concealed copies are secrets, transient ones are skipped); the watcher was Linux-only, so the manager stayed empty.
+- macOS: tab hover cards show, with the page's picture: a layer-backed view above the web views drawn with softbuffer, and WKWebView snapshots for the thumbnails (`src/macos_web.rs`).
+- Settings (gear button, palette, menu) open in a new tab, or bring forward the tab already showing them, instead of replacing the page in use.
 
 - macOS: an Edit menu (Undo, Redo, Cut, Copy, Paste, Paste and Match Style, Select All, `src/macos_menu.rs`), so Cmd+A, Cmd+C, Cmd+V, Cmd+X and Cmd+Z work in pages; without it WKWebView ignored them.
 - macOS: browser shortcuts (Cmd+T, Cmd+L, Cmd+P...) and plugin shortcuts typed while a page has the keyboard reach the browser (a local key monitor); pasting from a plugin (the clipboard manager) works in pages.

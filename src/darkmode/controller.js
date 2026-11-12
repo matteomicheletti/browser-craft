@@ -117,6 +117,17 @@
       if (!cfg || !cfg.enabled) {
         return { dark: false, reason: 'off' };
       }
+      // URL rules (regular expressions on the full address) come first.
+      var rules = cfg.urlRules || [];
+      for (var r = 0; r < rules.length; r++) {
+        var hit = false;
+        try {
+          hit = new RegExp(rules[r].pattern).test(location.href);
+        } catch (e) {}
+        if (hit) {
+          return rules[r].mode === 'on' ? { dark: true, forced: true, reason: 'url-on' } : { dark: false, reason: 'url-off' };
+        }
+      }
       var site = bestSite(host);
       if (site && site.mode === 'on') {
         return { dark: true, forced: true, reason: 'site-on' };

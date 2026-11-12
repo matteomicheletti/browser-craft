@@ -37,12 +37,18 @@ the single patch).
 Order of decisions for a page's host (the top frame's host in iframes):
 
 1. master switch off: nothing;
-2. per-site override of the most specific matching host: `on` forces dark
+2. URL rules (`url_rules`, panel section *URL rules*), in order: the first
+   regular expression that finds a match anywhere in the page's full address
+   (`RegExp.test(location.href)`; the Rust side checks the same pattern with
+   the `regex` crate, so look-around and back-references are refused) decides:
+   `on` forces dark like a site override, `off` never;
+3. per-site override of the most specific matching host: `on` forces dark
    (ignores mode, schedule and the native-dark check), `off` never;
-3. excluded hosts list (a host covers its subdomains, `www.` ignored);
-4. global mode: follow system / always dark / always light / off;
-5. schedule (optional daily window, may wrap midnight; local time);
-6. "leave pages that are already dark": after the document has parsed, the
+4. excluded hosts list (a host covers its subdomains, `www.` ignored);
+5. global mode: follow system / always dark / always light / off (the
+   default: pages stay as they are unless a URL or site rule says `on`);
+6. schedule (optional daily window, may wrap midnight; local time);
+7. "leave pages that are already dark": after the document has parsed, the
    controller looks at the page as authored (engine off) and samples the
    canvas colour (root/body background propagation, `color-scheme`) and the
    background behind five points of the viewport; a mean relative luminance
