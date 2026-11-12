@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Address bar suggestions, as in Chrome and Firefox: while typing, the site you most likely mean (from the history) is completed in place and selected, so the next key replaces it and Backspace removes it; a list of matching history entries and bookmarks opens under the bar (Up/Down to pick, Enter or a click to open, Escape to close).
 - Zoom badge in the address bar, as in Firefox: the current zoom (e.g. `110%`) at the right end of the field while it is not 100%; a click resets it. The address text is centred vertically.
 - Theme menu: hovering a theme previews it on the chrome until the menu closes.
 - Dark mode URL rules: regular expressions on the full address, dark or light, checked before the site rules (`url_rules` in `darkmode.json`, panel section *URL rules*). The global mode now defaults to *Off*: pages stay as they are unless a rule says dark.

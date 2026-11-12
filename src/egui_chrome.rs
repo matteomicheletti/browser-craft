@@ -577,10 +577,15 @@ pub fn bookmarks_bar(ui: &mut egui::Ui, c: &Colors, items: &[crate::bookmarks::N
 /// Selects the whole address field (used when the address bar is focused by
 /// shortcut, matching the engine chrome's select-all behaviour).
 pub fn select_all(ctx: &egui::Context, id: egui::Id, chars: usize) {
+    select_range(ctx, id, 0, chars);
+}
+
+/// Selects the characters `from..to` of a text field (the cursor at `to`).
+pub fn select_range(ctx: &egui::Context, id: egui::Id, from: usize, to: usize) {
     if let Some(mut state) = egui::text_edit::TextEditState::load(ctx, id) {
         let range = egui::text::CCursorRange::two(
-            egui::text::CCursor::new(0usize),
-            egui::text::CCursor::new(chars),
+            egui::text::CCursor::new(from),
+            egui::text::CCursor::new(to),
         );
         state.cursor.set_char_range(Some(range));
         state.store(ctx, id);

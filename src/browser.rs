@@ -57,6 +57,7 @@ mod features;
 mod groups_split;
 mod hover;
 mod library;
+mod omnibox;
 mod overview;
 mod presets;
 mod windows;
@@ -622,6 +623,8 @@ pub struct Browser {
     /// The theme under the pointer in the theme menu, shown until the menu
     /// closes or the pointer leaves it.
     theme_preview: Option<flags::Theme>,
+    /// Suggestions under the address bar while an address is typed.
+    omni: omnibox::Omnibox,
     /// Scripts the page modules add to every new web view.
     extra_page_scripts: Vec<String>,
     /// The egui chrome is in use (`egui` is taken out while a frame is
@@ -2470,6 +2473,7 @@ impl Browser {
             page_forms: None,
             egui_popup_open: false,
             theme_preview: None,
+            omni: omnibox::Omnibox::default(),
             popup_snapshot: None,
             egui_repaint_at: None,
             fullscreen_restore: false,
@@ -6548,6 +6552,29 @@ impl Browser {
                                 self.egui_focus_address = false;
                                 self.egui_select_all = true;
                             }
+                            // The suggestion list takes Up, Down and Escape
+                            // before the field sees them.
+                            if self.egui_address_focused && self.omni.open {
+                                let key = |k| ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k));
+                                let picked = if key(egui::Key::ArrowDown) {
+                                    Some(self.omni.step(true).map(|s| s.url.clone()))
+                                } else if key(egui::Key::ArrowUp) {
+                                    Some(self.omni.step(false).map(|s| s.url.clone()))
+                                } else {
+                                    None
+                                };
+                                if let Some(url) = picked {
+                                    self.address.text = url.unwrap_or_else(|| self.omni.typed.clone());
+                                    let n = self.address.text.chars().count();
+                                    egui_chrome::select_range(&ctx, egui_chrome::address_id(), n, n);
+                                }
+                                if key(egui::Key::Escape) {
+                                    self.address.text = self.omni.typed.clone();
+                                    let n = self.address.text.chars().count();
+                                    egui_chrome::select_range(&ctx, egui_chrome::address_id(), n, n);
+                                    self.omni.close();
+                                }
+                            }
                             let zoom = (self.user_zoom * 100.0).round() as u32;
                             let (resp, clicks) = egui_chrome::address_bar(
                                 ui,
@@ -6565,6 +6592,28 @@ impl Browser {
                                 actions.push(Action::ZoomReset);
                             }
                             self.egui_address_focused = resp.has_focus();
+                            if resp.changed() && resp.has_focus() {
+                                let typed = self.address.text.clone();
+                                if let Some(rest) = self.omni.edited(&typed) {
+                                    self.address.text.push_str(&rest);
+                                    let (from, to) = (typed.chars().count(), self.address.text.chars().count());
+                                    egui_chrome::select_range(&ctx, egui_chrome::address_id(), from, to);
+                                }
+                            } else if resp.gained_focus() {
+                                self.omni.typed = self.address.text.clone();
+                            }
+                            let over_list = self.omni.rect.is_some_and(|r| {
+                                ctx.pointer_latest_pos().is_some_and(|p| r.contains(p)) && ctx.input(|i| i.pointer.any_down() || i.pointer.any_released())
+                            });
+                            if !resp.has_focus() && !over_list {
+                                self.omni.close();
+                            }
+                            let list_at = resp.rect.expand2(egui::vec2(40.0, 0.0)).translate(egui::vec2(0.0, 4.0));
+                            if let Some(url) = omnibox::dropdown(&ctx, &c, &mut self.omni, list_at) {
+                                self.omni.close();
+                                self.address.text = url.clone();
+                                actions.push(Action::Navigate(url));
+                            }
                             if self.egui_select_all && resp.has_focus() {
                                 let chars = self.address.text.chars().count();
                                 egui_chrome::select_all(&ctx, egui_chrome::address_id(), chars);
@@ -6866,6 +6915,7 @@ impl Browser {
             actions.push(Action::Preset(event));
         }
         let popup_now = egui::Popup::is_any_open(&ctx)
+            || self.omni.open
             || self.feat.palette.is_open()
             || self.rename.is_some()
             || self.preset_dialog.is_some()
@@ -6939,6 +6989,7 @@ impl Browser {
                 Action::ZoomReset => self.zoom(None),
                 Action::Navigate(text) => {
                     ctx.memory_mut(|m| m.surrender_focus(egui_chrome::address_id()));
+                    self.omni.close();
                     self.navigate_input(&text);
                 }
                 Action::RestoreAddress => {
