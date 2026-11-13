@@ -502,7 +502,10 @@ pub fn bookmarks_bar(ui: &mut egui::Ui, c: &Colors, items: &[crate::bookmarks::N
                         egui::Popup::open_id(ui.ctx(), egui::Popup::default_response_id(&resp));
                     }
                     egui::Popup::menu(&resp).show(|ui| folder_menu(ui, c, item, &mut events));
-                    resp.context_menu(|ui| {
+                    // egui's context menu shares the menu's popup id and
+                    // closes it on every plain click: its own id here, or
+                    // the click that opens the folder closes it again.
+                    egui::Popup::context_menu(&resp).id(resp.id.with("bar-folder-context")).show(|ui| {
                         if menu_item(ui, c, crate::icons::BOOKMARKS, "Open in the bookmarks manager").clicked() {
                             events.push(BarEvent::ManageFolder(item.id));
                             ui.close();

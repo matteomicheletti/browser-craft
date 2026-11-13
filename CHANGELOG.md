@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bookmarks bar: a folder did not open on click. Its right-click menu shared the folder menu's popup id, and egui closes that popup on every plain click.
 - Address bar: Enter pressed in the same frame as the typing opened the typed text instead of the completed address.
 - Ctrl/Cmd + and - zoomed the browser's own chrome along with the page (egui's keyboard zoom): only the page zooms now.
 - macOS: the page went black under a chrome menu (theme, passwords...). A WebKit snapshot takes its place, and the page stays on show until the snapshot is ready.
