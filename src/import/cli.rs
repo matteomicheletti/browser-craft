@@ -3,7 +3,7 @@
 //! ```text
 //! browsecraft import --list
 //! browsecraft import firefox|chrome|chromium|brave|edge|vivaldi|opera|librewolf|waterfox
-//!     [--profile NAME|PATH] [--bookmarks] [--history] [--days N] [--merge] [--dry-run]
+//!     [--profile NAME|PATH] [--bookmarks] [--history] [--days N] [--merge] [--replace-history] [--dry-run]
 //! browsecraft import html --file F [--merge] [--dry-run]
 //! browsecraft import --export [DIR]
 //! browsecraft import --undo
@@ -20,12 +20,13 @@ use super::{Options, Source, detect};
 
 const USAGE: &str = "usage:
   browsecraft import --list
-  browsecraft import <browser> [--profile NAME|PATH] [--bookmarks] [--history] [--days N] [--merge] [--dry-run]
+  browsecraft import <browser> [--profile NAME|PATH] [--bookmarks] [--history] [--days N] [--merge] [--replace-history] [--dry-run]
       browser: firefox, librewolf, waterfox, chrome, chrome-beta, chrome-dev, chromium, brave, edge, vivaldi, opera
   browsecraft import html --file FILE [--merge] [--dry-run]
   browsecraft import --export [DIR]
   browsecraft import --undo
-Without --bookmarks or --history, both are imported. Passwords, cookies and extensions are never imported.";
+Without --bookmarks or --history, both are imported. --replace-history deletes BrowseCraft's own history first. Passwords: export them from the other browser as CSV,
+then `browsecraft passwords import-csv FILE`. Cookies and extensions are never imported.";
 
 fn print_json(value: &impl serde::Serialize) -> i32 {
     match serde_json::to_string_pretty(value) {
@@ -50,6 +51,7 @@ struct Args {
     list: bool,
     undo: bool,
     export: Option<Option<PathBuf>>,
+    replace_history: bool,
 }
 
 fn parse(args: &[String]) -> Result<Args, String> {
@@ -70,6 +72,7 @@ fn parse(args: &[String]) -> Result<Args, String> {
             "--bookmarks" => a.options.bookmarks = true,
             "--history" => a.options.history = true,
             "--merge" => a.options.merge = true,
+            "--replace-history" => a.replace_history = true,
             "--dry-run" => a.options.dry_run = true,
             "-h" | "--help" => return Err(String::new()),
             other if other.starts_with('-') => return Err(format!("unknown option {other}")),
@@ -156,6 +159,13 @@ pub fn main(args: &[String]) -> i32 {
             }
         }
     };
+    if a.replace_history && a.options.history && !a.options.dry_run {
+        if let Err(e) = crate::history::clear() {
+            eprintln!("browsecraft: could not clear the history: {e}");
+            return 1;
+        }
+        eprintln!("BrowseCraft's history cleared.");
+    }
     let report = super::run(&source, &a.options, Arc::new(|text| eprintln!("{text}")));
     if !a.options.dry_run {
         crate::history::flush();

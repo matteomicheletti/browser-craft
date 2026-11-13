@@ -340,6 +340,29 @@ impl Vault {
         Ok(id)
     }
 
+    /// Adds many logins and writes the vault once (an import: one save,
+    /// not one key derivation per login). Returns how many were added.
+    pub fn add_many(&mut self, logins: &[(String, String, String, Zeroizing<String>)]) -> Result<usize, String> {
+        let before = self.db.root.entries.len();
+        for (title, url, username, password) in logins.iter().filter(|l| !l.3.is_empty()) {
+            let mut entry = Entry::new();
+            let title = if title.trim().is_empty() { host_key(url) } else { title.trim().to_string() };
+            entry.fields.insert("Title".into(), Value::Unprotected(title));
+            entry.fields.insert("URL".into(), Value::Unprotected(url.trim().to_string()));
+            entry.fields.insert("UserName".into(), Value::Unprotected(username.clone()));
+            entry.fields.insert("Password".into(), Value::Protected(SecStr::from(password.as_str())));
+            self.db.root.entries.push(entry);
+        }
+        let added = self.db.root.entries.len() - before;
+        if added == 0 {
+            return Ok(0);
+        }
+        self.save().inspect_err(|_| {
+            self.db.root.entries.truncate(before);
+        })?;
+        Ok(added)
+    }
+
     /// Changes a login's password and writes the vault.
     pub fn set_password(&mut self, id: &str, password: &str) -> Result<(), String> {
         if password.is_empty() {

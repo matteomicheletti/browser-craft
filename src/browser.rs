@@ -6594,7 +6594,9 @@ impl Browser {
                                 actions.push(Action::ZoomReset);
                             }
                             self.egui_address_focused = resp.has_focus();
-                            if resp.changed() && resp.has_focus() {
+                            // Also when Enter came in the same frame as the
+                            // typing: the completed address is the one opened.
+                            if resp.changed() {
                                 let typed = self.address.text.clone();
                                 if let Some(rest) = self.omni.edited(&typed) {
                                     self.address.text.push_str(&rest);

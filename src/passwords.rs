@@ -234,6 +234,27 @@ pub fn load() {
     }
 }
 
+/// The vault the settings name (call `load` first): its path, how it
+/// unlocks and its key file.
+pub fn configured_vault() -> (Option<PathBuf>, Mode, Option<PathBuf>) {
+    let s = state();
+    (s.vault_path.clone(), s.mode, s.keyfile_path.clone())
+}
+
+/// Makes `path` (a password-protected vault) the one the browser opens.
+pub fn remember_vault(path: &Path) {
+    let mut s = state();
+    s.vault_path = Some(path.to_path_buf());
+    s.mode = Mode::Password;
+    s.keyfile_path = None;
+    save_config(&s);
+}
+
+/// Where a new vault goes by default (the per-user config folder).
+pub fn default_vault() -> PathBuf {
+    PathBuf::from(default_vault_path())
+}
+
 // ---- status ----
 
 pub fn status() -> Status {

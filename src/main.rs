@@ -39,6 +39,9 @@ mod net;
 mod paint;
 mod palette;
 mod passwords;
+mod passwords_cli;
+mod profile_sync;
+mod prompt;
 mod recording;
 mod plugins;
 mod presets;
@@ -73,7 +76,7 @@ fn main() {
     automation::take_cli_flag(&mut args);
     // `--preset NAME`: start with that session preset (see crate::presets).
     let start_preset = match args.get(1).map(String::as_str) {
-        Some("import" | "--screenshot") => Ok(None),
+        Some("import" | "passwords" | "profile" | "--screenshot") => Ok(None),
         _ => presets::take_cli_preset(&mut args),
     };
     let start_preset = match start_preset {
@@ -89,6 +92,13 @@ fn main() {
     // `browsecraft import ...` runs instead of the browser (see docs/IMPORT.md).
     if args.get(1).map(String::as_str) == Some("import") {
         std::process::exit(import::cli::main(&args[2..]));
+    }
+    // `browsecraft passwords import-csv FILE`, `browsecraft profile export|import FILE`.
+    if args.get(1).map(String::as_str) == Some("passwords") {
+        std::process::exit(passwords_cli::main(&args[2..]));
+    }
+    if args.get(1).map(String::as_str) == Some("profile") {
+        std::process::exit(profile_sync::main(&args[2..]));
     }
     history::init();
     passwords::load();

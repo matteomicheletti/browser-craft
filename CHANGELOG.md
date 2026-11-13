@@ -9,11 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Address bar: Enter pressed in the same frame as the typing opened the typed text instead of the completed address.
 - Ctrl/Cmd + and - zoomed the browser's own chrome along with the page (egui's keyboard zoom): only the page zooms now.
 - macOS: the page went black under a chrome menu (theme, passwords...). A WebKit snapshot takes its place, and the page stays on show until the snapshot is ready.
 
 ### Added
 
+- `browsecraft profile export|import FILE`: settings, containers, bookmarks, history and both vaults in one password-encrypted file (Argon2id + XChaCha20-Poly1305) to move to another computer; import keeps the previous files in a backup folder (docs/PROFILE.md).
+- `browsecraft passwords import-csv FILE`: logins exported by Firefox or Chrome into the KeePass vault (made if missing), duplicates skipped, the clear-text CSV deleted afterwards.
+- `browsecraft import ... --replace-history`: clears BrowseCraft's history before importing.
 - Address bar suggestions, as in Chrome and Firefox: while typing, the site you most likely mean (from the history) is completed in place and selected, so the next key replaces it and Backspace removes it; a list of matching history entries and bookmarks opens under the bar (Up/Down to pick, Enter or a click to open, Escape to close).
 - Zoom badge in the address bar, as in Firefox: the current zoom (e.g. `110%`) at the right end of the field while it is not 100%; a click resets it. The address text is centred vertically.
 - Theme menu: hovering a theme previews it on the chrome until the menu closes.
