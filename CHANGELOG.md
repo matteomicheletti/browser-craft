@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `browsecraft passwords import-firefox`: Firefox's saved passwords read and decrypted from the profile (`logins.json` + `key4.db`, AES-256 keys; Firefox's primary password asked when set), straight into the vault with no clear-text file.
 - `browsecraft profile export|import FILE`: settings, containers, bookmarks, history and both vaults in one password-encrypted file (Argon2id + XChaCha20-Poly1305) to move to another computer; import keeps the previous files in a backup folder (docs/PROFILE.md).
 - `browsecraft passwords import-csv FILE`: logins exported by Firefox or Chrome into the KeePass vault (made if missing), duplicates skipped, the clear-text CSV deleted afterwards.
 - `browsecraft import ... --replace-history`: clears BrowseCraft's history before importing.

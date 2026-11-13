@@ -2,7 +2,15 @@
 
 ## Passwords from Firefox or Chrome
 
-Browsers export saved passwords only as a clear-text CSV file:
+From Firefox directly, with no clear-text file:
+
+```sh
+browsecraft passwords import-firefox [--profile NAME|PATH]
+```
+
+It decrypts `logins.json` with the key in the profile's `key4.db` (PBKDF2-HMAC-SHA256 and AES-256-CBC, as NSS does), asking Firefox's primary password only if one is set.
+
+Otherwise, browsers export saved passwords only as a clear-text CSV file:
 
 - Firefox: `about:logins` → `⋯` → *Export Passwords…*
 - Chrome: *Settings → Passwords → Export passwords*

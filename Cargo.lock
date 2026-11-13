@@ -758,6 +758,7 @@ dependencies = [
 name = "browsecraft"
 version = "0.2.0"
 dependencies = [
+ "aes 0.9.3",
  "aes-gcm",
  "arboard",
  "base64 0.22.1",
@@ -780,6 +781,7 @@ dependencies = [
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "objc2-web-kit",
+ "pbkdf2",
  "pollster",
  "psl",
  "qrcode",

@@ -13,7 +13,9 @@ use zeroize::Zeroizing;
 use crate::vault::{NewProtection, Unlock, Vault};
 
 const USAGE: &str = "usage:
+  browsecraft passwords import-firefox [--profile NAME|PATH]
   browsecraft passwords import-csv FILE [--keep-file]
+import-firefox reads the passwords Firefox saved, without a clear-text file (it asks Firefox's primary password if one is set).
 FILE: the CSV exported by Firefox (about:logins, menu, Export Passwords) or Chrome.
 Without a vault yet, one is made in the configuration folder with a new password.
 The CSV holds the passwords in clear text: it is deleted afterwards unless --keep-file.";
@@ -22,6 +24,26 @@ The CSV holds the passwords in clear text: it is deleted afterwards unless --kee
 const MAX_CSV: u64 = 64 << 20;
 
 pub fn main(args: &[String]) -> i32 {
+    if args.first().map(String::as_str) == Some("import-firefox") {
+        let profile = match &args[1..] {
+            [] => None,
+            [flag, name] if flag == "--profile" => Some(name.as_str()),
+            _ => {
+                eprintln!("{USAGE}");
+                return 2;
+            }
+        };
+        return match import_firefox(profile) {
+            Ok(line) => {
+                println!("{line}");
+                0
+            }
+            Err(e) => {
+                eprintln!("browsecraft: {e}");
+                1
+            }
+        };
+    }
     let (file, keep) = match args {
         [cmd, file] if cmd == "import-csv" => (PathBuf::from(file), false),
         [cmd, file, flag] if cmd == "import-csv" && flag == "--keep-file" => (PathBuf::from(file), true),
@@ -49,6 +71,49 @@ fn import_csv(file: &Path, keep: bool) -> Result<String, String> {
     if logins.is_empty() {
         return Err("No logins found in the file.".into());
     }
+    let mut line = add_to_vault(logins)?;
+    if !keep {
+        match std::fs::remove_file(file) {
+            Ok(()) => line += &format!("\nDeleted {} (it held the passwords in clear text).", file.display()),
+            Err(e) => line += &format!("\nCould not delete {}: {e}. Delete it yourself.", file.display()),
+        }
+    }
+    Ok(line)
+}
+
+/// Firefox's saved passwords, read and decrypted from its profile.
+fn import_firefox(profile: Option<&str>) -> Result<String, String> {
+    use crate::import::firefox_logins::{Error, read};
+    // A profile folder given as a path is used as it is.
+    let dir = match profile.map(PathBuf::from).filter(|d| d.join("key4.db").is_file()) {
+        Some(dir) => dir,
+        None => {
+            let profiles = crate::import::detect::detect();
+            crate::import::detect::pick(&profiles, "firefox", profile)?.dir.clone()
+        }
+    };
+    let logins = match read(&dir, "") {
+        Ok(l) => l,
+        Err(Error::PrimaryPassword) => {
+            let primary = crate::prompt::password("Firefox primary password: ")?;
+            match read(&dir, &primary) {
+                Ok(l) => l,
+                Err(Error::PrimaryPassword) => return Err("Wrong Firefox primary password.".into()),
+                Err(Error::Other(e)) => return Err(e),
+            }
+        }
+        Err(Error::Other(e)) => return Err(e),
+    };
+    if logins.is_empty() {
+        return Err("Firefox has no saved passwords in this profile.".into());
+    }
+    eprintln!("Found {} logins in Firefox ({}).", logins.len(), dir.display());
+    add_to_vault(logins)
+}
+
+/// Adds `logins` to the configured vault (made when there is none),
+/// skipping those already there.
+fn add_to_vault(logins: Vec<(String, String, String, Zeroizing<String>)>) -> Result<String, String> {
     crate::passwords::load();
     let (configured, mode, keyfile) = crate::passwords::configured_vault();
     let mut vault = match configured.filter(|p| p.is_file()) {
@@ -78,18 +143,11 @@ fn import_csv(file: &Path, keep: bool) -> Result<String, String> {
         .filter(|(_, url, user, _)| seen.insert((crate::vault::host_key(url), user.clone())))
         .collect();
     let added = vault.add_many(&new)?;
-    let mut line = format!(
-        "Imported {added} logins into {} ({} already there or repeated in the file).",
+    Ok(format!(
+        "Imported {added} logins into {} ({} already there or repeated).",
         vault.path().display(),
         total - added
-    );
-    if !keep {
-        match std::fs::remove_file(file) {
-            Ok(()) => line += &format!("\nDeleted {} (it held the passwords in clear text).", file.display()),
-            Err(e) => line += &format!("\nCould not delete {}: {e}. Delete it yourself.", file.display()),
-        }
-    }
-    Ok(line)
+    ))
 }
 
 /// Title, URL, user name and password of each row. Firefox's header is

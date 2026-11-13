@@ -21,6 +21,7 @@ pub mod chromium;
 pub mod cli;
 pub mod detect;
 pub mod firefox;
+pub mod firefox_logins;
 pub mod html;
 pub mod page;
 
