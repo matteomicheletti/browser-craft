@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The site permission bar never showed: it checked that the egui chrome exists while the chrome was being drawn (when it is taken out), so prompts waited forever. Linux and macOS.
+- macOS: camera and microphone were granted to every site without asking (wry's delegate). Requests now go through the permission bar (*Allow* / *Block*, *Remember for this site*, `permissions.json`), like on Linux; screen sharing asks first, then shows the system picker (`src/permissions/macos.rs`). `BROWSECRAFT_DEBUG_PERMISSIONS=1` logs the requests.
 - macOS: pages could not share the screen (`getDisplayMedia` refused). wry's web view delegate now answers WebKit's display-capture request with the system picker.
 - macOS: the web views sent WKWebView's bare User-Agent (no `Version/… Safari/…`), and Google served its basic fallback page. They now send Safari's.
 - Bookmarks bar: a folder did not open on click. Its right-click menu shared the folder menu's popup id, and egui closes that popup on every plain click.

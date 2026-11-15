@@ -6,8 +6,8 @@
 //!
 //! Nothing is ever allowed without an "allow" saved by the user, or the
 //! user's click on the prompt itself. The engine hook that holds WebKit's
-//! requests is `webkit.rs` (Linux); other platforms never ask (their
-//! engines keep their own defaults).
+//! requests is `webkit.rs` (Linux) and `macos.rs` (camera, microphone and
+//! screen in WKWebView); Windows never asks (WebView2 keeps its defaults).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -15,6 +15,8 @@ use std::sync::{Mutex, RwLock};
 
 #[cfg(target_os = "linux")]
 pub mod webkit;
+#[cfg(target_os = "macos")]
+pub mod macos;
 
 /// What a site asks for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -294,6 +296,8 @@ fn update(change: impl FnOnce(&mut Store) -> bool) -> Result<bool, String> {
     // Requests waiting for a prompt that the new decisions answer.
     #[cfg(target_os = "linux")]
     webkit::settle_saved();
+    #[cfg(target_os = "macos")]
+    macos::settle_saved();
     Ok(true)
 }
 
@@ -334,7 +338,9 @@ impl Prompt {
 pub fn prompt_for(tab: u64) -> Option<Prompt> {
     #[cfg(target_os = "linux")]
     return webkit::prompt_for(tab);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    return macos::prompt_for(tab);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     {
         let _ = tab;
         None
@@ -346,7 +352,9 @@ pub fn prompt_for(tab: u64) -> Option<Prompt> {
 pub fn answer(id: u64, allow: bool, remember: bool) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     let prompt = webkit::answer(id, allow);
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(target_os = "macos")]
+    let prompt = macos::answer(id, allow);
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let prompt: Option<Prompt> = {
         let _ = (id, allow);
         None

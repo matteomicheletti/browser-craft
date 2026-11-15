@@ -2554,7 +2554,9 @@ impl Browser {
     /// The bar under the toolbar for the active tab: its oldest permission
     /// prompt, else the WebRTC notice.
     fn site_bar(&self) -> Option<SiteBar> {
-        if self.egui.is_none() || !self.web_page {
+        // Not `self.egui`: it is taken out while the chrome is drawn, and the
+        // bar would never show (the layout checks egui itself).
+        if !self.web_page {
             return None;
         }
         if let Some(prompt) = crate::permissions::prompt_for(self.tab_id) {
@@ -4408,7 +4410,7 @@ impl Browser {
                 #[cfg(target_os = "macos")]
                 {
                     crate::containers::sweep_stores();
-                    crate::macos_web::enable_display_capture();
+                    crate::permissions::macos::attach(&wv, tab, self.proxy.clone());
                 }
                 #[cfg(windows)]
                 {
