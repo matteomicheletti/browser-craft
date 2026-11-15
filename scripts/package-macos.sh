@@ -56,8 +56,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature so Gatekeeper and WebKit accept the local build.
-codesign --force --deep --sign - "$APP"
+# Signed with a stable identity when the keychain has one, so macOS keeps the
+# camera, microphone and screen recording permissions across updates (an
+# ad-hoc signature changes with every build and macOS asks again).
+# BROWSECRAFT_SIGN_IDENTITY picks one; "-" forces ad-hoc.
+IDENTITY=${BROWSECRAFT_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null \
+  | sed -n 's/.*"\(Apple Development: [^"]*\)".*/\1/p;s/.*"\(Developer ID Application: [^"]*\)".*/\1/p' | head -n1)}
+IDENTITY=${IDENTITY:--}
+codesign --force --deep --sign "$IDENTITY" "$APP"
+echo "Signed with: $IDENTITY"
 echo "Built $APP ($VERSION)"
 
 if [[ ${1:-} == --install ]]; then
