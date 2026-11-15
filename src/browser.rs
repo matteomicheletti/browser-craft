@@ -4288,6 +4288,11 @@ impl Browser {
             use wry::WebViewBuilderExtDarwin as _;
             builder = builder.with_data_store_identifier(crate::containers::store_identifier(id));
         }
+        // macOS: Safari's User-Agent (WKWebView's own lacks the Safari part).
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder.with_user_agent(crate::useragent::default_ua());
+        }
         builder = plugins_host::register_protocol(builder, plugin_scheme);
         for (script, main_only) in scripts {
             builder = builder.with_initialization_script_for_main_only(script, main_only);
@@ -4401,7 +4406,10 @@ impl Browser {
             Ok(wv) => {
                 // WebKit's run loop exists once a web view does.
                 #[cfg(target_os = "macos")]
-                crate::containers::sweep_stores();
+                {
+                    crate::containers::sweep_stores();
+                    crate::macos_web::enable_display_capture();
+                }
                 #[cfg(windows)]
                 {
                     if let Err(error) = crate::webview_network::install(&wv) {

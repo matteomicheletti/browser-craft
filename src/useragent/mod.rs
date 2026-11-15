@@ -105,8 +105,16 @@ fn chrome_ua() -> String {
 }
 
 /// BrowseCraft's default User-Agent: WebKitGTK's own shape (platform from
-/// the machine, as WebKit's `uname` does) with a real Safari version.
+/// the machine, as WebKit's `uname` does) with a real Safari version. On
+/// macOS, Safari's own string: WKWebView's default has no `Version/… Safari/…`
+/// part, and Google (among others) serves an unknown browser its bare
+/// fallback pages.
 pub fn default_ua() -> String {
+    if cfg!(target_os = "macos") {
+        return format!(
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{SAFARI_VERSION} Safari/605.1.15"
+        );
+    }
     let arch = match std::env::consts::ARCH {
         "x86" => "i686",
         other => other,
@@ -505,7 +513,8 @@ mod tests {
     #[test]
     fn default_is_a_real_safari_on_linux() {
         let ua = default_ua();
-        assert!(ua.starts_with("Mozilla/5.0 (X11; Linux "), "{ua}");
+        let platform = if cfg!(target_os = "macos") { "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)" } else { "Mozilla/5.0 (X11; Linux " };
+        assert!(ua.starts_with(platform), "{ua}");
         assert!(ua.ends_with(&format!("AppleWebKit/605.1.15 (KHTML, like Gecko) Version/{SAFARI_VERSION} Safari/605.1.15")));
         assert!(!ua.contains("60.5 "), "never WebKitGTK's made-up Safari version");
         let major: u32 = SAFARI_VERSION.split('.').next().and_then(|m| m.parse().ok()).unwrap_or(0);

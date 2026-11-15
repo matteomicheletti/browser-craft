@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- macOS: pages could not share the screen (`getDisplayMedia` refused). wry's web view delegate now answers WebKit's display-capture request with the system picker.
+- macOS: the web views sent WKWebView's bare User-Agent (no `Version/… Safari/…`), and Google served its basic fallback page. They now send Safari's.
 - Bookmarks bar: a folder did not open on click. Its right-click menu shared the folder menu's popup id, and egui closes that popup on every plain click.
 - Address bar: Enter pressed in the same frame as the typing opened the typed text instead of the completed address.
 - Ctrl/Cmd + and - zoomed the browser's own chrome along with the page (egui's keyboard zoom): only the page zooms now.

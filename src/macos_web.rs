@@ -78,6 +78,49 @@ fn thumbnail_rgba(image: &NSImage) -> Option<(usize, usize, Vec<u8>)> {
     Some((tw, th, small.into_raw()))
 }
 
+/// Lets pages ask to share the screen (`getDisplayMedia`). WebKit refuses
+/// it in apps whose web view delegate does not answer its display-capture
+/// request (Safari does); wry's delegate only answers the camera and
+/// microphone one. This adds the answer to wry's delegate class: "show the
+/// system's picker" (`WKDisplayCapturePermissionDecisionScreenPrompt`), so
+/// macOS asks the user which screen or window to share, every time.
+pub fn enable_display_capture() {
+    use objc2::runtime::{AnyClass, AnyObject, Bool, Sel};
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        unsafe extern "C-unwind" fn decide(
+            _this: *mut AnyObject,
+            _cmd: Sel,
+            _web_view: *mut AnyObject,
+            _origin: *mut AnyObject,
+            _frame: *mut AnyObject,
+            _system_audio: Bool,
+            handler: *mut block2::Block<dyn Fn(isize)>,
+        ) {
+            /// `WKDisplayCapturePermissionDecisionScreenPrompt`.
+            const SCREEN_PROMPT: isize = 1;
+            // SAFETY: WebKit passes a live decision block for the call.
+            if let Some(handler) = unsafe { handler.as_ref() } {
+                handler.call((SCREEN_PROMPT,));
+            }
+        }
+        let Some(class) = AnyClass::get(c"WryWebViewUIDelegate") else {
+            eprintln!("browsecraft: no web view delegate class; screen sharing stays off");
+            return;
+        };
+        let sel = objc2::sel!(_webView:requestDisplayCapturePermissionForOrigin:initiatedByFrame:withSystemAudio:decisionHandler:);
+        let types = if cfg!(target_arch = "aarch64") { c"v@:@@@B@?" } else { c"v@:@@@c@?" };
+        // SAFETY: the function has the method's C signature (self, _cmd, then
+        // the five arguments); a method already there is left alone.
+        unsafe {
+            let imp: objc2::runtime::Imp = std::mem::transmute(
+                decide as unsafe extern "C-unwind" fn(*mut AnyObject, Sel, *mut AnyObject, *mut AnyObject, *mut AnyObject, Bool, *mut block2::Block<dyn Fn(isize)>),
+            );
+            objc2::ffi::class_addMethod(std::ptr::from_ref(class).cast_mut(), sel, imp, types.as_ptr());
+        }
+    });
+}
+
 /// The browser's own title bar on macOS: a normal titled window whose title
 /// bar is transparent, untitled and without the traffic lights, with the
 /// content drawn under it. A borderless window (winit's "no decorations")
